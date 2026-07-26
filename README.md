@@ -14,6 +14,7 @@
 | `data/` | 質問させたいPDF/テキストファイルを置く場所（アップロードUIからもここに保存される） |
 | `data/conversations/<会話ID>/` | 自動保存された過去の質問・回答（会話ログ。会話IDごとにフォルダが分かれる） |
 | `models_and_prompts.py` / `extract_text.py` | LangChain公式チュートリアルの学習用スクリプト（そのまま残しています） |
+| `tests/` | `ingest.py` / `rag_chain.py` / `memory.py` のコアロジックに対する自動テスト |
 
 ## 使い方
 
@@ -154,6 +155,20 @@ LangChainは1.0でメジャーアップデートされており、旧来の `Ret
 - `LANGSMITH_API_KEY` / `LANGSMITH_PROJECT`（任意）: トレースを見たい場合のみ。
 
 埋め込み（ドキュメント検索用）はローカル無料モデルのため、追加の環境変数は不要です。
+
+## テスト
+
+コアロジック（`ingest.py` の差分同期、`rag_chain.py` の関連度採点・フォールバック、
+`memory.py` の会話ログ保存・件数カウント）に対する自動テストを `tests/` 配下に用意しています。
+
+```bash
+pip install -r requirements.txt  # pytestを含む
+pytest
+```
+
+埋め込みモデル・Chroma・LLMプロバイダなどの重い外部依存は `tests/conftest.py` で
+軽量なフェイクに差し替えているため、Ollamaの起動やAPIキーの設定、埋め込みモデルの
+ダウンロードなしにテストを実行できます（ネットワークアクセス・課金は発生しません）。
 
 ## 今後の発展案
 

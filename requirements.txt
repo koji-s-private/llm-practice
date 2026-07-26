@@ -23,3 +23,6 @@ streamlit
 
 # 環境変数読み込み
 python-dotenv
+
+# テスト用
+pytest
