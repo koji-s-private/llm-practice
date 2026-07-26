@@ -1,0 +1,20 @@
+__pycache__/
+*.pyc
+.venv/
+venv/
+env/
+
+# 秘密情報
+.env
+
+# ベクトルDB（ローカル生成物）
+chroma_db/
+
+# エディタ設定
+.vscode/
+
+# macOS Finderの自動生成ファイル
+.DS_Store
+
+# 会話ログ（個人の実際のやり取りのため除外）
+data/conversations/

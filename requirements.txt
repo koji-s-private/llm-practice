@@ -1,0 +1,25 @@
+# LLM本体（LangChainチュートリアル用）
+langchain[openai]
+langchain-anthropic       # Claude連携（フォールバック用）
+langchain-ollama          # Ollama連携（無料・ローカルLLM。検出できれば最優先で使用）
+
+# RAG（検索拡張生成）用
+langchain-community      # ドキュメントローダー(PyMuPDFLoader等)
+langchain-text-splitters # チャンク分割
+langchain-chroma         # ベクトルDB(Chroma)
+langchain-huggingface    # ローカル無料埋め込みモデル
+sentence-transformers    # HuggingFace埋め込みの実行エンジン
+pymupdf                  # PDF読み込み（高速な一次抽出。pypdfより文字化けに強い）
+cryptography             # 暗号化されたPDF（AES）を読むために必要
+
+# 図解・スキャンPDFの高品質フォールバック解析（任意インストール）
+# 通常のPDFには使われません（PyMuPDFの抽出量が少ない場合のみ自動で使われます）。
+# 依存が重く（torch等）初回はモデルダウンロードが発生するため、不要なら省略可能です。
+docling
+langchain-docling
+
+# UI
+streamlit
+
+# 環境変数読み込み
+python-dotenv
