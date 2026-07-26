@@ -3,3 +3,6 @@ name = "llm-practice"
 version = "0.1.0"
 description = "無料ツールを活用したローカルRAG（検索拡張生成）チャットアプリの個人開発プロジェクト"
 requires-python = ">=3.10"
+
+[tool.pytest.ini_options]
+pythonpath = ["."]
