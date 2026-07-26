@@ -24,6 +24,13 @@ os.environ.setdefault("LANGSMITH_PROJECT", "test")
 
 
 def _install_stub_module(name: str, **attrs) -> types.ModuleType:
+    """未インストールのパッケージにのみプレースホルダを登録する。
+
+    開発者が `requirements.txt` をフルインストールした環境で実行した場合に、
+    既にインポート済みの実パッケージを誤って上書きしないようにする。
+    """
+    if name in sys.modules:
+        return sys.modules[name]
     module = types.ModuleType(name)
     for key, value in attrs.items():
         setattr(module, key, value)
