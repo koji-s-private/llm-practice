@@ -110,6 +110,7 @@ Ollamaが起動していてもあえて使いたくない場合は `.env` に `D
 回答生成のためにAnthropic/OpenAIのAPIへ送信されます（これは会話の自動保存機能とは無関係に、
 通常のチャット機能として元々発生するものです）。この送信も含めて一切外部に出したくない場合は、
 上記「無料で使う（Ollama）」を使ってください。
+なお、LangSmithへのトレース送信は完全に任意（デフォルトOFF）で、`.env`で明示的に有効化しない限り発生しません。
 
 ## 技術構成とベストプラクティスのポイント
 
@@ -152,7 +153,9 @@ LangChainは1.0でメジャーアップデートされており、旧来の `Ret
   どちらもすでに `.env` に設定済みです。両方あれば `ANTHROPIC_API_KEY` が優先されます。
 - `OLLAMA_MODEL`（任意）: 使用するOllamaのモデル名を変更したい場合のみ（デフォルト: `llama3.1`）。
 - `DISABLE_OLLAMA`（任意）: `true` にすると、Ollamaが起動していてもあえて使わずAPI課金モデルに切り替えます。
-- `LANGSMITH_API_KEY` / `LANGSMITH_PROJECT`（任意）: トレースを見たい場合のみ。
+- `LANGSMITH_TRACING` / `LANGSMITH_API_KEY` / `LANGSMITH_PROJECT`（任意・デフォルトでは無効）: LangSmithでトレースを見たい場合のみ、
+  `.env` に `LANGSMITH_TRACING=true` と `LANGSMITH_API_KEY` を明示的に設定してください。設定しない限り、
+  会話内容がLangSmith（外部サービス）へ送信されることはありません。
 
 埋め込み（ドキュメント検索用）はローカル無料モデルのため、追加の環境変数は不要です。
 

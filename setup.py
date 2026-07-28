@@ -12,22 +12,18 @@ try:
 except ImportError:
     pass
 
-os.environ["LANGSMITH_TRACING"] = "true"
-if "LANGSMITH_API_KEY" not in os.environ:
-    os.environ["LANGSMITH_API_KEY"] = getpass.getpass(
-        prompt="Enter your LangSmith API key (optional): "
-    )
-if "LANGSMITH_PROJECT" not in os.environ:
-    os.environ["LANGSMITH_PROJECT"] = getpass.getpass(
-        prompt='Enter your LangSmith Project Name (default = "default"): '
-    )
-    if not os.environ.get("LANGSMITH_PROJECT"):
+# LangSmithへのトレース送信はデフォルトOFF（本アプリは外部送信なしが前提のため）。
+# .env で明示的に LANGSMITH_TRACING=true かつ LANGSMITH_API_KEY を設定した場合のみ有効化する。
+# 未設定の場合は対話的なプロンプト（getpass）でブロックせず、単にトレースなしで起動する。
+if os.environ.get("LANGSMITH_TRACING", "").lower() == "true":
+    if not os.environ.get("LANGSMITH_API_KEY"):
+        print(
+            "[setup] LANGSMITH_TRACING=true ですが LANGSMITH_API_KEY が未設定のため、"
+            "LangSmithトレースを無効化して起動します。"
+        )
+        os.environ["LANGSMITH_TRACING"] = "false"
+    elif not os.environ.get("LANGSMITH_PROJECT"):
         os.environ["LANGSMITH_PROJECT"] = "default"
-
-# print("LangSmith 設定確認：")
-# print("LANGSMITH_TRACING =", os.getenv("LANGSMITH_TRACING"))
-# print("LANGSMITH_API_KEY =", "設定済み" if os.getenv("LANGSMITH_API_KEY") else "未設定")
-# print("LANGSMITH_PROJECT =", os.getenv("LANGSMITH_PROJECT"))
 
 
 OLLAMA_HOST = os.environ.get("OLLAMA_HOST", "localhost")
