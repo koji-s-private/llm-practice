@@ -1,0 +1,116 @@
+name: AI Team Orchestrator
+
+# 毎日10:00 JST(=1:00 UTC)に、nowラベルが付いたIssueを1件選んで
+# coder → qa-engineer → reviewer のループで実装し、PRを作成する。
+# PRのマージは絶対に行わない（人間が実施）。
+#
+# NOTE: anthropics/claude-code-action の入力仕様(claude_code_oauth_token など)は
+# バージョンによって変わることがあるため、実際に動かす前に以下で最新の入力仕様を確認すること。
+# https://github.com/anthropics/claude-code-action
+
+on:
+  schedule:
+    - cron: "0 1 * * *"
+  workflow_dispatch: {}
+
+permissions:
+  contents: write
+  issues: write
+  pull-requests: write
+  id-token: write
+
+jobs:
+  pm-orchestrate:
+    runs-on: ubuntu-latest
+    env:
+      # 注意: claude-code-action は内部で GH_TOKEN/GITHUB_TOKEN を
+      # 自身のGitHub Appインストールトークン(claude[bot])で上書きするため、
+      # ここに直接 GH_TOKEN を設定しても Bash ツール内では効かない。
+      # 別名で持たせ、gh project 系コマンドを叩くときだけ明示的に
+      # `GH_TOKEN=$PROJECTS_GH_TOKEN gh project ...` のように前置して使う。
+      PROJECTS_GH_TOKEN: ${{ secrets.PROJECTS_TOKEN }}
+      PROJECT_OWNER: ${{ vars.PROJECT_OWNER }}
+      PROJECT_NUMBER: ${{ vars.PROJECT_NUMBER }}
+      PROJECT_ID: ${{ vars.PROJECT_ID }}
+      STATUS_FIELD_ID: ${{ vars.STATUS_FIELD_ID }}
+      STATUS_TODO_ID: ${{ vars.STATUS_TODO_ID }}
+      STATUS_IN_PROGRESS_ID: ${{ vars.STATUS_IN_PROGRESS_ID }}
+      STATUS_UNDER_REVIEW_ID: ${{ vars.STATUS_UNDER_REVIEW_ID }}
+      STATUS_DONE_ID: ${{ vars.STATUS_DONE_ID }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Run PM (lead) agent
+        uses: anthropics/claude-code-action@v1
+        with:
+          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          allowed_bots: "claude"
+          prompt: |
+            あなたはこのチームのPM/リードエンジニアです。以下の手順で実行してください。
+
+            重要: `gh project` で始まるコマンド(item-list, item-add, item-edit など)は
+            必ず先頭に `GH_TOKEN=$PROJECTS_GH_TOKEN` を付けて実行すること。
+            (通常のGH_TOKENはこのセッション用のbotトークンで、Organization配下の
+            Projectを読み書きする権限がないため、専用のPROJECTS_GH_TOKENに
+            明示的に差し替える必要がある。issue/PR操作は素の `gh` のままでよい)
+
+            Status更新は毎回このコマンドの `--single-select-option-id` だけを差し替えて実行する:
+            `GH_TOKEN=$PROJECTS_GH_TOKEN gh project item-edit --project-id $PROJECT_ID --field-id $STATUS_FIELD_ID --id <ITEM_ID> --single-select-option-id <option-id>`
+
+            ## 対象Issueの選定
+
+            1. `gh issue list --state open --label now --json number,title,body,labels` で `now` ラベルが付いたOpen Issueを全件取得する。
+            2. 以下のいずれかに当てはまるものは候補から除外する:
+               - `gh pr list --state open` で確認し、すでにオープンなPull Requestが紐づいている(PR本文やブランチ名にissue番号が含まれている)
+               - `GH_TOKEN=$PROJECTS_GH_TOKEN gh project item-list $PROJECT_NUMBER --owner $PROJECT_OWNER --format json` で確認し、対応するProjectアイテムのstatusが `In Progress` または `Under Review` になっている(他の実行が対応中の可能性)
+               - Issue本文の先頭に「⚠️ 費用が発生する可能性があります」という警告が書かれている(明確なユーザー承認がない限り自動実装しない)
+            3. 残った候補の中からissue番号が最も小さい(=作成が最も古い)ものを1件だけ選ぶ。
+            4. 候補が1件もなければ、何もせずその旨を簡潔に報告して終了する。
+
+            ## 実装
+
+            5. `GH_TOKEN=$PROJECTS_GH_TOKEN gh project item-list $PROJECT_NUMBER --owner $PROJECT_OWNER --format json` で選んだIssueのProjectアイテムID(ITEM_ID)を探す(見つからない場合は `GH_TOKEN=$PROJECTS_GH_TOKEN gh project item-add $PROJECT_NUMBER --owner $PROJECT_OWNER --url <issue-url>` で追加する)。
+            6. Statusを In Progress ($STATUS_IN_PROGRESS_ID) に更新する。
+            7. **重要な制約(必須)**: 実装・インフラ選定は必ず無料で完結する方法のみを採用すること。課金が発生する可能性のある操作は絶対に実行しない。この制約によって実装できない場合は、実装を行わず、Statusを Todo ($STATUS_TODO_ID) に戻し、その旨を報告して終了する。
+            8. `coder` サブエージェントに、選んだIssueの番号と内容を伝えて実装とブランチ作成を依頼する。
+            9. `qa-engineer` サブエージェントにテスト作成・実行を依頼する。
+            10. テストが失敗した場合は `coder` に修正を依頼し、9に戻る(通るまで繰り返す。この間Statusは In Progress のまま)。
+            11. テストが通ったら、ブランチを `git push -u origin <branch>` でリモートに反映し、`Closes #<issue番号>` を含めてPRを作成する(`gh pr create --title ... --body ...`)。
+
+            ## セルフレビュー(reviewer)
+
+            12. `reviewer` サブエージェントにレビューを依頼する。
+            13. reviewer が修正を要求した場合は、`coder` に修正を依頼し、修正後の変更を同じブランチにコミットして `git push` で反映してから、再度 reviewer にレビューを依頼する(このループの間、Statusはまだ更新しない)。
+            14. reviewer が LGTM を出した場合、PR本文に「## 動作確認(エビデンス)」セクションを追記し、qa-engineerが報告した実際のテスト出力をそのまま貼る。
+            15. **PRのマージは絶対に行わない(マージは必ず人間が行う)。** PR作成が完了したら、それ以上待機せず終了する。PR本文には以下を含める:
+                - `Closes #<issue番号>`
+                - ## 対応したIssue(番号とリンク)
+                - ## 変更内容
+                - ## 動作確認(エビデンス)
+                - ## セルフレビューでの気付き(reviewerの指摘のうち、今回のPRで修正済みのものは「修正済み」、スコープ外として新規Issue化したものは「→ #<番号> として起票」を明記。問題が無ければ「特になし」)
+            16. ターン数の都合などでLGTMに到達できずに終了する場合は、PRにこれまでの経緯を要約したコメントを残す。
+
+            ## スコープ外の発見事項の扱い
+
+            17. coder / qa-engineer / reviewer のいずれかの報告に「スコープ外の発見事項」が含まれていた場合、それぞれについて以下を行う(なければ何もしなくてよい):
+                a. `gh issue list --state open` で確認し、既存Issueと内容が重複する場合は新規作成しない。
+                b. 重複がなければ `gh issue create --title "<簡潔なタイトル>" --body "<概要・背景・やること・発見の経緯(Issue #<今回対応した番号>の実装中に発見、という旨)>"` で起票する。
+                c. `gh issue edit <新Issue番号> --add-label found-in-review` でラベルを付与する。優先度は `next` を基本とする(緊急性が本当に高い場合のみ `now`)。
+                d. `GH_TOKEN=$PROJECTS_GH_TOKEN gh project item-add $PROJECT_NUMBER --owner $PROJECT_OWNER --url <新IssueのURL>` でProjectに追加する(Statusは既定のTodoのままでよい)。
+                e. 起票したIssueの番号を、今回のPR本文の「セルフレビューでの気付き」に記載する。
+
+            18. 最後に、対応したIssue番号、作成したPRのURL、セルフレビューで修正した内容、新規に起票したIssue(あれば)を日本語でレポートする。
+
+            各サブエージェントは Task tool 経由で呼び出してください。
+
+            ## 制約
+            - **PRのレビュー状況・CI結果・マージ状況を監視したり、それらを待つために処理を停止(sleep等)したりすることは絶対にしない。** PRを作成したら、その後どうなるか(人間にレビューされるか、マージされるか)を確認・待機せずに終了すること。
+            - 既存のオープンなPRにレビューコメント(人間からのもの)が付いていても、このワークフローの通常フローではそれに対応しない。レビューコメントへの対応は、ユーザーが明示的に指示した時にだけ行う。
+            - 1回の実行で対応するIssueは1件のみ。
+            - mainブランチへの直接コミット・pushは禁止。
+            - .envの値やAPIキーなど秘密情報をコードやPR本文に含めない。
+            - 課金が発生する可能性のある操作は絶対に実行しない。
+            - 担当範囲はあくまで「選んだ1件のIssueの実装」+「その過程で偶然見つけたスコープ外の問題のIssue化」まで。リポジトリ全体を能動的にスキャンして新たな問題点を探すことはしない(それは ticket-creation.yml の担当範囲)。
+            - reviewer の LGTM なしでのマージは、テストが全て通っていたとしても禁止。**LGTMが出ても人間承認なしの自動マージは絶対に行わない。**
+          claude_args: |
+            --max-turns 60 --allowedTools "Bash,Read,Write,Edit,Grep,Glob,Task"

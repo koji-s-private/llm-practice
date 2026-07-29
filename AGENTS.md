@@ -1,0 +1,55 @@
+# チーム開発ガイドライン（Claude Code 自動運用チーム共通ルール）
+
+このプロジェクト（ローカルRAGチャットアプリ、Streamlit + LangChain + Chroma + Ollama）は、
+GitHub Actions上で動くAIチームによって定期的にメンテナンスされています。
+
+## コミット・PR
+- コミットメッセージは Conventional Commits（feat:, fix:, test: など）を厳守
+- PRの本文に必ず `Closes #<issue番号>` を入れて Issue と自動リンクさせる
+- 1PRの変更ファイルは目安5枚以内。大きくなりそうなら Issue を分割する
+
+## コード品質
+- 実装を変更したら対応するテストを `tests/` に必ず追加・更新する
+- テストが通らない状態でPRを作成しない
+- 課金が発生する可能性のある操作（有料クラウドサービスの契約・起動、有料APIの利用等）は絶対に実行しない。実装・インフラ選定は必ず無料枠・無料ツールで完結する方法のみを採用する
+
+## GitHub Projects 運用
+- Project board: [koji-s-private/llm-practice](https://github.com/orgs/koji-s-private/projects/3)（Projects v2）
+  - Status: `Todo` → `In Progress` → `Under Review` → `Done`（`Under Review` はPR作成後、reviewerのレビュー中・修正対応中に使う独自追加ステータス）
+- 必要なID（`PROJECT_OWNER`, `PROJECT_NUMBER`, `PROJECT_ID`, `STATUS_FIELD_ID`,
+  `STATUS_TODO_ID`, `STATUS_IN_PROGRESS_ID`, `STATUS_UNDER_REVIEW_ID`, `STATUS_DONE_ID`）は
+  GitHub Actionsのリポジトリ変数（`vars.*`）として登録済みで、各ワークフローの `env:` に渡している。
+  エージェントは環境変数として直接参照できるので、都度 `gh project field-list` などで調べ直す必要はない
+- ステータス更新コマンド（ITEM_ID は `gh project item-list` で取得）
+  ```bash
+  GH_TOKEN=$PROJECTS_GH_TOKEN gh project item-edit --project-id $PROJECT_ID --field-id $STATUS_FIELD_ID \
+    --id <ITEM_ID> --single-select-option-id <option-id>
+  ```
+- 作業開始時は `In Progress` に更新する。PR作成後は、GitHub Projects純正の「Pull request linked to issue」ワークフローが自動的に `Under Review` に変更するため、エージェントが自分で更新する必要はない（`Closes #<issue番号>` をPR本文に含めてさえいれば自動で動く）
+- マージ完了後の `Done` への更新も、GitHub Projects純正の「Pull request merged」ワークフローが自動的に行う
+- LGTMに至らず終了した場合は `In Progress` のままにせず `Under Review` のまま止め、人間が気づけるようにする
+- **重要**: `claude-code-action` はセッション内で `GH_TOKEN`/`GITHUB_TOKEN` を自身のGitHub Appインストールトークン（`claude[bot]`）で上書きする。
+  このbotトークンはIssue/PR操作はできるが、Organization配下のProjectsには権限がないため、
+  `gh project` で始まるコマンドは必ず `GH_TOKEN=$PROJECTS_GH_TOKEN` を先頭に付けて、専用トークンに明示的に差し替えて実行すること
+  （逆に issue/PR 操作は素の `gh` のままでよい）
+
+## 役割分担
+- GitHub Actions上のセッション（このガイドラインを読んでいる側）はPM/リードエンジニア役。実装そのものは行わず、Task tool 経由で以下のサブエージェントに委任すること
+  - `coder`: 実装・ブランチ作成（[.claude/agents/coder.md](.claude/agents/coder.md)）
+  - `qa-engineer`: テスト作成・実行（[.claude/agents/qa-engineer.md](.claude/agents/qa-engineer.md)）
+  - `reviewer`: 静的解析・セキュリティ観点でのレビュー、コード変更は行わない（[.claude/agents/reviewer.md](.claude/agents/reviewer.md)）
+- 3者の作業が完了し、テストが通ってからPRを作成する
+- ワークフロー本体は [.github/workflows/ai-team.yml](.github/workflows/ai-team.yml) を参照
+- チケットの新規発掘は [.github/workflows/ticket-creation.yml](.github/workflows/ticket-creation.yml) が別途毎日担当する（役割が重複しないよう、ai-team.yml側はリポジトリ全体の能動的なスキャンは行わない）
+
+## Issue選定とマージ方針（**このプロジェクトは人間承認必須。参考にした他プロジェクトとの最大の違い**）
+- `now` ラベルが付いたOpen Issueのうち、`Under Review`でも`In Progress`でもなく、オープンなPRも紐づいていないものを対象にする（詳細は ai-team.yml 参照）
+- 3者の作業が完了しテストが通ったらPRを作成し、reviewerに `LGTM` をもらう
+- **reviewerがLGTMを出しても、絶対に自動マージしない。マージは必ず人間（koji）が手動で行う。** これは意図的な設計判断であり、将来的にも変更しない前提とする
+- reviewer が LGTM を出さなかった場合も同様にマージしない。PRにこれまでの経緯を要約したコメントを残し、人間の判断を待つ
+
+## スコープ外の発見事項の扱い
+- coder / qa-engineer / reviewer が作業中に今回のIssueと無関係な問題（バグ、技術的負債、改善点）に気づいた場合、
+  その場では直さずPMへの報告に「スコープ外の発見事項」として含める
+- PMはそれを新しいIssueとして作成し、`found-in-review` ラベルを付ける（Statusは `Todo`。既存Issueとの重複がないか事前に確認すること）
+- 優先度ラベル（`now`/`next`/`later`）は基本 `next` とする（緊急性が本当に高い場合のみ `now`）

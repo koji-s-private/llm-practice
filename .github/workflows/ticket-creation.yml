@@ -1,0 +1,58 @@
+name: Ticket Creation (Daily Health Check)
+
+# 毎日9:00 JST(=0:00 UTC)にリポジトリ全体をスキャンし、バグ・改善点・UX提案をIssue化する。
+# 広く浅い定期健診担当。実装は行わない（それは ai-team.yml の担当）。
+#
+# 無料運用メモ:
+# - Privateリポジトリのため GitHub Actions の実行時間は無料枠(月2000分)の範囲内。個人利用の頻度なら十分収まる想定。
+# - Claude Code の利用は Pro契約の枠内(CLAUDE_CODE_OAUTH_TOKEN、追加課金なし)
+
+on:
+  schedule:
+    - cron: "0 0 * * *"
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+  issues: write
+
+jobs:
+  create-tickets:
+    runs-on: ubuntu-latest
+    env:
+      PROJECTS_GH_TOKEN: ${{ secrets.PROJECTS_TOKEN }}
+      PROJECT_OWNER: ${{ vars.PROJECT_OWNER }}
+      PROJECT_NUMBER: ${{ vars.PROJECT_NUMBER }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Run ticket-creation agent
+        uses: anthropics/claude-code-action@v1
+        with:
+          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          allowed_bots: "claude"
+          prompt: |
+            あなたはこのリポジトリ（ローカルRAGチャットアプリ、Streamlit + LangChain + Chroma + Ollamaで動く個人開発プロジェクト）の定期メンテナンス担当エージェントです。以下の手順で実行してください。
+
+            1. リポジトリのコードを確認してください。特に rag_chain.py, ingest.py, memory.py, app.py, setup.py を中心に見てください。
+            2. バグ、改善点、検討事項（潜在的な問題や設計上の懸念）を探してください。
+            3. 加えて、app.pyのStreamlit UIを中心に、より使いやすくするための新機能・改善案（エンハンス）も検討してください。例：参照元表示の改善、ローディング体験、モバイル対応、操作性向上、会話履歴の見せ方など。実装難易度やユーザーへの影響度も簡潔に評価してください。
+            4. `gh issue list --state open` で既存のOpen Issueを確認し、内容が重複するものは新規作成しないでください。**既存Issueのラベル・本文・タイトルを変更・削除することは絶対にしないでください（あなたの役割は新規Issueの作成のみです）。**
+            5. 新たに見つかった問題・改善点・UI/UXエンハンス案ごとに、以下の形式で `gh issue create` を実行してIssueを作成してください。
+               - タイトル: 簡潔な1行（UI/UXの新機能提案の場合は先頭に「[UX提案]」を付ける）
+               - 本文: 「## 概要」「## 背景」「## やること」の3節構成（UX提案の場合は「## 期待される体験の向上」を加える）
+               - ラベル（`--label`で複数指定可）:
+                 - 新機能・改善提案の場合は `enhancement` を付ける
+                 - 重要度に応じて既存ラベル `now`（すぐ対応すべき）/ `next`（次に対応）/ `later`（将来的）のいずれか1つを必ず付ける。UI/UX提案は基本的に `next` または `later` とする
+            6. **重要な制約（必須）**: インフラ、デプロイ、外部サービス連携などお金が絡む可能性のある提案をする場合は、必ず無料枠・無料ツールで実現できる方法をベストプラクティスとして採用して提案すること。Issue本文に「この対応は無料で実施可能」と明記する。どうしても有料が必須な内容（クレジットカードや課金発生のある外部サービス契約など）しか方法がない場合は、Issue本文の先頭に「⚠️ 費用が発生する可能性があります。実装前にユーザー（koji）の承認が必要です」と明記し、`now`ラベルを付けず`later`のみとする（自動実装エージェントに自動で手を出させないため）。
+            7. 何も新たに見つからなければ、Issueは作成せず、その旨だけ簡潔に報告してください（無駄なIssueを作らないこと。UX提案もやりすぎに作らず、1回に1～2件程度に絞る）。
+            8. 最後に、今回作成した（またはしなかった）Issueの一覧とその理由（どのラベルを設定したか含む）を日本語でレポートしてください。
+
+            ## 補足（GitHub Project連携について）
+            - 作成したIssueをProjectボードに追加する操作は不要です。リポジトリ側のGitHub Projects「Auto-add to project」ワークフローが、新規Issueを自動でボードに追加します。
+
+            ## 補足（担当範囲・他ワークフローとの役割分担）
+            - このタスクは「リポジトリ全体を能動的にスキャンする、広く浅い定期健診」を担当する。
+            - 別のワークフロー「ai-team」は、選んだ1件のIssueを深く実装する過程で偶然見つけたスコープ外の問題（`found-in-review`ラベル）だけをIssue化する（狭く深い担当）。手順4の重複チェックは、そちらが起票したIssueとも重複しないように行うこと。
+          claude_args: |
+            --max-turns 30 --allowedTools "Bash,Read,Grep,Glob"
