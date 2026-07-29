@@ -26,6 +26,8 @@ PDFの読み込みは2段構成:
 """
 import argparse
 import json
+import logging
+import os
 from pathlib import Path
 
 from langchain_community.document_loaders import PyMuPDFLoader, TextLoader
@@ -40,6 +42,8 @@ try:
     DOCLING_AVAILABLE = True
 except ImportError:
     DOCLING_AVAILABLE = False
+
+logger = logging.getLogger(__name__)
 
 DATA_DIR = Path(__file__).parent / "data"
 CONVERSATIONS_DIRNAME = "conversations"
@@ -71,16 +75,26 @@ def safe_upload_dest(filename: str) -> Path | None:
 
 
 def _load_manifest() -> dict:
-    if MANIFEST_PATH.exists():
+    if not MANIFEST_PATH.exists():
+        return {}
+    try:
         return json.loads(MANIFEST_PATH.read_text(encoding="utf-8"))
-    return {}
+    except json.JSONDecodeError:
+        logger.warning(
+            "%s の読み込みに失敗しました（壊れたJSONの可能性があります）。"
+            "空のマニフェストとして扱い、全ファイルを再取り込みします。",
+            MANIFEST_PATH,
+        )
+        return {}
 
 
 def _save_manifest(manifest: dict) -> None:
     PERSIST_DIR.mkdir(parents=True, exist_ok=True)
-    MANIFEST_PATH.write_text(
+    tmp_path = MANIFEST_PATH.with_suffix(".json.tmp")
+    tmp_path.write_text(
         json.dumps(manifest, ensure_ascii=False, indent=2), encoding="utf-8"
     )
+    os.replace(tmp_path, MANIFEST_PATH)
 
 
 def _fingerprint(path: Path) -> dict:
