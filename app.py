@@ -20,7 +20,7 @@ from pathlib import Path
 import streamlit as st
 from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 
-from ingest import DATA_DIR, sync_data_dir
+from ingest import DATA_DIR, safe_upload_dest, sync_data_dir
 from memory import conversation_count, new_thread_id, save_conversation
 from rag_chain import build_agent
 
@@ -86,9 +86,8 @@ with st.sidebar:
     if uploaded_files:
         DATA_DIR.mkdir(parents=True, exist_ok=True)
         for f in uploaded_files:
-            safe_name = Path(f.name).name
-            dest = (DATA_DIR / safe_name).resolve()
-            if dest.parent != DATA_DIR.resolve():
+            dest = safe_upload_dest(f.name)
+            if dest is None:
                 st.error(f"不正なファイル名のためスキップしました: {f.name}")
                 continue
             dest.write_bytes(f.getvalue())
