@@ -86,7 +86,12 @@ with st.sidebar:
     if uploaded_files:
         DATA_DIR.mkdir(parents=True, exist_ok=True)
         for f in uploaded_files:
-            (DATA_DIR / f.name).write_bytes(f.getvalue())
+            safe_name = Path(f.name).name
+            dest = (DATA_DIR / safe_name).resolve()
+            if dest.parent != DATA_DIR.resolve():
+                st.error(f"不正なファイル名のためスキップしました: {f.name}")
+                continue
+            dest.write_bytes(f.getvalue())
         _sync_and_report("アップロードされたファイルを取り込み中...")
 
     st.divider()
