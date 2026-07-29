@@ -57,6 +57,19 @@ LOADERS = {
 MIN_CHARS_PER_PAGE_FOR_FAST_PATH = 40
 
 
+def safe_upload_dest(filename: str) -> Path | None:
+    """アップロードされたファイル名を DATA_DIR 配下の安全な書き込み先パスに変換する。
+
+    ディレクトリ部分（`../` 等）を除いた素のファイル名のみを使い、
+    resolve() 後に DATA_DIR 配下から外れていないかを最終チェックする。
+    DATA_DIR の外を指す場合（パストラバーサルの疑いがある場合）は None を返す。
+    """
+    dest = (DATA_DIR / Path(filename).name).resolve()
+    if dest.parent != DATA_DIR.resolve():
+        return None
+    return dest
+
+
 def _load_manifest() -> dict:
     if MANIFEST_PATH.exists():
         return json.loads(MANIFEST_PATH.read_text(encoding="utf-8"))

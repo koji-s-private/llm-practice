@@ -153,3 +153,45 @@ def test_legacy_flat_conversation_file_falls_back_to_global_thread_id(fake_env):
 
     thread_ids = {doc.metadata["thread_id"] for doc in store.docs_by_id.values()}
     assert thread_ids == {ingest.GLOBAL_THREAD_ID}
+
+
+@pytest.mark.parametrize(
+    ("filename", "expected_name"),
+    [
+        ("../../etc/passwd_test", "passwd_test"),
+        ("../../../tmp/evil.txt", "evil.txt"),
+        ("../sibling_dir_escape.txt", "sibling_dir_escape.txt"),
+    ],
+)
+def test_safe_upload_dest_strips_directory_traversal(fake_env, filename, expected_name):
+    # ディレクトリ部分（../ 等）は無害化され、DATA_DIR配下のベース名のみのパスになる
+    data_dir, _store = fake_env
+
+    dest = ingest.safe_upload_dest(filename)
+
+    assert dest is not None
+    assert dest.parent == data_dir.resolve()
+    assert dest.name == expected_name
+
+
+def test_safe_upload_dest_rejects_bare_dotdot(fake_env):
+    # ".." そのものは無害化してもDATA_DIR自身/外を指してしまうため拒否する
+    data_dir, _store = fake_env
+
+    dest = ingest.safe_upload_dest("..")
+
+    assert dest is None
+
+
+@pytest.mark.parametrize(
+    "filename",
+    ["report.pdf", "notes.txt", "my file (2).md"],
+)
+def test_safe_upload_dest_accepts_normal_filenames(fake_env, filename):
+    data_dir, _store = fake_env
+
+    dest = ingest.safe_upload_dest(filename)
+
+    assert dest is not None
+    assert dest.parent == data_dir.resolve()
+    assert dest.name == filename
