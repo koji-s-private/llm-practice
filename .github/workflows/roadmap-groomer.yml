@@ -77,7 +77,7 @@ jobs:
 
             1. `gh issue view ${{ steps.resolve.outputs.issue_number }} --comments` でスレッド全体の文脈を確認する
             2. `gh issue list --state open` で既存のオープンIssue一覧を確認する
-               (ticket-creation.ymlが起票したIssue、ai-team.ymlがfound-in-reviewラベルで起票したIssueとも
+               (daily-health-check.ymlが起票したIssue、ai-team.ymlがfound-in-reviewラベルで起票したIssueとも
                重複しないように確認すること)
             3. 最新コメントの内容を踏まえて、含まれる要望それぞれについて以下のいずれかで対応する
                (1コメントに複数の要望が含まれる場合は個別に判断・処理すること):

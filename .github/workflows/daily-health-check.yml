@@ -1,4 +1,4 @@
-name: Ticket Creation (Daily Health Check)
+name: Daily Health Check (Ticket Creation)
 
 # 毎日9:00 JST(=0:00 UTC)にリポジトリ全体をスキャンし、バグ・改善点・UX提案をIssue化する。
 # 広く浅い定期健診担当。実装は行わない（それは ai-team.yml の担当）。
@@ -27,7 +27,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Run ticket-creation agent
+      - name: Run daily health check agent
         uses: anthropics/claude-code-action@v1
         with:
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
