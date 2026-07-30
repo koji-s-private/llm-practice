@@ -27,7 +27,7 @@ GitHub Actions上で動くAIチームによって定期的にメンテナンス�
   ```
 - 作業開始時は `In Progress` に更新する。PR作成後は、GitHub Projects純正の「Pull request linked to issue」ワークフローが自動的に `Under Review` に変更するため、エージェントが自分で更新する必要はない（`Closes #<issue番号>` をPR本文に含めてさえいれば自動で動く）
 - マージ完了後の `Done` への更新も、GitHub Projects純正の「Pull request merged」ワークフローが自動的に行う
-- LGTMに至らず終了した場合は `In Progress` のままにせず `Under Review` のまま止め、人間が気づけるようにする
+- reviewerのapprove(LGTM)に至らず終了した場合は `In Progress` のままにせず `Under Review` のまま止め、人間が気づけるようにする
 - **重要**: `claude-code-action` はセッション内で `GH_TOKEN`/`GITHUB_TOKEN` を自身のGitHub Appインストールトークン（`claude[bot]`）で上書きする。
   このbotトークンはIssue/PR操作はできるが、Organization配下のProjectsには権限がないため、
   `gh project` で始まるコマンドは必ず `GH_TOKEN=$PROJECTS_GH_TOKEN` を先頭に付けて、専用トークンに明示的に差し替えて実行すること
@@ -37,16 +37,16 @@ GitHub Actions上で動くAIチームによって定期的にメンテナンス�
 - GitHub Actions上のセッション（このガイドラインを読んでいる側）はPM/リードエンジニア役。実装そのものは行わず、Task tool 経由で以下のサブエージェントに委任すること
   - `coder`: 実装・ブランチ作成（[.claude/agents/coder.md](.claude/agents/coder.md)）
   - `qa-engineer`: テスト作成・実行（[.claude/agents/qa-engineer.md](.claude/agents/qa-engineer.md)）
-  - `reviewer`: 静的解析・セキュリティ観点でのレビュー、コード変更は行わない（[.claude/agents/reviewer.md](.claude/agents/reviewer.md)）
+  - `reviewer`: 静的解析・セキュリティ観点でのレビュー、コード変更は行わない。判定結果は実際のGitHub PRレビュー(`gh pr review --approve`/`--request-changes`)として投稿する（[.claude/agents/reviewer.md](.claude/agents/reviewer.md)）
 - 3者の作業が完了し、テストが通ってからPRを作成する
 - ワークフロー本体は [.github/workflows/ai-team.yml](.github/workflows/ai-team.yml) を参照
 - チケットの新規発掘は [.github/workflows/ticket-creation.yml](.github/workflows/ticket-creation.yml) が別途毎日担当する（役割が重複しないよう、ai-team.yml側はリポジトリ全体の能動的なスキャンは行わない）
 
 ## Issue選定とマージ方針（**このプロジェクトは人間承認必須。参考にした他プロジェクトとの最大の違い**）
-- `now` ラベルが付いたOpen Issueのうち、`Under Review`でも`In Progress`でもなく、オープンなPRも紐づいていないものを対象にする（詳細は ai-team.yml 参照）
-- 3者の作業が完了しテストが通ったらPRを作成し、reviewerに `LGTM` をもらう
-- **reviewerがLGTMを出しても、絶対に自動マージしない。マージは必ず人間（koji）が手動で行う。** これは意図的な設計判断であり、将来的にも変更しない前提とする
-- reviewer が LGTM を出さなかった場合も同様にマージしない。PRにこれまでの経緯を要約したコメントを残し、人間の判断を待つ
+- `now` ラベルが付いたOpen Issueのうち、`Under Review`でも`In Progress`でもなく、オープンなPRも紐づいていないものを対象にする（選定ロジックの詳細は [.github/scripts/select_next_issue.py](.github/scripts/select_next_issue.py)、起動の流れは [ai-team-scheduler.yml](.github/workflows/ai-team-scheduler.yml) / [ai-team.yml](.github/workflows/ai-team.yml) 参照）
+- 3者の作業が完了しテストが通ったらPRを作成し、reviewerに実際のGitHub PRレビューでapprove（`gh pr review --approve`、本文に「LGTM」と明記する慣習）をもらう
+- **reviewerがapprove(LGTM)を出しても、絶対に自動マージしない。マージは必ず人間（koji）が手動で行う。** これは意図的な設計判断であり、将来的にも変更しない前提とする
+- reviewerがrequest changesのまま(approveに至らない)場合も同様にマージしない。PRにこれまでの経緯を要約したコメントを残し、人間の判断を待つ
 
 ## スコープ外の発見事項の扱い
 - coder / qa-engineer / reviewer が作業中に今回のIssueと無関係な問題（バグ、技術的負債、改善点）に気づいた場合、
