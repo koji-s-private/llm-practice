@@ -53,3 +53,16 @@ GitHub Actions上で動くAIチームによって定期的にメンテナンス�
   その場では直さずPMへの報告に「スコープ外の発見事項」として含める
 - PMはそれを新しいIssueとして作成し、`found-in-review` ラベルを付ける（Statusは `Todo`。既存Issueとの重複がないか事前に確認すること）
 - 優先度ラベル（`now`/`next`/`later`）は基本 `next` とする（緊急性が本当に高い場合のみ `now`）
+
+## プロダクト方針とIssue自動作成
+- 常設の[📍 プロダクトロードマップ Issue](https://github.com/koji-s-private/llm-practice/issues/43)（`roadmap-thread` ラベル）に、オーナー（koji）が機能追加・改善・方針転換をコメントで書き込む運用にしている（react-native-first-appリポジトリと同じ仕組み）
+- [.github/workflows/roadmap-groomer.yml](.github/workflows/roadmap-groomer.yml) が
+  ロードマップIssueへの新規コメントをトリガーに起動し、要望を次のいずれかに振り分ける
+  - 新規の要望 → 新しいIssueを作成し優先度ラベル（オーナー本人の明示的な依頼のため原則 `now`。有料サービスが必須の内容は `later` + 費用注意書き）を付与
+  - 既存Issueへの方針変更 → 該当Issueにコメント追記、または未着手なら本文を更新
+  - 既存Issueの取り下げ → 該当Issueをクローズ
+  - アクション不要な内容（雑談・確認質問など） → 何もしない
+- roadmap-groomer.yml / ticket-creation.yml / ai-team-scheduler.yml / ai-team.yml はすべて `workflow_dispatch`
+  に対応しており、GitHub Actionsタブからオーナーが任意のタイミングで手動実行することもできる
+- 起票したIssueの重複防止のため、roadmap-groomer.yml・ticket-creation.yml・ai-team.yml（found-in-review）は
+  それぞれ `gh issue list --state open` で他の起票元のIssueとも重複しないか確認してから新規作成する

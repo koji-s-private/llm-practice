@@ -1,0 +1,117 @@
+name: Roadmap Comment Groomer
+
+# 常設の「プロダクトロードマップ」Issue(roadmap-threadラベル)への
+# 新規コメントをトリガーに、要望を新規Issue化 / 既存Issueへの反映 / クローズ を行う。
+# コメントベースでオーナー(koji)の方針・要望をリアルタイムに反映する
+# (react-native-first-appリポジトリのroadmap-groomer.ymlを移植したもの)。
+# workflow_dispatch でオーナーが任意のタイミング・任意の要望文でも手動実行できる。
+#
+# 新規Issueに付与する優先度ラベルは、他のワークフローと同じ `now`/`next`/`later` を使う
+# (react-native-first-app側の `ai-auto-dev` ラベルに相当する即時トリガーはこのリポジトリには
+# 存在しないため、代わりに優先度ラベルを付けるだけでよい。次回の ai-team-scheduler.yml 実行で
+# 通常のIssueと同じ選定ロジックの対象になる)。
+
+on:
+  issue_comment:
+    types: [created]
+  workflow_dispatch:
+    inputs:
+      comment_body:
+        description: 'ロードマップへの要望内容(実際にコメントする文章と同じ内容を書く)'
+        required: true
+        type: string
+
+permissions:
+  contents: read
+  issues: write
+  id-token: write
+
+concurrency:
+  group: roadmap-groomer
+  cancel-in-progress: false
+
+jobs:
+  groom-roadmap:
+    if: >
+      github.event_name == 'workflow_dispatch' ||
+      (contains(github.event.issue.labels.*.name, 'roadmap-thread') &&
+       github.event.comment.user.type != 'Bot')
+    runs-on: ubuntu-latest
+    env:
+      # gh project 系コマンドは claude-code-action の内部トークン(claude[bot])では
+      # Organization配下のProjectを操作できないため、専用トークンを別名で持たせて明示的に使う
+      PROJECTS_GH_TOKEN: ${{ secrets.PROJECTS_TOKEN }}
+      PROJECT_OWNER: ${{ vars.PROJECT_OWNER }}
+      PROJECT_NUMBER: ${{ vars.PROJECT_NUMBER }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Resolve target issue and comment body
+        id: resolve
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            issue_number=$(gh issue list --repo "${{ github.repository }}" --label roadmap-thread --state open --json number -q '.[0].number')
+          else
+            issue_number="${{ github.event.issue.number }}"
+          fi
+          echo "issue_number=$issue_number" >> "$GITHUB_OUTPUT"
+
+      - name: Run roadmap groomer agent
+        uses: anthropics/claude-code-action@v1
+        with:
+          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          allowed_bots: "claude"
+          prompt: |
+            あなたはこのプロダクト(ローカルRAGチャットアプリ、Streamlit + LangChain + Chroma + Ollama)の
+            ロードマップ担当です。
+            Issue #${{ steps.resolve.outputs.issue_number }}(プロダクトロードマップ、常設スレッド)に
+            新しいコメントが投稿されました。このIssue自体はタスクではないので、
+            クローズしたり優先度ラベル(`now`/`next`/`later`)を付けたりしないでください。
+
+            最新コメント(今回のトリガー):
+            """
+            ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.comment_body || github.event.comment.body }}
+            """
+
+            1. `gh issue view ${{ steps.resolve.outputs.issue_number }} --comments` でスレッド全体の文脈を確認する
+            2. `gh issue list --state open` で既存のオープンIssue一覧を確認する
+               (ticket-creation.ymlが起票したIssue、ai-team.ymlがfound-in-reviewラベルで起票したIssueとも
+               重複しないように確認すること)
+            3. 最新コメントの内容を踏まえて、含まれる要望それぞれについて以下のいずれかで対応する
+               (1コメントに複数の要望が含まれる場合は個別に判断・処理すること):
+
+               a. 新しい機能追加・改善の要望
+                  → 実装に足る粒度まで要件・受け入れ条件を整理した上で
+                    `gh issue create --title "<簡潔なタイトル>" --body "<要件・受け入れ条件>"` で新しいIssueを作成
+                  → 作成とは別コマンドで `gh issue edit <新Issue番号> --add-label now` を実行して優先度ラベルを付与する
+                    (オーナー本人が明示的に依頼した要望のため、原則として最優先の `now` を付ける。
+                    ただしオーナーのコメント自体が「急がない」「あとで」等、緊急でない旨を示している場合は
+                    `next` を付けてもよい。次回の ai-team-scheduler.yml 実行(1日1回)で優先度に基づき
+                    自動的に着手される)
+                  → **重要な制約(必須)**: 要望の実現に有料クラウドサービスの契約・起動や有料APIの利用など
+                    課金が発生する可能性がある場合は、`gh issue edit <新Issue番号> --add-label later` として
+                    Issue本文の先頭に「⚠️ 費用が発生する可能性があります。実装前にユーザー(koji)の承認が必要です」
+                    と明記すること(`now`は付けない。select_next_issue.pyがこのプレフィックスのIssueを
+                    自動的にスキップする安全装置になっている)
+                  → 続けて `GH_TOKEN=$PROJECTS_GH_TOKEN gh project item-add $PROJECT_NUMBER --owner $PROJECT_OWNER --url <新IssueのURL>`
+                    でProjectに追加する(Statusは既定のTodoのままでよい)
+
+               b. 既存のオープンIssue(未着手または対応中)に対する方針変更・修正指示
+                  → 該当Issueに `gh issue comment <該当Issue番号> --body "..."` で変更内容を追記する
+                  → まだ実装に着手していないと判断できる場合は、`gh issue edit <該当Issue番号> --body "..."` で
+                    本文自体を新しい要件に更新してもよい
+
+               c. 既存Issueのキャンセル・不要になった指示
+                  → `gh issue close <該当Issue番号> --comment "コメントの指示により不要と判断したためクローズします"`
+
+               d. 単なる雑談・確認質問など、具体的なアクションが不要な内容
+                  → 何も作成・変更しない
+
+            4. 対応内容(何を作成/更新/クローズしたか、または何もしなかったか)を簡潔に要約し、
+               `gh issue comment ${{ steps.resolve.outputs.issue_number }} --body "..."` でロードマップIssue自体に返信する
+
+            迷う場合は、新規Issue作成よりもロードマップIssueへの確認コメントを優先してください。
+          claude_args: |
+            --max-turns 40 --allowedTools "Bash,Read,Grep,Glob"
