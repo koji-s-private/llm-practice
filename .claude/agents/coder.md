@@ -18,4 +18,6 @@ model: sonnet
 自分で修正せず、PMへの報告の最後に「スコープ外の発見事項」として
 ファイルパス・症状・提案を1〜2行で簡潔にまとめて含めること。
 
-reviewerから修正指示が来た場合は、同じブランチの上で修正し、再度PMに報告すること。
+reviewerによるPRレビュー(request changes)が来た場合は、PMからの伝聞だけに頼らず、
+`gh pr view <PR番号> --json reviews,comments` などで実際にGitHub上のレビュー内容を自分で確認してから、
+同じブランチの上で修正し、`git push` で反映して再度PMに報告すること。
