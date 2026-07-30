@@ -1,0 +1,45 @@
+name: AI Team Scheduler
+
+# 毎日1:00 UTC(=10:00 JST)に1回だけ実行し、nowラベルが付いたIssueの中から
+# 次に着手すべき1件をLLMを使わない決定的なスクリプト(select_next_issue.py)で選定する。
+# 選定できたら workflow_dispatch で ai-team.yml を issue_number 付きで起動する。
+#
+# 選定ロジックをここに切り出しているのは、ai-team.yml側を「トリガー発火時点で
+# 対象Issue番号が既知(workflow_dispatchのinput)」な状態にするため。
+# こうすることで ai-team.yml の run-name にIssue番号を出せるようになり、
+# Actionsのrun一覧からどのIssueを処理したrunか一目で分かるようになる
+# (react-native-first-appのようにissues:labeledで即時トリガーする構成に変えなくても、
+# 「1日1回だけ」という現行方針を維持したままrun一覧の可読性だけを改善できる)。
+
+on:
+  schedule:
+    - cron: "0 1 * * *"
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+  issues: write
+  pull-requests: read
+  actions: write
+
+jobs:
+  pick-and-dispatch:
+    runs-on: ubuntu-latest
+    env:
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      PROJECTS_GH_TOKEN: ${{ secrets.PROJECTS_TOKEN }}
+      PROJECT_OWNER: ${{ vars.PROJECT_OWNER }}
+      PROJECT_NUMBER: ${{ vars.PROJECT_NUMBER }}
+      PROJECT_ID: ${{ vars.PROJECT_ID }}
+      STATUS_FIELD_ID: ${{ vars.STATUS_FIELD_ID }}
+      STATUS_TODO_ID: ${{ vars.STATUS_TODO_ID }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Pick next issue
+        id: pick
+        run: python3 .github/scripts/select_next_issue.py
+
+      - name: Dispatch AI Team Orchestrator
+        if: steps.pick.outputs.issue_number != ''
+        run: gh workflow run ai-team.yml -f issue_number="${{ steps.pick.outputs.issue_number }}"
