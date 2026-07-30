@@ -40,7 +40,7 @@ GitHub Actions上で動くAIチームによって定期的にメンテナンス�
   - `reviewer`: 静的解析・セキュリティ観点でのレビュー、コード変更は行わない。判定結果は実際のGitHub PRレビュー(`gh pr review --approve`/`--request-changes`)として投稿する（[.claude/agents/reviewer.md](.claude/agents/reviewer.md)）
 - 3者の作業が完了し、テストが通ってからPRを作成する
 - ワークフロー本体は [.github/workflows/ai-team.yml](.github/workflows/ai-team.yml) を参照
-- チケットの新規発掘は [.github/workflows/ticket-creation.yml](.github/workflows/ticket-creation.yml) が別途毎日担当する（役割が重複しないよう、ai-team.yml側はリポジトリ全体の能動的なスキャンは行わない）
+- チケットの新規発掘は [.github/workflows/daily-health-check.yml](.github/workflows/daily-health-check.yml) が別途毎日担当する（役割が重複しないよう、ai-team.yml側はリポジトリ全体の能動的なスキャンは行わない）
 
 ## Issue選定とマージ方針（**このプロジェクトは人間承認必須。参考にした他プロジェクトとの最大の違い**）
 - `now` ラベルが付いたOpen Issueのうち、`Under Review`でも`In Progress`でもなく、オープンなPRも紐づいていないものを対象にする（選定ロジックの詳細は [.github/scripts/select_next_issue.py](.github/scripts/select_next_issue.py)、起動の流れは [ai-team-scheduler.yml](.github/workflows/ai-team-scheduler.yml) / [ai-team.yml](.github/workflows/ai-team.yml) 参照）
@@ -62,7 +62,7 @@ GitHub Actions上で動くAIチームによって定期的にメンテナンス�
   - 既存Issueへの方針変更 → 該当Issueにコメント追記、または未着手なら本文を更新
   - 既存Issueの取り下げ → 該当Issueをクローズ
   - アクション不要な内容（雑談・確認質問など） → 何もしない
-- roadmap-groomer.yml / ticket-creation.yml / ai-team-scheduler.yml / ai-team.yml はすべて `workflow_dispatch`
+- roadmap-groomer.yml / daily-health-check.yml / ai-team-scheduler.yml / ai-team.yml はすべて `workflow_dispatch`
   に対応しており、GitHub Actionsタブからオーナーが任意のタイミングで手動実行することもできる
-- 起票したIssueの重複防止のため、roadmap-groomer.yml・ticket-creation.yml・ai-team.yml（found-in-review）は
+- 起票したIssueの重複防止のため、roadmap-groomer.yml・daily-health-check.yml・ai-team.yml（found-in-review）は
   それぞれ `gh issue list --state open` で他の起票元のIssueとも重複しないか確認してから新規作成する
