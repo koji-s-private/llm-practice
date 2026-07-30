@@ -59,7 +59,7 @@ def test_new_file_is_added(fake_env):
 
     result = ingest.sync_data_dir(verbose=False)
 
-    assert result == {"added": ["a.txt"], "updated": [], "removed": []}
+    assert result == {"added": ["a.txt"], "updated": [], "removed": [], "failed": []}
     assert store.docs_by_id
 
 
@@ -71,7 +71,7 @@ def test_unchanged_file_is_noop_on_second_sync(fake_env):
 
     result = ingest.sync_data_dir(verbose=False)
 
-    assert result == {"added": [], "updated": [], "removed": []}
+    assert result == {"added": [], "updated": [], "removed": [], "failed": []}
     assert store.docs_by_id == docs_after_first_sync
 
 
@@ -84,7 +84,7 @@ def test_modified_file_is_updated_and_old_chunks_replaced(fake_env):
     path.write_text("変更後のまったく別のテキスト内容です。", encoding="utf-8")
     result = ingest.sync_data_dir(verbose=False)
 
-    assert result == {"added": [], "updated": ["a.txt"], "removed": []}
+    assert result == {"added": [], "updated": ["a.txt"], "removed": [], "failed": []}
     # 古いチャンクは削除され、新しいチャンクに置き換わっている
     assert old_chunk_ids.isdisjoint(store.docs_by_id.keys())
     assert store.docs_by_id
@@ -99,10 +99,137 @@ def test_removed_file_is_deleted_from_store_and_manifest(fake_env):
     path.unlink()
     result = ingest.sync_data_dir(verbose=False)
 
-    assert result == {"added": [], "updated": [], "removed": ["a.txt"]}
+    assert result == {"added": [], "updated": [], "removed": ["a.txt"], "failed": []}
     assert store.docs_by_id == {}
     manifest = json.loads(ingest.MANIFEST_PATH.read_text(encoding="utf-8"))
     assert manifest == {}
+
+
+class _FailingLoader:
+    """load() で必ず例外を送出するダミーローダー（LOADERSの差し替え用）。
+
+    Issue #18: 1ファイルの読み込み失敗が他のファイルの同期まで止めてしまわないことを
+    検証するためのテストダブル。
+    """
+
+    def __init__(self, path):
+        self.path = path
+
+    def load(self):
+        raise ValueError(f"{self.path} は読み込めません（壊れたファイルの想定）")
+
+
+def test_one_file_load_failure_does_not_block_other_files(fake_env, monkeypatch):
+    # 1ファイルの読み込みが失敗しても、他の正常なファイルは問題なく同期される
+    data_dir, store = fake_env
+    _write(data_dir, "good.txt", "正常に読み込めるテキストです。" * 5)
+    _write(data_dir, "bad.txt", "壊れていることにするテキストです。" * 5)
+
+    real_text_loader = ingest.LOADERS[".txt"]
+
+    def flaky_loader(path):
+        if "bad.txt" in path:
+            return _FailingLoader(path)
+        return real_text_loader(path)
+
+    monkeypatch.setattr(ingest, "LOADERS", {**ingest.LOADERS, ".txt": flaky_loader})
+
+    result = ingest.sync_data_dir(verbose=False)
+
+    assert result == {
+        "added": ["good.txt"],
+        "updated": [],
+        "removed": [],
+        "failed": ["bad.txt"],
+    }
+    # 正常なファイルのチャンクはベクトルストアに登録されている
+    sources = {doc.metadata.get("source") for doc in store.docs_by_id.values()}
+    assert any("good.txt" in (s or "") for s in sources)
+
+
+def test_pdf_load_failure_is_recorded_as_failed(fake_env, monkeypatch):
+    # PDFは _load_pdf() 経由で読み込まれるため、そちらの失敗も同様にスキップされることを確認する
+    data_dir, store = fake_env
+    (data_dir / "broken.pdf").write_bytes(b"not a real pdf")
+
+    def flaky_load_pdf(path, verbose=True):
+        raise ValueError("壊れたPDFです")
+
+    monkeypatch.setattr(ingest, "_load_pdf", flaky_load_pdf)
+
+    result = ingest.sync_data_dir(verbose=False)
+
+    assert result == {"added": [], "updated": [], "removed": [], "failed": ["broken.pdf"]}
+    assert store.docs_by_id == {}
+
+
+def test_failed_file_is_not_recorded_in_manifest_and_retried_next_sync(
+    fake_env, monkeypatch
+):
+    # 失敗したファイルはmanifestに記録されず、次回同期時に再度読み込みが試みられる（リトライ）
+    data_dir, store = fake_env
+    _write(data_dir, "bad.txt", "壊れていることにするテキストです。" * 5)
+
+    load_attempts = []
+
+    def always_failing_loader(path):
+        load_attempts.append(path)
+        return _FailingLoader(path)
+
+    monkeypatch.setattr(
+        ingest, "LOADERS", {**ingest.LOADERS, ".txt": always_failing_loader}
+    )
+
+    result_1 = ingest.sync_data_dir(verbose=False)
+    assert result_1["failed"] == ["bad.txt"]
+
+    manifest = json.loads(ingest.MANIFEST_PATH.read_text(encoding="utf-8"))
+    assert "bad.txt" not in manifest
+
+    result_2 = ingest.sync_data_dir(verbose=False)
+    assert result_2["failed"] == ["bad.txt"]
+    # ファイルが変化していなくてもmanifestに記録がないため、2回とも読み込みが試みられている
+    assert len(load_attempts) == 2
+
+
+def test_all_files_failing_completes_without_raising(fake_env, monkeypatch):
+    # 全ファイルが失敗しても例外を送出せず処理が正常に完了する（境界値）
+    data_dir, store = fake_env
+    _write(data_dir, "bad1.txt", "壊れていることにするテキスト1です。" * 5)
+    _write(data_dir, "bad2.txt", "壊れていることにするテキスト2です。" * 5)
+
+    monkeypatch.setattr(
+        ingest, "LOADERS", {**ingest.LOADERS, ".txt": lambda path: _FailingLoader(path)}
+    )
+
+    result = ingest.sync_data_dir(verbose=False)
+
+    assert sorted(result["failed"]) == ["bad1.txt", "bad2.txt"]
+    assert result["added"] == []
+    assert result["updated"] == []
+    assert result["removed"] == []
+    assert store.docs_by_id == {}
+
+
+def test_previously_synced_file_that_now_fails_keeps_old_chunks(fake_env, monkeypatch):
+    # 読み込み失敗時は前回同期成功時点のインデックスがそのまま残る
+    data_dir, store = fake_env
+    path = _write(data_dir, "a.txt", "最初は正常なテキストです。" * 5)
+    ingest.sync_data_dir(verbose=False)
+    old_chunk_ids = set(store.docs_by_id.keys())
+    assert old_chunk_ids
+
+    path.write_text("2回目の同期時は壊れていることにするテキストです。" * 5, encoding="utf-8")
+    monkeypatch.setattr(
+        ingest, "LOADERS", {**ingest.LOADERS, ".txt": lambda p: _FailingLoader(p)}
+    )
+
+    result = ingest.sync_data_dir(verbose=False)
+
+    assert result["failed"] == ["a.txt"]
+    assert result["updated"] == []
+    # 読み込み失敗時は前回同期成功時点のチャンクがそのまま（削除も置き換えもされない）
+    assert store.docs_by_id.keys() == old_chunk_ids
 
 
 def test_unsupported_extension_is_ignored(fake_env):
@@ -111,7 +238,7 @@ def test_unsupported_extension_is_ignored(fake_env):
 
     result = ingest.sync_data_dir(verbose=False)
 
-    assert result == {"added": [], "updated": [], "removed": []}
+    assert result == {"added": [], "updated": [], "removed": [], "failed": []}
     assert store.docs_by_id == {}
 
 
