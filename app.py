@@ -42,6 +42,12 @@ def _sync_and_report(spinner_text: str) -> None:
             f"更新{len(result['updated'])} / 削除{len(result['removed'])}）",
             icon="✅",
         )
+    if result["failed"]:
+        st.warning(
+            "以下のファイルは読み込みに失敗したためスキップしました"
+            "（破損・パスワード付き・不正なエンコーディング等の可能性があります）:\n"
+            + "\n".join(f"- {name}" for name in result["failed"])
+        )
 
 
 def _start_new_chat() -> None:

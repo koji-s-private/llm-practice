@@ -151,8 +151,10 @@ def _thread_id_for(rel_path: str) -> str:
 def sync_data_dir(verbose: bool = True) -> dict:
     """data/ の内容とベクトルDBを同期する。
 
-    戻り値: {"added": [...], "updated": [...], "removed": [...]}
+    戻り値: {"added": [...], "updated": [...], "removed": [...], "failed": [...]}
     変更がなければ全て空リストになる（＝差分がなければ何もしない）。
+    読み込み・分割に失敗したファイルは "failed" に積まれ、manifestには記録されない
+    （＝次回同期時に再度リトライされる）。他のファイルの同期は継続される。
     """
     DATA_DIR.mkdir(parents=True, exist_ok=True)
 
@@ -167,7 +169,7 @@ def sync_data_dir(verbose: bool = True) -> dict:
         if f.is_file() and f.suffix.lower() in LOADERS
     }
 
-    result = {"added": [], "updated": [], "removed": []}
+    result = {"added": [], "updated": [], "removed": [], "failed": []}
 
     # 追加 or 変更されたファイルを取り込む
     for name, path in current_files.items():
@@ -181,16 +183,26 @@ def sync_data_dir(verbose: bool = True) -> dict:
         if unchanged:
             continue
 
+        try:
+            if path.suffix.lower() == ".pdf":
+                docs = _load_pdf(path, verbose=verbose)
+            else:
+                loader = LOADERS[path.suffix.lower()](str(path))
+                docs = loader.load()
+            chunks = splitter.split_documents(docs)
+        except Exception as e:
+            # 1ファイルの読み込み失敗（破損PDF・パスワード付きPDF・不正なエンコーディング等）で
+            # 他の正常なファイルの同期まで止めないよう、ログに残してスキップする。
+            # manifestには記録しないので、次回同期時に再度リトライされる。
+            logger.warning("%s の読み込みに失敗したためスキップします: %s", name, e)
+            result["failed"].append(name)
+            if verbose:
+                print(f"スキップ（読み込み失敗）: {name}（{e}）")
+            continue
+
         # 既存チャンクがあれば先に削除してから入れ直す（重複防止）
         if entry and entry.get("chunk_ids"):
             vector_store.delete(ids=entry["chunk_ids"])
-
-        if path.suffix.lower() == ".pdf":
-            docs = _load_pdf(path, verbose=verbose)
-        else:
-            loader = LOADERS[path.suffix.lower()](str(path))
-            docs = loader.load()
-        chunks = splitter.split_documents(docs)
 
         # 会話ログはそのスレッドのみ、それ以外（通常ドキュメント・アップロード）は
         # 全スレッド共通で検索できるよう、チャンクにthread_idをメタデータとして付与する。
@@ -275,7 +287,8 @@ def main():
     result = sync_data_dir()
     print(
         f"完了: 追加{len(result['added'])}件 / "
-        f"更新{len(result['updated'])}件 / 削除{len(result['removed'])}件"
+        f"更新{len(result['updated'])}件 / 削除{len(result['removed'])}件 / "
+        f"失敗{len(result['failed'])}件"
     )
     print("`streamlit run app.py` でチャットを開始できます。")
     print("（DBの状態を確認したい場合は `python ingest.py --status`）")
