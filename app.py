@@ -30,8 +30,12 @@ st.caption("data/ フォルダにファイルを置くと自動でDBに反映さ
 
 
 def _sync_and_report(spinner_text: str) -> None:
-    with st.spinner(spinner_text):
-        result = sync_data_dir(verbose=False)
+    try:
+        with st.spinner(spinner_text):
+            result = sync_data_dir(verbose=False)
+    except Exception as e:
+        st.error(f"ドキュメントの同期に失敗しました。時間をおいて再度お試しください。（詳細: {e}）")
+        return
     if any(result.values()):
         st.toast(
             f"DBを更新しました（追加{len(result['added'])} / "
@@ -118,36 +122,47 @@ if user_input:
     with st.chat_message("user"):
         st.markdown(user_input)
 
+    answer = None
     with st.chat_message("assistant"):
-        with st.spinner("検索して回答を考え中..."):
-            result = st.session_state.agent.invoke(
-                {"messages": st.session_state.messages + [HumanMessage(content=user_input)]}
+        try:
+            with st.spinner("検索して回答を考え中..."):
+                result = st.session_state.agent.invoke(
+                    {"messages": st.session_state.messages + [HumanMessage(content=user_input)]}
+                )
+                new_messages = result["messages"]
+                answer = new_messages[-1].content
+                st.markdown(answer)
+
+                # ツール呼び出しで取得した参照元ドキュメントを表示
+                sources = []
+                for m in new_messages:
+                    if isinstance(m, ToolMessage) and getattr(m, "artifact", None):
+                        sources.extend(m.artifact)
+
+                if sources:
+                    with st.expander("参照した箇所を見る"):
+                        for i, doc in enumerate(sources, start=1):
+                            source = doc.metadata.get("source", "unknown")
+                            page = doc.metadata.get("page")
+                            label = Path(source).name if source != "unknown" else source
+                            if page is not None:
+                                label += f"（p.{page + 1}）"
+                            st.markdown(f"**[{i}] {label}**")
+                            st.text(doc.page_content[:300] + "...")
+        except Exception as e:
+            st.error(
+                "回答の生成に失敗しました。Ollamaサーバーに接続できません。"
+                f"起動しているか確認してください。（詳細: {e}）"
             )
-            new_messages = result["messages"]
-            answer = new_messages[-1].content
-            st.markdown(answer)
 
-            # ツール呼び出しで取得した参照元ドキュメントを表示
-            sources = []
-            for m in new_messages:
-                if isinstance(m, ToolMessage) and getattr(m, "artifact", None):
-                    sources.extend(m.artifact)
+    if answer is not None:
+        st.session_state.messages.append(HumanMessage(content=user_input))
+        st.session_state.messages.append(AIMessage(content=answer))
 
-            if sources:
-                with st.expander("参照した箇所を見る"):
-                    for i, doc in enumerate(sources, start=1):
-                        source = doc.metadata.get("source", "unknown")
-                        page = doc.metadata.get("page")
-                        label = Path(source).name if source != "unknown" else source
-                        if page is not None:
-                            label += f"（p.{page + 1}）"
-                        st.markdown(f"**[{i}] {label}**")
-                        st.text(doc.page_content[:300] + "...")
-
-    st.session_state.messages.append(HumanMessage(content=user_input))
-    st.session_state.messages.append(AIMessage(content=answer))
-
-    # 会話を自動でナレッジ化（このスレッド専用としてローカル保存 → 即座にDB反映）
-    if st.session_state.auto_save_memory:
-        save_conversation(user_input, answer, st.session_state.thread_id)
-        sync_data_dir(verbose=False)
+        # 会話を自動でナレッジ化（このスレッド専用としてローカル保存 → 即座にDB反映）
+        if st.session_state.auto_save_memory:
+            save_conversation(user_input, answer, st.session_state.thread_id)
+            try:
+                sync_data_dir(verbose=False)
+            except Exception as e:
+                st.error(f"会話ログの同期に失敗しました。（詳細: {e}）")
