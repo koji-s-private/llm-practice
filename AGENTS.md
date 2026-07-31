@@ -16,6 +16,11 @@ GitHub Actions上で動くAIチームによって定期的にメンテナンス�
 - 実装を変更したら対応するテストを `tests/` に必ず追加・更新する
 - テストが通らない状態でPRを作成しない
 - 課金が発生する可能性のある操作（有料クラウドサービスの契約・起動、有料APIの利用等）は絶対に実行しない。実装・インフラ選定は必ず無料枠・無料ツールで完結する方法のみを採用する
+- 新しい技術・ライブラリを追加した場合（`requirements.txt` / `pyproject.toml` への追加を伴う変更など）は、
+  その都度 [README.md](README.md) の「使用技術」セクションも同じPR内で更新する（何をするためのものか・
+  どのファイルでどう使われているかを追記する）。「使用技術」セクションが肥大化してきた場合は、
+  `docs/tech-stack.md` のような別ファイルに切り出し、ルートの `README.md` 側にはリンクのみを残す
+  （`data/README.md` / `tests/README.md` などの既存の「詳細は別ファイル」構成にならう）
 
 ## GitHub Projects 運用
 - Project board: [koji-s-private/llm-practice](https://github.com/orgs/koji-s-private/projects/3)（Projects v2）

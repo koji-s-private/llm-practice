@@ -143,6 +143,59 @@ Ollamaが起動していてもあえて使いたくない場合は `.env` に `D
 上記「無料で使う（Ollama）」を使ってください。
 なお、LangSmithへのトレース送信は完全に任意（デフォルトOFF）で、`.env`で明示的に有効化しない限り発生しません。
 
+## 使用技術
+
+新規参画者・初学者向けに、主要なライブラリ・ミドルウェアが「何をするためのものか」「このプロジェクトの
+どこで・どう使われているか」を一覧にまとめています（実装の意図・設計判断は次の
+「[技術構成とベストプラクティスのポイント](#技術構成とベストプラクティスのポイント)」を参照してください）。
+
+### UI
+
+| ライブラリ | 役割 | このプロジェクトでの使用箇所 |
+|---|---|---|
+| [Streamlit](https://streamlit.io/) | Pythonだけでブラウザ上のチャットUIを構築できるフレームワーク | `app.py`。チャット画面本体（`st.chat_input` / `st.chat_message`）、サイドバー（ファイルアップロード・再同期ボタン・会話管理トグル）を実装 |
+
+### LLMエージェント・オーケストレーション（LangChain）
+
+| ライブラリ | 役割 | このプロジェクトでの使用箇所 |
+|---|---|---|
+| `langchain`（`langchain[openai]`） | LLM呼び出し・エージェント構築・プロンプト管理などを抽象化するフレームワーク本体 | `setup.py`（`init_chat_model`でモデルを初期化）、`rag_chain.py`（`create_agent`で検索ツール付きRAGエージェントを構築、`@tool`で検索ツールを定義） |
+| `langchain-core` | LangChainのメッセージ型・基底クラスなど（`langchain`本体に付随して導入される） | `app.py`（`AIMessage` / `HumanMessage` / `ToolMessage`で会話履歴を管理） |
+| `langchain-anthropic` | LangChainからAnthropic（Claude）を呼び出すためのプロバイダ連携パッケージ | `setup.py`。`ANTHROPIC_API_KEY`設定時のフォールバック先（`init_chat_model(..., model_provider="anthropic")`） |
+| `langchain-ollama` | LangChainからOllama（ローカルLLM）を呼び出すためのプロバイダ連携パッケージ | `setup.py`。Ollama起動を検出した場合の最優先モデル（`init_chat_model(..., model_provider="ollama")`） |
+
+### 検索・ベクトルDB（RAG）
+
+| ライブラリ / ミドルウェア | 役割 | このプロジェクトでの使用箇所 |
+|---|---|---|
+| [Ollama](https://ollama.com/) | LLMをローカルPC上で無料実行するためのランタイム（アプリ本体とは別プロセスで起動） | `setup.py`が`localhost:11434`への接続有無で起動を検知し、起動していれば回答生成・関連度採点に最優先で使用 |
+| [Chroma](https://www.trychroma.com/)（`langchain-chroma`） | ドキュメントのベクトル（埋め込み）を保存し、類似検索するローカル動作のベクトルDB | `rag_chain.py`の`get_vectorstore()`でChromaインスタンスを生成。`chroma_db/`フォルダにローカル永続化（`ingest.py`のデータ同期、`rag_chain.py`の検索ツールから利用） |
+| `langchain-huggingface` | Hugging Face製の埋め込みモデルをLangChain経由で使うための連携パッケージ | `rag_chain.py`の`get_embeddings()`（`HuggingFaceEmbeddings`） |
+| `sentence-transformers` | 埋め込みモデル（`sentence-transformers/all-mpnet-base-v2`）を実際にロード・推論するエンジン（`langchain-huggingface`の内部で使用） | `rag_chain.py`の`get_embeddings()`が指定するモデルの実行エンジン |
+| `langchain-text-splitters` | 長いドキュメントを検索・埋め込みに適したチャンク（断片）に分割するツール | `ingest.py`の`sync_data_dir()`（`RecursiveCharacterTextSplitter`でチャンク分割） |
+
+### ドキュメント読み込み
+
+| ライブラリ | 役割 | このプロジェクトでの使用箇所 |
+|---|---|---|
+| `langchain-community` | PDF/テキストファイルをLangChainのDocument形式で読み込むローダー群を提供（2026年6月にsunset済み、詳細は下記注意点を参照） | `ingest.py`（`PyMuPDFLoader` / `TextLoader`） |
+| `pymupdf` | PDFからテキストを高速抽出するエンジン（`PyMuPDFLoader`が内部で使用） | `ingest.py`の`_load_pdf()`（1段目の高速抽出） |
+| `cryptography` | 暗号化（パスワード付き）PDFの復号に必要 | `pymupdf`によるPDF読み込み時に内部的に使用（`ingest.py`） |
+| `docling` / `langchain-docling`（任意インストール） | レイアウト認識・表構造認識・OCRに対応した高精度なドキュメント解析ライブラリ | `ingest.py`の`_load_pdf()`。PyMuPDFでの抽出文字数が極端に少ない（図解・スキャンPDFの疑いがある）場合のみフォールバックとして使用。未インストールでも動作する |
+
+### その他
+
+| ライブラリ | 役割 | このプロジェクトでの使用箇所 |
+|---|---|---|
+| `python-dotenv` | `.env`ファイルから環境変数を読み込む | `setup.py`（`load_dotenv()`）。`ANTHROPIC_API_KEY`等のAPIキーやOllama関連の設定を読み込む |
+| `pytest` | テストフレームワーク | `tests/`配下の自動テスト一式（実行方法は下記「[テスト](#テスト)」を参照） |
+
+> **README肥大化時の分割方針**: このセクションが今後さらに大きくなった場合は、`docs/tech-stack.md`
+> のような別ファイルに切り出し、ルートの`README.md`側にはリンクのみを残す方針とします
+> （`data/README.md` / `tests/README.md`などの既存の「詳細は別ファイル」構成にならう）。
+> 新しい技術・ライブラリを追加した際の更新ルールは [AGENTS.md](AGENTS.md) の
+> 「コード品質」セクションを参照してください。
+
 ## 技術構成とベストプラクティスのポイント
 
 2026年時点のLangChain公式ドキュメント（[docs.langchain.com/oss/python/langchain/rag](https://docs.langchain.com/oss/python/langchain/rag)）が
