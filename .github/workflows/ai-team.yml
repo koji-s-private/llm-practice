@@ -18,6 +18,12 @@ name: AI Team Orchestrator
 # まま黙って終了する障害が過去に発生した。「Sanitize issue number input」ステップで
 # 数字以外の文字を取り除いてから prompt 内で使うことで、この種の入力ミスに対して
 # 防御的になっている。
+#
+# NOTE: ai-team-scheduler.yml は既定のGITHUB_TOKEN(actor: github-actions[bot])で
+# `gh workflow run ai-team.yml` を叩いてこのワークフローを起動するため、
+# allowed_bots に github-actions を含めておかないと
+# claude-code-action が「非人間アクターからの起動」として拒否し、
+# スケジューラー経由の自動起動が毎回失敗する(実際に発生した障害)。
 
 on:
   workflow_dispatch:
@@ -78,7 +84,7 @@ jobs:
         uses: anthropics/claude-code-action@v1
         with:
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
-          allowed_bots: "claude"
+          allowed_bots: "claude,github-actions"
           prompt: |
             あなたはこのチームのPM/リードエンジニアです。今回対応するIssueは #${{ steps.sanitize.outputs.issue_number }} です。
             (Issueの選定自体は ai-team-scheduler.yml が既に済ませているので、選び直す必要はありません)
