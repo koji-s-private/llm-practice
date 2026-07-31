@@ -45,7 +45,7 @@ class _FakeAgent:
 
 
 def _ok_sync(verbose=False):
-    return {"added": [], "updated": [], "removed": []}
+    return {"added": [], "updated": [], "removed": [], "failed": []}
 
 
 @pytest.fixture(autouse=True)
@@ -98,6 +98,36 @@ def test_startup_sync_failure_shows_error_but_app_keeps_running(monkeypatch):
     assert "agent" in at.session_state
 
 
+def test_startup_sync_with_failed_files_shows_warning_and_toast(monkeypatch):
+    """異常系境界値: 追加/更新/削除に加え、一部ファイルの読み込みに失敗した場合、
+    st.toastで変更件数、st.warningで失敗ファイル名一覧がそれぞれ表示され、
+    アプリはクラッシュせず継続する
+    （ingest.sync_data_dir()の戻り値仕様: added/updated/removed/failedの4キー。
+    Issue #56で失敗ファイルがあるケースの回帰を防ぐために追加）。"""
+
+    def partial_failure_sync(verbose=False):
+        return {
+            "added": ["good.txt"],
+            "updated": [],
+            "removed": [],
+            "failed": ["bad.pdf", "broken.txt"],
+        }
+
+    monkeypatch.setattr(ingest, "sync_data_dir", partial_failure_sync)
+
+    at = _run_app()
+
+    assert at.exception == []
+    assert at.error == []
+    assert len(at.toast) == 1
+    assert "追加1" in at.toast[0].value
+    assert len(at.warning) == 1
+    assert "bad.pdf" in at.warning[0].value
+    assert "broken.txt" in at.warning[0].value
+    # 失敗があってもエージェント構築（後続処理）は継続される
+    assert "agent" in at.session_state
+
+
 def test_resync_button_failure_shows_error(monkeypatch):
     """異常系: サイドバーの「🔄 data/ を再同期」ボタン押下時の同期失敗もカバーされる。"""
     call_count = {"n": 0}
@@ -105,7 +135,7 @@ def test_resync_button_failure_shows_error(monkeypatch):
     def flaky_sync(verbose=False):
         call_count["n"] += 1
         if call_count["n"] == 1:
-            return {"added": [], "updated": [], "removed": []}
+            return {"added": [], "updated": [], "removed": [], "failed": []}
         raise RuntimeError("resync fail")
 
     monkeypatch.setattr(ingest, "sync_data_dir", flaky_sync)
@@ -171,7 +201,7 @@ def test_chat_invoke_failure_skips_auto_knowledge_save(monkeypatch):
 
     def counting_sync(verbose=False):
         sync_calls["n"] += 1
-        return {"added": [], "updated": [], "removed": []}
+        return {"added": [], "updated": [], "removed": [], "failed": []}
 
     monkeypatch.setattr(ingest, "sync_data_dir", counting_sync)
 
@@ -217,7 +247,7 @@ def test_post_chat_sync_failure_still_shows_answer(monkeypatch):
     def flaky_sync(verbose=False):
         call_count["n"] += 1
         if call_count["n"] == 1:
-            return {"added": [], "updated": [], "removed": []}
+            return {"added": [], "updated": [], "removed": [], "failed": []}
         raise RuntimeError("sync fail on second call")
 
     monkeypatch.setattr(ingest, "sync_data_dir", flaky_sync)
@@ -252,7 +282,7 @@ def test_post_chat_sync_not_called_when_auto_save_memory_disabled(monkeypatch):
 
     def counting_sync(verbose=False):
         sync_calls["n"] += 1
-        return {"added": [], "updated": [], "removed": []}
+        return {"added": [], "updated": [], "removed": [], "failed": []}
 
     monkeypatch.setattr(ingest, "sync_data_dir", counting_sync)
 
