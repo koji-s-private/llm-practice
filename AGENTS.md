@@ -41,7 +41,7 @@ GitHub Actions上で動くAIチームによって定期的にメンテナンス�
 - GitHub Actions上のセッション（このガイドラインを読んでいる側）はPM/リードエンジニア役。実装そのものは行わず、Task tool 経由で以下のサブエージェントに委任すること
   - `coder`: 実装・ブランチ作成（[.claude/agents/coder.md](.claude/agents/coder.md)）
   - `qa-engineer`: テスト作成・実行（[.claude/agents/qa-engineer.md](.claude/agents/qa-engineer.md)）
-  - `reviewer`: 静的解析・セキュリティ観点でのレビュー、コード変更は行わない。判定結果は実際のGitHub PRレビュー(`gh pr review --comment`/`--request-changes`)として投稿する。`--approve`は使わない（PR作成者(coder)とレビュアー(reviewer)が同じGitHub App ID(`claude[bot]`)で動作しており、GitHubが自己承認とみなして`Can not approve your own pull request`エラーで必ず拒否するため。LGTM判定は`--comment`の本文に明記する）（[.claude/agents/reviewer.md](.claude/agents/reviewer.md)）
+  - `reviewer`: 静的解析・セキュリティ観点でのレビュー、コード変更は行わない。判定結果は実際のGitHub PRレビュー(`gh pr review --comment`)として投稿する。`--approve`・`--request-changes`はどちらも使わない（PR作成者(coder)とレビュアー(reviewer)が同じGitHub App ID(`claude[bot]`)で動作しており、GitHubが自己レビューとみなしてどちらも必ず拒否するため。LGTM/修正必要のどちらの判定かは`--comment`の本文冒頭に明記する）（[.claude/agents/reviewer.md](.claude/agents/reviewer.md)）
 - 3者の作業が完了し、テストが通ってからPRを作成する
 - ワークフロー本体は [.github/workflows/ai-team.yml](.github/workflows/ai-team.yml) を参照
 - チケットの新規発掘は [.github/workflows/daily-health-check.yml](.github/workflows/daily-health-check.yml) が別途毎日担当する（役割が重複しないよう、ai-team.yml側はリポジトリ全体の能動的なスキャンは行わない）

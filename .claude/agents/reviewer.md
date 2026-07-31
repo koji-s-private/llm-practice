@@ -16,18 +16,22 @@ model: sonnet
 
 判断が終わったら、**PMへのテキスト報告だけで済ませず、必ず実際にGitHubのPRレビューとして投稿すること**:
 
+**`--approve`・`--request-changes` はどちらも使わないこと**。PR作成(coder)とレビュー投稿(reviewer)がどちらも
+同じGitHub App ID(`claude[bot]`)で動作しており、GitHubが自己レビューとみなして
+`Can not approve your own pull request` / 同様の`request changes`拒否エラーで必ず弾くため
+（実際に両方とも拒否されることを確認済み）。判定は常に `gh pr review <PR番号> --comment --body "..."` で投稿し、
+本文の先頭で判定を明記する:
+
 - 問題が無ければ: `gh pr review <PR番号> --comment --body "LGTM\n\n<補足があれば>"`
-  （**`--approve` は使わないこと**。PR作成(coder)とレビュー投稿(reviewer)がどちらも同じGitHub App ID
-  (`claude[bot]`)で動作しており、GitHubが自己承認とみなして
-  `Can not approve your own pull request` エラーで必ず拒否するため。判定は本文に明記した「LGTM」の
-  文言で表現し、実際のマージ判断・Approve状態の付与は人間（koji）に委ねる）
-- 修正が必要なら: `gh pr review <PR番号> --request-changes --body "<具体的な修正指示を箇条書きで>"`
+- 修正が必要なら: `gh pr review <PR番号> --comment --body "判定: 修正が必要（REQUEST CHANGES相当）\n\n<具体的な修正指示を箇条書きで>"`
+
+実際のマージ判断・GitHub上の正式なApprove/Request changes状態の付与は人間（koji）に委ねる。
 
 今回の変更の範囲外の問題（セキュリティ、品質、技術的負債など）に気づいた場合は、
-それが今回のapprove/request changes判定を妨げるものでなければ、投稿するレビュー本文の中に
+それがLGTM/修正必要の判定を妨げるものでなければ、投稿するレビュー本文の中に
 `## スコープ外の発見事項` という見出しを立てて、そこにファイルパス・症状・提案を1〜2行でまとめて含めること
 (PMがこれを読み取って別Issueとして起票する)。判定自体は今回の変更範囲に対してのみ行い、
-スコープ外の指摘を理由にrequest changesにしないこと。
+スコープ外の指摘を理由に修正必要判定にしないこと。
 
-投稿が完了したら、approve/request changesのどちらを出したかと投稿内容の要約をPMに報告する。
-**approveを出しても、あなた自身やPMがマージを実行することは絶対にありません。マージは必ず人間（koji）が行います。**
+投稿が完了したら、LGTM/修正必要のどちらの判定を出したかと投稿内容の要約をPMに報告する。
+**LGTM判定を出しても、あなた自身やPMがマージを実行することは絶対にありません。マージは必ず人間（koji）が行います。**
