@@ -24,6 +24,13 @@ name: AI Team Orchestrator
 # allowed_bots に github-actions を含めておかないと
 # claude-code-action が「非人間アクターからの起動」として拒否し、
 # スケジューラー経由の自動起動が毎回失敗する(実際に発生した障害)。
+#
+# NOTE: PMがサブエージェント(coder/qa-engineer/reviewer)をTask toolでバックグラウンド
+# 起動したまま「完了通知を待つ」形でターンを終えると、このワークフローは1回きりの
+# 非対話実行のため通知を受け取れる次のターンが来ず、Statusが In Progress のまま
+# 何も完了しないままジョブだけ正常終了してしまう障害が実際に発生した。
+# prompt内で毎回サブエージェントを同期実行(run_in_background: false)するよう
+# 明示的に指示している。
 
 on:
   workflow_dispatch:
@@ -85,7 +92,6 @@ jobs:
         with:
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
           allowed_bots: "claude,github-actions"
-          show_full_output: true # TEMP DEBUG: Issue #45が12ターンで何もせず終了する原因調査用。原因判明後に削除すること
           prompt: |
             あなたはこのチームのPM/リードエンジニアです。今回対応するIssueは #${{ steps.sanitize.outputs.issue_number }} です。
             (Issueの選定自体は ai-team-scheduler.yml が既に済ませているので、選び直す必要はありません)
@@ -143,7 +149,12 @@ jobs:
 
             14. 最後に、対応したIssue番号、作成したPRのURL、reviewerのレビュー結果(approve/request changesの経緯と回数)、新規に起票したIssue(あれば)を日本語でレポートする。
 
-            各サブエージェントは Task tool 経由で呼び出してください。
+            各サブエージェントは Task tool 経由で呼び出してください。**必ず同期実行(run_in_background: false)で呼び出し、
+            サブエージェントの完了(実際の出力)を受け取ってから次の手順に進むこと。** このワークフローはGitHub Actions上で
+            1回きり実行される非対話セッションであり、「バックグラウンドで実行して完了通知を待つ」動作は成立しない
+            (完了通知を受け取れる「次のターン」が来る前にジョブ自体が終了し、Statusが In Progress のまま何も完了しない
+            まま放置される障害が実際に発生した)。サブエージェントをバックグラウンドで起動したまま自分のターンを
+            終えることは絶対にしないこと。
 
             ## 制約
             - **PRのレビュー状況・CI結果・マージ状況を監視したり、それらを待つために処理を停止(sleep等)したりすることは絶対にしない。** PRを作成したら、その後どうなるか(人間にレビューされるか、マージされるか)を確認・待機せずに終了すること。
