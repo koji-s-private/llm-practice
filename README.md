@@ -16,6 +16,37 @@
 | `models_and_prompts.py` / `extract_text.py` | LangChain公式チュートリアルの学習用スクリプト（そのまま残しています） |
 | `tests/` | `ingest.py` / `rag_chain.py` / `memory.py` のコアロジックに対する自動テスト |
 
+## 主要ディレクトリ
+
+各ディレクトリの詳細な役割・置くべきファイルの種類・命名規則などは、それぞれの配下にある
+`README.md` にまとめています（下表の「役割」は概要のみ。詳細は各リンク先を参照してください）。
+
+| ディレクトリ | 役割（概要） | 詳細 |
+|---|---|---|
+| `data/` | 質問対象ファイル・会話ログの保存場所 | [data/README.md](data/README.md) |
+| `tests/` | 自動テスト（pytest） | [tests/README.md](tests/README.md) |
+| `.claude/agents/` | AIチーム（coder/qa-engineer/reviewer）の役割定義 | README.md未整備（別Issueで対応予定） |
+| `.github/workflows/` | GitHub Actionsワークフロー定義 | [.github/workflows/README.md](.github/workflows/README.md) |
+
+ディレクトリ構成の全体像は次の通りです（一部抜粋）。
+
+```
+llm-practice/
+├── app.py                  # Streamlitのチャット画面
+├── ingest.py                # data/ とベクトルDBの差分同期
+├── rag_chain.py              # RAGエージェントの定義
+├── memory.py                 # 会話ログの自動保存
+├── setup.py                  # モデルの初期化・フォールバック
+├── data/                    # 質問対象ファイル・会話ログ（詳細: data/README.md）
+│   └── conversations/<会話ID>/
+├── tests/                   # 自動テスト（詳細: tests/README.md）
+├── scripts/                 # 検索精度の評価スクリプトなど
+├── .claude/agents/           # AIチームの役割定義（README.md未整備・別Issueで対応予定）
+└── .github/
+    ├── workflows/            # GitHub Actionsワークフロー（詳細: .github/workflows/README.md）
+    └── scripts/               # ワークフロー専用の補助スクリプト
+```
+
 ## 使い方
 
 ```bash
