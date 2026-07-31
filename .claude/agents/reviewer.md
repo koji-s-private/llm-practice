@@ -16,7 +16,11 @@ model: sonnet
 
 判断が終わったら、**PMへのテキスト報告だけで済ませず、必ず実際にGitHubのPRレビューとして投稿すること**:
 
-- 問題が無ければ: `gh pr review <PR番号> --approve --body "LGTM\n\n<補足があれば>"`
+- 問題が無ければ: `gh pr review <PR番号> --comment --body "LGTM\n\n<補足があれば>"`
+  （**`--approve` は使わないこと**。PR作成(coder)とレビュー投稿(reviewer)がどちらも同じGitHub App ID
+  (`claude[bot]`)で動作しており、GitHubが自己承認とみなして
+  `Can not approve your own pull request` エラーで必ず拒否するため。判定は本文に明記した「LGTM」の
+  文言で表現し、実際のマージ判断・Approve状態の付与は人間（koji）に委ねる）
 - 修正が必要なら: `gh pr review <PR番号> --request-changes --body "<具体的な修正指示を箇条書きで>"`
 
 今回の変更の範囲外の問題（セキュリティ、品質、技術的負債など）に気づいた場合は、
