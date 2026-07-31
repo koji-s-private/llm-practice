@@ -11,12 +11,19 @@ name: AI Team Orchestrator
 # NOTE: anthropics/claude-code-action の入力仕様(claude_code_oauth_token など)は
 # バージョンによって変わることがあるため、実際に動かす前に以下で最新の入力仕様を確認すること。
 # https://github.com/anthropics/claude-code-action
+#
+# NOTE: 手動実行(workflow_dispatch)でissue_numberに誤って`#3`のように`#`付きで
+# 入力されると、プロンプト内で`gh issue comment #3 ...`のようなbashコマンドに
+# 埋め込まれた際に`#`以降がシェルのコメント扱いとなり引数が消え、実装が完了しない
+# まま黙って終了する障害が過去に発生した。「Sanitize issue number input」ステップで
+# 数字以外の文字を取り除いてから prompt 内で使うことで、この種の入力ミスに対して
+# 防御的になっている。
 
 on:
   workflow_dispatch:
     inputs:
       issue_number:
-        description: "実装対象のIssue番号"
+        description: "実装対象のIssue番号(数字のみ。#は付けないこと。例: 3)"
         required: true
         type: number
 
@@ -53,13 +60,27 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Sanitize issue number input
+        id: sanitize
+        run: |
+          raw="${{ inputs.issue_number }}"
+          clean="$(echo "$raw" | tr -dc '0-9')"
+          if [ -z "$clean" ]; then
+            echo "::error::issue_number must contain a number, got: '$raw'"
+            exit 1
+          fi
+          if [ "$raw" != "$clean" ]; then
+            echo "::warning::issue_number '$raw' contained non-digit characters (e.g. a leading '#'); sanitized to '$clean'"
+          fi
+          echo "issue_number=$clean" >> "$GITHUB_OUTPUT"
+
       - name: Run PM (lead) agent
         uses: anthropics/claude-code-action@v1
         with:
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
           allowed_bots: "claude"
           prompt: |
-            あなたはこのチームのPM/リードエンジニアです。今回対応するIssueは #${{ inputs.issue_number }} です。
+            あなたはこのチームのPM/リードエンジニアです。今回対応するIssueは #${{ steps.sanitize.outputs.issue_number }} です。
             (Issueの選定自体は ai-team-scheduler.yml が既に済ませているので、選び直す必要はありません)
             以下の手順で実行してください。
 
@@ -79,17 +100,17 @@ jobs:
             このセッションが手順7のPR作成を完了しないまま終了することになった場合は、終了する前に必ず次の両方を行うこと:
               a. Statusを Todo ($STATUS_TODO_ID) に戻す。
               b. 対象Issueに、自動実装が完了せず中断したためTodoに差し戻した旨と、わかる範囲での理由を日本語で1件コメントする
-                 (`gh issue comment #${{ inputs.issue_number }} --body "..."`)。
+                 (`gh issue comment #${{ steps.sanitize.outputs.issue_number }} --body "..."`)。
             このルールを怠ると、Statusが In Progress のまま放置され、ai-team-scheduler.ymlが以降の実行で
             このIssueを「他の実行が対応中」と誤認して永久にスキップし続けてしまう(過去に実際に発生した障害)。
 
-            1. `GH_TOKEN=$PROJECTS_GH_TOKEN gh project item-list $PROJECT_NUMBER --owner $PROJECT_OWNER --format json` でIssue #${{ inputs.issue_number }} のProjectアイテムID(ITEM_ID)を探す(見つからない場合は `GH_TOKEN=$PROJECTS_GH_TOKEN gh project item-add $PROJECT_NUMBER --owner $PROJECT_OWNER --url <issue-url>` で追加する)。
+            1. `GH_TOKEN=$PROJECTS_GH_TOKEN gh project item-list $PROJECT_NUMBER --owner $PROJECT_OWNER --format json` でIssue #${{ steps.sanitize.outputs.issue_number }} のProjectアイテムID(ITEM_ID)を探す(見つからない場合は `GH_TOKEN=$PROJECTS_GH_TOKEN gh project item-add $PROJECT_NUMBER --owner $PROJECT_OWNER --url <issue-url>` で追加する)。
             2. Statusを In Progress ($STATUS_IN_PROGRESS_ID) に更新する。
             3. **重要な制約(必須)**: 実装・インフラ選定は必ず無料で完結する方法のみを採用すること。課金が発生する可能性のある操作は絶対に実行しない。この制約によって実装できない場合は、実装を行わず、上記の運用ルールに従ってStatusをTodoに戻し、Issueにコメントを残した上で終了する。
-            4. `coder` サブエージェントに、Issue #${{ inputs.issue_number }} の番号と内容を伝えて実装とブランチ作成を依頼する。
+            4. `coder` サブエージェントに、Issue #${{ steps.sanitize.outputs.issue_number }} の番号と内容を伝えて実装とブランチ作成を依頼する。
             5. `qa-engineer` サブエージェントにテスト作成・実行を依頼する。
             6. テストが失敗した場合は `coder` に修正を依頼し、5に戻る(通るまで繰り返す。この間Statusは In Progress のまま)。
-            7. テストが通ったら、ブランチを `git push -u origin <branch>` でリモートに反映し、`Closes #${{ inputs.issue_number }}` を含めてPRを作成する(`gh pr create --title ... --body ...`)。作成後 `gh pr view --json number --jq '.number'` でPR番号を控える(以降reviewer/coderに伝える)。
+            7. テストが通ったら、ブランチを `git push -u origin <branch>` でリモートに反映し、`Closes #${{ steps.sanitize.outputs.issue_number }}` を含めてPRを作成する(`gh pr create --title ... --body ...`)。作成後 `gh pr view --json number --jq '.number'` でPR番号を控える(以降reviewer/coderに伝える)。
 
             ## セルフレビュー(reviewer)
 
@@ -97,7 +118,7 @@ jobs:
             9. reviewerがrequest changesを出した場合は、`coder` にPR番号を伝えて修正を依頼する。coderは `gh pr view <PR番号> --json reviews,comments` 等で実際のレビュー内容を確認した上で同じブランチ上で修正し、`git push` で反映する。反映後、再度 `reviewer` に同じPR番号でレビューを依頼する(このループの間、Statusはまだ更新しない)。
             10. reviewerがapproveを出した場合、PR本文に「## 動作確認(エビデンス)」セクションを追記し、qa-engineerが報告した実際のテスト出力をそのまま貼る。
             11. **PRのマージは絶対に行わない(マージは必ず人間が行う)。** PR作成が完了したら、それ以上待機せず終了する。PR本文には以下を含める:
-                - `Closes #${{ inputs.issue_number }}`
+                - `Closes #${{ steps.sanitize.outputs.issue_number }}`
                 - ## 対応したIssue(番号とリンク)
                 - ## 変更内容
                 - ## 動作確認(エビデンス)
@@ -108,7 +129,7 @@ jobs:
 
             13. coder / qa-engineer の報告、および `gh pr view <PR番号> --json reviews --jq '.reviews[].body'` で確認できるreviewerの実際のレビュー本文中の「## スコープ外の発見事項」に、範囲外の問題が含まれていた場合、それぞれについて以下を行う(なければ何もしなくてよい):
                 a. `gh issue list --state open` で確認し、既存Issueと内容が重複する場合は新規作成しない。
-                b. 重複がなければ `gh issue create --title "<簡潔なタイトル>" --body "<概要・背景・やること・発見の経緯(Issue #${{ inputs.issue_number }}の実装中に発見、という旨)>"` で起票する。
+                b. 重複がなければ `gh issue create --title "<簡潔なタイトル>" --body "<概要・背景・やること・発見の経緯(Issue #${{ steps.sanitize.outputs.issue_number }}の実装中に発見、という旨)>"` で起票する。
                 c. `gh issue edit <新Issue番号> --add-label found-in-review` でラベルを付与する。優先度は `next` を基本とする(緊急性が本当に高い場合のみ `now`)。
                 d. `GH_TOKEN=$PROJECTS_GH_TOKEN gh project item-add $PROJECT_NUMBER --owner $PROJECT_OWNER --url <新IssueのURL>` でProjectに追加する(Statusは既定のTodoのままでよい)。
                 e. 起票したIssueの番号を、今回のPR本文の「セルフレビューでの気付き」に記載する。
