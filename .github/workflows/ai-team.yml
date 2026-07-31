@@ -85,6 +85,7 @@ jobs:
         with:
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
           allowed_bots: "claude,github-actions"
+          show_full_output: true # TEMP DEBUG: Issue #45が12ターンで何もせず終了する原因調査用。原因判明後に削除すること
           prompt: |
             あなたはこのチームのPM/リードエンジニアです。今回対応するIssueは #${{ steps.sanitize.outputs.issue_number }} です。
             (Issueの選定自体は ai-team-scheduler.yml が既に済ませているので、選び直す必要はありません)
