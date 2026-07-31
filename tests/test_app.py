@@ -45,7 +45,7 @@ class _FakeAgent:
 
 
 def _ok_sync(verbose=False):
-    return {"added": [], "updated": [], "removed": []}
+    return {"added": [], "updated": [], "removed": [], "failed": []}
 
 
 @pytest.fixture(autouse=True)
@@ -105,7 +105,7 @@ def test_resync_button_failure_shows_error(monkeypatch):
     def flaky_sync(verbose=False):
         call_count["n"] += 1
         if call_count["n"] == 1:
-            return {"added": [], "updated": [], "removed": []}
+            return {"added": [], "updated": [], "removed": [], "failed": []}
         raise RuntimeError("resync fail")
 
     monkeypatch.setattr(ingest, "sync_data_dir", flaky_sync)
@@ -171,7 +171,7 @@ def test_chat_invoke_failure_skips_auto_knowledge_save(monkeypatch):
 
     def counting_sync(verbose=False):
         sync_calls["n"] += 1
-        return {"added": [], "updated": [], "removed": []}
+        return {"added": [], "updated": [], "removed": [], "failed": []}
 
     monkeypatch.setattr(ingest, "sync_data_dir", counting_sync)
 
@@ -217,7 +217,7 @@ def test_post_chat_sync_failure_still_shows_answer(monkeypatch):
     def flaky_sync(verbose=False):
         call_count["n"] += 1
         if call_count["n"] == 1:
-            return {"added": [], "updated": [], "removed": []}
+            return {"added": [], "updated": [], "removed": [], "failed": []}
         raise RuntimeError("sync fail on second call")
 
     monkeypatch.setattr(ingest, "sync_data_dir", flaky_sync)
@@ -252,7 +252,7 @@ def test_post_chat_sync_not_called_when_auto_save_memory_disabled(monkeypatch):
 
     def counting_sync(verbose=False):
         sync_calls["n"] += 1
-        return {"added": [], "updated": [], "removed": []}
+        return {"added": [], "updated": [], "removed": [], "failed": []}
 
     monkeypatch.setattr(ingest, "sync_data_dir", counting_sync)
 
