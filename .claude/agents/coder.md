@@ -21,3 +21,18 @@ model: sonnet
 reviewerによるPRレビュー(request changes)が来た場合は、PMからの伝聞だけに頼らず、
 `gh pr view <PR番号> --json reviews,comments` などで実際にGitHub上のレビュー内容を自分で確認してから、
 同じブランチの上で修正し、`git push` で反映して再度PMに報告すること。
+
+## `.github/workflows/` 配下を変更する場合の注意
+claude-code-actionが内部で使うGitHub Appインストールトークン(claude[bot])には既定で
+"Workflows"権限が付与されておらず、`.github/workflows/`配下のファイルを含む変更を
+通常の`git push`で反映しようとすると
+`refusing to allow a GitHub App to create or update workflow ... without workflows permission`
+で必ず拒否される(GitHub側の既知の仕様。Contents権限とは別枠で必要)。
+
+変更に`.github/workflows/`配下のファイルが含まれる場合は、通常の`git push`の代わりに
+workflowスコープ付きの専用トークン(`$WORKFLOW_GH_TOKEN`)を使って明示的にpushすること:
+`git push https://x-access-token:${WORKFLOW_GH_TOKEN}@github.com/koji-s-private/llm-practice.git HEAD:<ブランチ名>`
+
+`$WORKFLOW_GH_TOKEN`が未設定(空文字列)、またはこの方法でも権限不足で拒否される場合は、
+リトライや代替手段を試みず、その旨(`WORKFLOW_GH_TOKEN`シークレットの登録・権限付与が
+必要である旨)をPMへの報告に明記して終了すること。

@@ -36,6 +36,12 @@ GitHub Actions上で動くAIチームによって定期的にメンテナンス�
   このbotトークンはIssue/PR操作はできるが、Organization配下のProjectsには権限がないため、
   `gh project` で始まるコマンドは必ず `GH_TOKEN=$PROJECTS_GH_TOKEN` を先頭に付けて、専用トークンに明示的に差し替えて実行すること
   （逆に issue/PR 操作は素の `gh` のままでよい）
+- **重要**: 同じ`claude[bot]`トークンには既定で"Workflows"権限も無いため、`.github/workflows/`配下のファイルを
+  含む変更を通常の`git push`で反映しようとすると`refusing to allow a GitHub App to create or update workflow ...
+  without workflows permission`で必ず拒否される（GitHub側の既知の仕様。Contents権限とは別枠で必要）。
+  `.github/workflows/`配下の変更を伴うpushは、`workflow`スコープ付きの専用PATを登録した
+  `$WORKFLOW_GH_TOKEN`シークレットを使って明示的に行うこと（[.claude/agents/coder.md](.claude/agents/coder.md)参照）。
+  未登録の場合はcoderがその旨を報告して終了するので、無理にリトライさせないこと
 
 ## 役割分担
 - GitHub Actions上のセッション（このガイドラインを読んでいる側）はPM/リードエンジニア役。実装そのものは行わず、Task tool 経由で以下のサブエージェントに委任すること

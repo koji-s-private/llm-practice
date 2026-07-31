@@ -31,6 +31,17 @@ name: AI Team Orchestrator
 # 何も完了しないままジョブだけ正常終了してしまう障害が実際に発生した。
 # prompt内で毎回サブエージェントを同期実行(run_in_background: false)するよう
 # 明示的に指示している。
+#
+# NOTE: claude-code-action が内部で使う claude[bot] のGitHub Appインストールトークンには
+# 既定で"Workflows"権限が付与されておらず、.github/workflows/配下のファイルを
+# 作成・更新してpushしようとすると
+# `refusing to allow a GitHub App to create or update workflow ... without workflows permission`
+# で必ず拒否される(GitHub側の既知の仕様。Contents権限とは別枠)。
+# CI導入(Issue #5)のように.github/workflows/配下の変更が必要なIssueに備え、
+# `workflow`スコープ(またはfine-grainedの Workflows: Read and write)を持つ
+# 専用PATを WORKFLOW_GH_TOKEN シークレットとして登録し、coder.mdの指示で
+# 該当ファイルをpushする際だけ明示的にこちらを使う運用にしている
+# (シークレット未登録の場合、coderはやり直さずPMに報告して終了する)。
 
 on:
   workflow_dispatch:
@@ -62,6 +73,9 @@ jobs:
       # 別名で持たせ、gh project 系コマンドを叩くときだけ明示的に
       # `GH_TOKEN=$PROJECTS_GH_TOKEN gh project ...` のように前置して使う。
       PROJECTS_GH_TOKEN: ${{ secrets.PROJECTS_TOKEN }}
+      # .github/workflows/配下のファイルをpushする際に使う、workflowスコープ付きの専用PAT。
+      # 未登録の場合は空文字列になる(coder.md側でその場合の扱いを指示している)。
+      WORKFLOW_GH_TOKEN: ${{ secrets.WORKFLOW_GH_TOKEN }}
       PROJECT_OWNER: ${{ vars.PROJECT_OWNER }}
       PROJECT_NUMBER: ${{ vars.PROJECT_NUMBER }}
       PROJECT_ID: ${{ vars.PROJECT_ID }}
@@ -121,9 +135,18 @@ jobs:
             2. Statusを In Progress ($STATUS_IN_PROGRESS_ID) に更新する。
             3. **重要な制約(必須)**: 実装・インフラ選定は必ず無料で完結する方法のみを採用すること。課金が発生する可能性のある操作は絶対に実行しない。この制約によって実装できない場合は、実装を行わず、上記の運用ルールに従ってStatusをTodoに戻し、Issueにコメントを残した上で終了する。
             4. `coder` サブエージェントに、Issue #${{ steps.sanitize.outputs.issue_number }} の番号と内容を伝えて実装とブランチ作成を依頼する。
+               (`.github/workflows/`配下の変更が必要な場合、coderは`$WORKFLOW_GH_TOKEN`を使ったpushを行う。
+               このシークレットが未登録/権限不足で失敗した場合、coderはやり直さずその旨を報告してくるので、
+               PMは実装を諦めず`WORKFLOW_GH_TOKEN`シークレットの登録が必要である旨をIssueにコメントし、
+               上記の安全装置に従ってStatusをTodoに戻して終了すること)
             5. `qa-engineer` サブエージェントにテスト作成・実行を依頼する。
             6. テストが失敗した場合は `coder` に修正を依頼し、5に戻る(通るまで繰り返す。この間Statusは In Progress のまま)。
             7. テストが通ったら、ブランチを `git push -u origin <branch>` でリモートに反映し、`Closes #${{ steps.sanitize.outputs.issue_number }}` を含めてPRを作成する(`gh pr create --title ... --body ...`)。作成後 `gh pr view --json number --jq '.number'` でPR番号を控える(以降reviewer/coderに伝える)。
+               (変更に`.github/workflows/`配下のファイルが含まれる場合、通常のpushは
+               `refusing to allow a GitHub App to create or update workflow ... without workflows permission`
+               で拒否される。coder.mdの指示に従い`$WORKFLOW_GH_TOKEN`を使ったpushに切り替えること。
+               このシークレットが未設定/権限不足で失敗する場合は無理に進めず、上記の安全装置に従って
+               StatusをTodoに戻し、`WORKFLOW_GH_TOKEN`の登録が必要である旨をIssueにコメントして終了する)
 
             ## セルフレビュー(reviewer)
 
