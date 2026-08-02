@@ -1,0 +1,124 @@
+name: PR Conflict Guard
+
+# mainへのPRマージが完了した直後に、他のオープンPR(base=main)にコンフリクトが
+# 発生していないかを検知し、発生していればcoder/qa-engineerサブエージェントを使って
+# 自動的に解消する。
+#
+# 設計上の安全策:
+# - mainブランチ自体は一切変更しない(常に origin/main を feature ブランチへ
+#   取り込む方向でのみマージする)。そのためこのワークフローの動作でmainが
+#   デグレすることは原理的にない。
+# - コンフリクト解消は coder サブエージェントが行うが、lint/test が通らない、または
+#   機械的に解消できないと判断した場合はpushせずに中断し、PRへのコメントで
+#   人間の判断を仰ぐ(無理な解消を強行しない。coder.md参照)。
+# - ここでは reviewer は呼ばない。解消コミットのpushが pull_request:synchronize
+#   イベントを発火させ、pr-review-on-update.yml が自動的に再レビューを行うため、
+#   二重にレビューを走らせないようにしている。
+#
+# NOTE: mainブランチへの直接pushは禁止されているが、Organization Freeプランの
+# 制約でBranch protectionによる技術的な強制はできない(AGENTS.md参照)。
+# このワークフローはあくまで「他のオープンPRがコンフリクトした場合」の救済であり、
+# main保護そのものを代替するものではない。
+
+on:
+  pull_request:
+    types: [closed]
+
+permissions:
+  contents: write
+  pull-requests: write
+  actions: read
+
+jobs:
+  detect:
+    if: github.event.pull_request.merged == true && github.event.pull_request.base.ref == 'main'
+    runs-on: ubuntu-latest
+    outputs:
+      pr_numbers: ${{ steps.collect.outputs.pr_numbers }}
+      has_conflicts: ${{ steps.collect.outputs.has_conflicts }}
+    steps:
+      - name: 他のオープンPRのコンフリクト状態を確認
+        id: collect
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          MERGED_PR: ${{ github.event.pull_request.number }}
+        run: |
+          set -e
+          open_prs="$(gh pr list --repo "$REPO" --state open --base main --json number --jq '.[].number')"
+          conflicting=()
+          for n in $open_prs; do
+            if [ "$n" = "$MERGED_PR" ]; then
+              continue
+            fi
+            state="UNKNOWN"
+            for i in 1 2 3 4 5 6; do
+              state="$(gh pr view "$n" --repo "$REPO" --json mergeable --jq '.mergeable')"
+              if [ "$state" != "UNKNOWN" ]; then
+                break
+              fi
+              sleep 5
+            done
+            echo "PR #$n mergeable=$state"
+            if [ "$state" = "CONFLICTING" ]; then
+              conflicting+=("$n")
+            fi
+          done
+          if [ "${#conflicting[@]}" -eq 0 ]; then
+            echo "pr_numbers=[]" >> "$GITHUB_OUTPUT"
+            echo "has_conflicts=false" >> "$GITHUB_OUTPUT"
+          else
+            json="$(printf '%s\n' "${conflicting[@]}" | jq -R 'tonumber' | jq -s -c '.')"
+            echo "pr_numbers=$json" >> "$GITHUB_OUTPUT"
+            echo "has_conflicts=true" >> "$GITHUB_OUTPUT"
+          fi
+
+  resolve:
+    needs: detect
+    if: needs.detect.outputs.has_conflicts == 'true'
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        pr_number: ${{ fromJson(needs.detect.outputs.pr_numbers) }}
+    concurrency:
+      group: conflict-guard-${{ matrix.pr_number }}
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Run conflict resolver agent
+        uses: anthropics/claude-code-action@v1
+        with:
+          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          allowed_bots: "claude,github-actions"
+          prompt: |
+            PR #${{ github.event.pull_request.number }} がmainにマージされたことで、
+            PR #${{ matrix.pr_number }} にmainとのコンフリクトが発生しています。
+
+            以下の手順で対応してください。各サブエージェントはTask tool経由で必ず
+            `run_in_background: false`(同期実行)で呼び出すこと。
+
+            1. `coder` サブエージェントに、PR #${{ matrix.pr_number }} のブランチで
+               `git fetch origin && git merge origin/main` によりmainを取り込んで
+               コンフリクトを解消するよう依頼する。`--ours`/`--theirs`のような機械的な
+               片側採用は禁止し、両方の変更意図を理解した上で解消すること。解消後は
+               このリポジトリのlint/testコマンドを実行し、全て通ったら
+               `git push` で同じブランチに反映する。
+               **mainブランチ自体には一切手を加えないこと(取り込む方向は常に
+               main→featureのみ)。**
+            2. lintまたはtestが失敗する場合、あるいはコンフリクトが意味的に複雑で
+               機械的に解消できないとcoderが判断した場合は、pushせずに中断し、
+               `gh pr comment ${{ matrix.pr_number }} --body "..."` で何が難しかったかを
+               具体的に説明した上でこのタスクを終了すること(無理に解消を強行しない)。
+            3. pushに成功した場合は `qa-engineer` サブエージェントに再検証を依頼し、
+               `gh pr comment ${{ matrix.pr_number }} --body "..."` で
+               「PR #${{ github.event.pull_request.number }} のマージに伴いmainとの
+               コンフリクトを解消しました。再検証結果: <要約>」という内容のコメントを
+               PRに残す。
+            4. ここではreviewerは呼び出さないこと(解消コミットのpushをきっかけに
+               別ワークフローが自動的に再レビューを行うため)。
+            5. PRのマージやProjectsのステータス更新は行わないこと(このワークフローの
+               担当範囲外)。課金が発生する可能性のある操作は絶対に実行しないこと。
+          claude_args: |
+            --max-turns 40 --allowedTools "Bash,Read,Write,Edit,Grep,Glob,Task"

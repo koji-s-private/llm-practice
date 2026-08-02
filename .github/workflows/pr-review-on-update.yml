@@ -1,0 +1,78 @@
+name: PR Review On Update
+
+# オープンPRに新規コミットがpushされた(pull_request:synchronize)際、reviewerによる
+# レビューが既に一度でも投稿されているPRに限り、reviewerサブエージェントによる
+# 再レビューを自動的に行う。人間による直接pushでも、pr-conflict-guard.ymlによる
+# コンフリクト解消pushでも、この1本でカバーする。
+#
+# 二重レビュー防止のガード:
+# - まだreviewerのレビューが1件も無いPR(=初回レビュー前)は対象外とする。
+#   初回レビューは通常のai-team.ymlのPMオーケストレーションに任せる。
+# - 同じheadブランチに対してai-team.ymlが現在in_progressで実行中の場合はスキップする。
+#   PMオーケストレーションのセッション内で既に修正→再レビューのループが
+#   回っている最中に、こちらが重複してreviewerを呼ばないようにするため。
+
+on:
+  pull_request:
+    types: [synchronize]
+    branches:
+      - main
+
+permissions:
+  contents: read
+  pull-requests: write
+  actions: read
+
+concurrency:
+  group: pr-review-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  maybe-review:
+    runs-on: ubuntu-latest
+    steps:
+      - name: 再レビューが必要か判定
+        id: check
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          HEAD_REF: ${{ github.event.pull_request.head.ref }}
+        run: |
+          set -e
+          has_prior_review="$(gh pr view "$PR_NUMBER" --repo "$REPO" --json reviews \
+            --jq '[.reviews[] | select(.author.login == "claude" or .author.login == "claude[bot]")] | length > 0')"
+
+          in_progress_runs="$(gh run list --repo "$REPO" --workflow ai-team.yml --branch "$HEAD_REF" \
+            --status in_progress --json databaseId --jq 'length')"
+
+          echo "has_prior_review=$has_prior_review"
+          echo "in_progress_runs=$in_progress_runs"
+
+          if [ "$has_prior_review" = "true" ] && [ "$in_progress_runs" = "0" ]; then
+            echo "should_review=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "should_review=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - uses: actions/checkout@v4
+        if: steps.check.outputs.should_review == 'true'
+
+      - name: Run reviewer agent
+        if: steps.check.outputs.should_review == 'true'
+        uses: anthropics/claude-code-action@v1
+        with:
+          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          allowed_bots: "claude,github-actions"
+          prompt: |
+            PR #${{ github.event.pull_request.number }} に新しいコミットがpushされました。
+            このPRには既にreviewerによるレビューが投稿されていますが、内容が更新されたため
+            再レビューが必要です。
+
+            `reviewer` サブエージェントをTask tool経由で(`run_in_background: false`で)呼び出し、
+            PR番号 ${{ github.event.pull_request.number }} を伝えて再レビューを依頼してください。
+            reviewerは既存の指示([.claude/agents/reviewer.md](.claude/agents/reviewer.md))通り、
+            `gh pr review --comment` で判定(LGTM相当/要修正)を投稿します。それ以外の作業
+            (PRのマージ、Projectsのステータス更新など)は行わないこと。
+          claude_args: |
+            --max-turns 15 --allowedTools "Bash,Read,Grep,Glob,Task"

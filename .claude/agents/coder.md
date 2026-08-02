@@ -22,6 +22,11 @@ reviewerによるPRレビュー(request changes)が来た場合は、PMからの
 `gh pr view <PR番号> --json reviews,comments` などで実際にGitHub上のレビュー内容を自分で確認してから、
 同じブランチの上で修正し、`git push` で反映して再度PMに報告すること。
 
+mainとのマージコンフリクト解消を依頼された場合は、`git merge origin/main`でmainを取り込む方向でのみ
+マージすること(rebaseはPRのレビュー履歴が壊れるため使わない)。コンフリクトは`--ours`/`--theirs`のような
+機械的な片側採用をせず、両方の変更意図を理解した上で解消する。lint/testが通らない、または意味的に
+複雑すぎて機械的に解消できないと判断した場合は、pushせずに中断しその旨をPRにコメントして人間の判断を待つこと。
+
 ## `.github/workflows/` 配下を変更する場合の注意
 claude-code-actionが内部で使うGitHub Appインストールトークン(claude[bot])には既定で
 "Workflows"権限が付与されておらず、`.github/workflows/`配下のファイルを含む変更を
