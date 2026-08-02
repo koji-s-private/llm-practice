@@ -18,6 +18,7 @@ data/ フォルダの変更は、ページの操作（リロード・チャッ�
 保存先はすべてこのプロジェクト内のローカルディスク（data/ と chroma_db/）のみで、
 このアプリ自身が外部・クラウドへ追加送信することはありません。
 """
+
 from pathlib import Path
 
 import streamlit as st
@@ -96,8 +97,7 @@ with st.sidebar:
         _start_new_chat()
         st.rerun()
     st.caption(
-        f"会話ID: `{st.session_state.thread_id}`（このIDの会話ログだけが、"
-        "この会話の回答材料として検索されます）"
+        f"会話ID: `{st.session_state.thread_id}`（このIDの会話ログだけが、この会話の回答材料として検索されます）"
     )
 
     st.divider()

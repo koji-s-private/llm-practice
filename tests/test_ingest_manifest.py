@@ -4,6 +4,7 @@ Issue #13: manifest.json への書き込みを一時ファイル経由のアト�
 （os.replace）に変更し、壊れたJSONを読み込んだ場合も例外を送出せず空辞書に
 フォールバックするようにした変更を検証する。
 """
+
 import json
 
 import pytest
@@ -67,9 +68,7 @@ def test_load_manifest_returns_empty_dict_when_file_missing(fake_manifest_env):
     assert ingest._load_manifest() == {}
 
 
-def test_load_manifest_falls_back_to_empty_dict_on_corrupt_json(
-    fake_manifest_env, caplog
-):
+def test_load_manifest_falls_back_to_empty_dict_on_corrupt_json(fake_manifest_env, caplog):
     persist_dir, manifest_path = fake_manifest_env
     persist_dir.mkdir(parents=True, exist_ok=True)
     manifest_path.write_text("{ this is not valid json ", encoding="utf-8")
@@ -78,9 +77,7 @@ def test_load_manifest_falls_back_to_empty_dict_on_corrupt_json(
         result = ingest._load_manifest()
 
     assert result == {}
-    assert any(
-        str(manifest_path) in record.getMessage() for record in caplog.records
-    )
+    assert any(str(manifest_path) in record.getMessage() for record in caplog.records)
 
 
 def test_load_manifest_after_save_manifest_overwrite_of_corrupt_file(
@@ -94,6 +91,4 @@ def test_load_manifest_after_save_manifest_overwrite_of_corrupt_file(
 
     ingest._save_manifest({"a.txt": {"mtime": 1.0, "size": 1, "chunk_ids": []}})
 
-    assert ingest._load_manifest() == {
-        "a.txt": {"mtime": 1.0, "size": 1, "chunk_ids": []}
-    }
+    assert ingest._load_manifest() == {"a.txt": {"mtime": 1.0, "size": 1, "chunk_ids": []}}

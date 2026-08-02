@@ -19,6 +19,7 @@ LangChain 1.x（2026年時点の公式ドキュメント: docs.langchain.com/oss
   3) 何も見つからなければ、エージェントが質問を言い換えて再検索してから
      一般知識にフォールバックする（SYSTEM_PROMPT参照）
 """
+
 import re
 from pathlib import Path
 
@@ -110,9 +111,7 @@ def _grade_relevance(query: str, docs: list) -> list[int]:
     if not docs:
         return []
 
-    listing = "\n\n".join(
-        f"[{i}] {doc.page_content[:300]}" for i, doc in enumerate(docs, start=1)
-    )
+    listing = "\n\n".join(f"[{i}] {doc.page_content[:300]}" for i, doc in enumerate(docs, start=1))
     prompt = (
         f"質問: {query}\n\n"
         "以下は検索でヒットした候補文書です。質問に実際に答えるのに使える文書の番号だけを"
@@ -169,10 +168,7 @@ def build_agent(thread_id: str = GLOBAL_THREAD_ID):
         if not retrieved_docs:
             return "関連する情報はドキュメント内に見つかりませんでした。", []
 
-        serialized = "\n\n".join(
-            f"Source: {doc.metadata}\nContent: {doc.page_content}"
-            for doc in retrieved_docs
-        )
+        serialized = "\n\n".join(f"Source: {doc.metadata}\nContent: {doc.page_content}" for doc in retrieved_docs)
         return serialized, retrieved_docs
 
     return create_agent(model, tools=[retrieve_context], system_prompt=SYSTEM_PROMPT)

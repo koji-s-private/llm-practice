@@ -18,6 +18,7 @@ rag_chain.py の retrieve_context ツールは
 使い方:
     python scripts/evaluate_retrieval.py
 """
+
 import itertools
 import shutil
 import sys
@@ -55,13 +56,11 @@ CORPUS = [
         metadata={"doc_id": "shipping_international"},
     ),
     Document(
-        "Pythonのリスト内包表記は `[式 for 変数 in イテラブル]` の形式で、"
-        "ループを1行で簡潔に書ける構文です。",
+        "Pythonのリスト内包表記は `[式 for 変数 in イテラブル]` の形式で、ループを1行で簡潔に書ける構文です。",
         metadata={"doc_id": "python_list_comprehension"},
     ),
     Document(
-        "Pythonの辞書内包表記は `{キー: 値 for 変数 in イテラブル}` の形式で、"
-        "辞書を1行で構築できます。",
+        "Pythonの辞書内包表記は `{キー: 値 for 変数 in イテラブル}` の形式で、辞書を1行で構築できます。",
         metadata={"doc_id": "python_dict_comprehension"},
     ),
     Document(
@@ -70,8 +69,7 @@ CORPUS = [
         metadata={"doc_id": "git_branch_naming"},
     ),
     Document(
-        "コミットメッセージは Conventional Commits（feat:, fix:, test: など）の形式に"
-        "従う必要があります。",
+        "コミットメッセージは Conventional Commits（feat:, fix:, test: など）の形式に従う必要があります。",
         metadata={"doc_id": "git_commit_convention"},
     ),
     Document(
@@ -95,8 +93,7 @@ CORPUS = [
         metadata={"doc_id": "password_policy"},
     ),
     Document(
-        "二要素認証（2FA）は、設定ページの「セキュリティ」タブから認証アプリを使って"
-        "有効化できます。",
+        "二要素認証（2FA）は、設定ページの「セキュリティ」タブから認証アプリを使って有効化できます。",
         metadata={"doc_id": "two_factor_auth"},
     ),
     Document(
@@ -108,13 +105,11 @@ CORPUS = [
         metadata={"doc_id": "db_backup_schedule"},
     ),
     Document(
-        "新入社員のオンボーディングでは、初日にPCの貸与とアカウント発行、"
-        "社内システムの説明を行います。",
+        "新入社員のオンボーディングでは、初日にPCの貸与とアカウント発行、社内システムの説明を行います。",
         metadata={"doc_id": "onboarding_checklist"},
     ),
     Document(
-        "退職者のオフボーディングでは、最終出社日にアクセス権限を全て失効させ、"
-        "貸与物を回収します。",
+        "退職者のオフボーディングでは、最終出社日にアクセス権限を全て失効させ、貸与物を回収します。",
         metadata={"doc_id": "offboarding_checklist"},
     ),
     Document(
@@ -123,8 +118,7 @@ CORPUS = [
         metadata={"doc_id": "rag_architecture"},
     ),
     Document(
-        "ベクトルDBにはChromaを採用しています。ローカルに永続化でき、"
-        "追加のサーバー起動が不要なためです。",
+        "ベクトルDBにはChromaを採用しています。ローカルに永続化でき、追加のサーバー起動が不要なためです。",
         metadata={"doc_id": "chroma_choice"},
     ),
     Document(
@@ -132,8 +126,7 @@ CORPUS = [
         metadata={"doc_id": "meeting_room_booking"},
     ),
     Document(
-        "プリンターの紙詰まりが起きた場合は、電源を切ってから用紙トレイをゆっくり"
-        "引き出してください。",
+        "プリンターの紙詰まりが起きた場合は、電源を切ってから用紙トレイをゆっくり引き出してください。",
         metadata={"doc_id": "printer_troubleshooting"},
     ),
 ]
@@ -174,9 +167,7 @@ def evaluate(vector_store: Chroma, candidate_k: int, distance_threshold: float) 
     recalls = []
     for case in EVAL_SET:
         candidates = vector_store.similarity_search_with_score(case["query"], k=candidate_k)
-        retrieved_ids = {
-            doc.metadata["doc_id"] for doc, score in candidates if score < distance_threshold
-        }
+        retrieved_ids = {doc.metadata["doc_id"] for doc, score in candidates if score < distance_threshold}
         relevant_ids = case["relevant_ids"]
         true_positives = retrieved_ids & relevant_ids
 
@@ -199,10 +190,7 @@ def main() -> None:
         for candidate_k, threshold in itertools.product(CANDIDATE_K_VALUES, DISTANCE_THRESHOLD_VALUES):
             precision, recall = evaluate(vector_store, candidate_k, threshold)
             f1 = (2 * precision * recall / (precision + recall)) if (precision + recall) > 0 else 0.0
-            print(
-                f"{candidate_k:>12} | {threshold:>9.2f} | {precision:>9.3f} | "
-                f"{recall:>9.3f} | {f1:>6.3f}"
-            )
+            print(f"{candidate_k:>12} | {threshold:>9.2f} | {precision:>9.3f} | {recall:>9.3f} | {f1:>6.3f}")
     finally:
         shutil.rmtree(tmp_dir, ignore_errors=True)
 

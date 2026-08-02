@@ -1,0 +1,39 @@
+name: CI
+
+# push・PR時にlint（ruff check）・フォーマットチェック（ruff format --check）・
+# テスト（pytest）を自動実行する。いずれかが失敗した場合はジョブ全体を失敗させ、
+# マージ前に問題へ気づける状態にする。
+#
+# NOTE: mainブランチへの直接pushは禁止されているが、Organization Freeプランの
+# 制約でBranch protectionによる技術的な強制はできない(AGENTS.md参照)。
+# このワークフローはpush/PRいずれのトリガーでも実行され、あくまで問題の早期検知を
+# 目的としたものであり、マージ自体をブロックする仕組みではない。
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  lint-and-test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Python セットアップ
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: "pip"
+
+      - name: 依存パッケージのインストール
+        run: pip install -r requirements.txt
+
+      - name: ruff check（lint）
+        run: ruff check .
+
+      - name: ruff format --check（フォーマットチェック）
+        run: ruff format --check .
+
+      - name: pytest
+        run: pytest

@@ -26,3 +26,6 @@ python-dotenv
 
 # テスト用
 pytest
+
+# lint・フォーマット用（CIでruff check / ruff format --checkを実行）
+ruff

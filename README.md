@@ -189,6 +189,7 @@ Ollamaが起動していてもあえて使いたくない場合は `.env` に `D
 |---|---|---|
 | `python-dotenv` | `.env`ファイルから環境変数を読み込む | `setup.py`（`load_dotenv()`）。`ANTHROPIC_API_KEY`等のAPIキーやOllama関連の設定を読み込む |
 | `pytest` | テストフレームワーク | `tests/`配下の自動テスト一式（実行方法は下記「[テスト](#テスト)」を参照） |
+| [ruff](https://docs.astral.sh/ruff/) | lint（静的解析）・コードフォーマットを1ツールでカバーするツール | `pyproject.toml`の`[tool.ruff]`でルールセットを設定。[.github/workflows/ci.yml](.github/workflows/ci.yml)がpush/PR時に`ruff check`・`ruff format --check`を自動実行 |
 
 > **README肥大化時の分割方針**: このセクションが今後さらに大きくなった場合は、`docs/tech-stack.md`
 > のような別ファイルに切り出し、ルートの`README.md`側にはリンクのみを残す方針とします
@@ -256,6 +257,17 @@ pytest
 埋め込みモデル・Chroma・LLMプロバイダなどの重い外部依存は `tests/conftest.py` で
 軽量なフェイクに差し替えているため、Ollamaの起動やAPIキーの設定、埋め込みモデルの
 ダウンロードなしにテストを実行できます（ネットワークアクセス・課金は発生しません）。
+
+さらに、lint（静的解析）・フォーマットチェックには [ruff](https://docs.astral.sh/ruff/) を使用しています。
+
+```bash
+ruff check .           # lint
+ruff format --check .  # フォーマットチェック（差分を直接適用したい場合は `ruff format .`）
+```
+
+[.github/workflows/ci.yml](.github/workflows/ci.yml) がpush・PR作成時に上記の
+`ruff check` / `ruff format --check` / `pytest` を自動実行し、いずれかが失敗すると
+CIジョブ全体が失敗します（マージ前に問題へ気づける状態にするため）。
 
 ## 今後の発展案
 

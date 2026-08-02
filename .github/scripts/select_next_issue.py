@@ -147,15 +147,22 @@ def main() -> None:
         item_id = project_items[n]["id"]
         print(f"#{n}: In Progress/Under Reviewのまま放置されていたためTodoに差し戻します")
         gh(
-            "project", "item-edit",
-            "--project-id", project_id,
-            "--field-id", status_field_id,
-            "--id", item_id,
-            "--single-select-option-id", status_todo_id,
+            "project",
+            "item-edit",
+            "--project-id",
+            project_id,
+            "--field-id",
+            status_field_id,
+            "--id",
+            item_id,
+            "--single-select-option-id",
+            status_todo_id,
             token=projects_token,
         )
         gh(
-            "issue", "comment", str(n),
+            "issue",
+            "comment",
+            str(n),
             "--body",
             "前回の自動実装が着手直後に中断し、Statusが In Progress/Under Review のまま気づかれず"
             "放置されていたため、スケジューラが自動的にTodoに差し戻しました。次回以降の実行で改めて着手します。",
@@ -165,7 +172,9 @@ def main() -> None:
         print(f"nowラベル付きIssueが無かったため、#{selected} を {promoted_from} から now に昇格させます")
         gh("issue", "edit", str(selected), "--add-label", "now", "--remove-label", promoted_from)
         gh(
-            "issue", "comment", str(selected),
+            "issue",
+            "comment",
+            str(selected),
             "--body",
             f"本日着手可能な `now` ラベル付きIssueが無かったため、`{promoted_from}` ラベルの中で"
             "最も優先度が高い（Issue番号が最も小さい＝作成が最も古い）このIssueをスケジューラが"

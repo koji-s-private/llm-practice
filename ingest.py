@@ -24,6 +24,7 @@ PDFの読み込みは2段構成:
 処理速度への影響を最小限にしている。Doclingが未インストールの場合は自動的に
 1)の結果のみを使う（インストールは任意）。
 """
+
 import argparse
 import json
 import logging
@@ -91,9 +92,7 @@ def _load_manifest() -> dict:
 def _save_manifest(manifest: dict) -> None:
     PERSIST_DIR.mkdir(parents=True, exist_ok=True)
     tmp_path = MANIFEST_PATH.with_suffix(".json.tmp")
-    tmp_path.write_text(
-        json.dumps(manifest, ensure_ascii=False, indent=2), encoding="utf-8"
-    )
+    tmp_path.write_text(json.dumps(manifest, ensure_ascii=False, indent=2), encoding="utf-8")
     os.replace(tmp_path, MANIFEST_PATH)
 
 
@@ -117,9 +116,7 @@ def _load_pdf(path: Path, verbose: bool = True) -> list:
             "Doclingで図解・OCR解析を試みます（時間がかかる場合があります）..."
         )
     try:
-        docling_docs = DoclingLoader(
-            file_path=str(path), export_type=ExportType.MARKDOWN
-        ).load()
+        docling_docs = DoclingLoader(file_path=str(path), export_type=ExportType.MARKDOWN).load()
         docling_chars = sum(len(d.page_content.strip()) for d in docling_docs)
         if docling_docs and docling_chars > total_chars:
             for doc in docling_docs:
@@ -161,9 +158,7 @@ def data_dir_signature() -> tuple[int, float]:
     """
     if not DATA_DIR.exists():
         return (0, 0.0)
-    target_files = [
-        f for f in DATA_DIR.rglob("*") if f.is_file() and f.suffix.lower() in LOADERS
-    ]
+    target_files = [f for f in DATA_DIR.rglob("*") if f.is_file() and f.suffix.lower() in LOADERS]
     if not target_files:
         return (0, 0.0)
     latest_mtime = max(f.stat().st_mtime for f in target_files)
@@ -186,9 +181,7 @@ def sync_data_dir(verbose: bool = True) -> dict:
 
     # data/ 直下だけでなく、data/conversations/ などのサブフォルダも再帰的に走査する
     current_files = {
-        str(f.relative_to(DATA_DIR)): f
-        for f in DATA_DIR.rglob("*")
-        if f.is_file() and f.suffix.lower() in LOADERS
+        str(f.relative_to(DATA_DIR)): f for f in DATA_DIR.rglob("*") if f.is_file() and f.suffix.lower() in LOADERS
     }
 
     result = {"added": [], "updated": [], "removed": [], "failed": []}
@@ -197,11 +190,7 @@ def sync_data_dir(verbose: bool = True) -> dict:
     for name, path in current_files.items():
         fingerprint = _fingerprint(path)
         entry = manifest.get(name)
-        unchanged = (
-            entry
-            and entry.get("mtime") == fingerprint["mtime"]
-            and entry.get("size") == fingerprint["size"]
-        )
+        unchanged = entry and entry.get("mtime") == fingerprint["mtime"] and entry.get("size") == fingerprint["size"]
         if unchanged:
             continue
 

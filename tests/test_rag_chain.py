@@ -4,6 +4,7 @@
 model.invoke() をテストごとに monkeypatch して、純粋なロジック
 （距離フィルタ・LLM採点・「見つからない場合」の応答）だけを検証する。
 """
+
 from types import SimpleNamespace
 
 import rag_chain
@@ -115,9 +116,7 @@ def test_retrieve_context_filters_out_candidates_beyond_recall_threshold(monkeyp
 def test_retrieve_context_returns_relevant_docs(monkeypatch):
     doc1 = _FakeDocument("関連する内容", {"source": "a.txt"})
     doc2 = _FakeDocument("これも関連する内容", {"source": "b.txt"})
-    retrieve_context, _ = _build_agent_with_store(
-        monkeypatch, results=[(doc1, 0.1), (doc2, 0.2)]
-    )
+    retrieve_context, _ = _build_agent_with_store(monkeypatch, results=[(doc1, 0.1), (doc2, 0.2)])
     monkeypatch.setattr(rag_chain, "_grade_relevance", lambda query, docs: [1])
 
     content, artifact = retrieve_context.func("質問")
