@@ -7,6 +7,26 @@ GitHub Actions上で動くAIチームによって定期的にメンテナンス�
 - コミットメッセージは Conventional Commits（feat:, fix:, test: など）を厳守
 - PRの本文に必ず `Closes #<issue番号>` を入れて Issue と自動リンクさせる
 - 1PRの変更ファイルは目安5枚以内。大きくなりそうなら Issue を分割する
+
+## mainブランチの運用
+- mainブランチへの直接コミット・pushは禁止。人間（オーナー）を含め全員、必ずfeatureブランチを作成し
+  PR経由でのみ変更を反映する
+- GitHub純正のBranch protection rules / Rulesetsによる技術的な強制ブロックは**導入していない**。
+  Organization（`koji-s-private`）がGitHub Freeプランのため、privateリポジトリでのbranch protectionは
+  有料プラン（GitHub Team以上）が無いと有効化できない仕様であり（APIも`Upgrade to GitHub Pro or make
+  this repository public`という403を返す）、既存の「課金が発生する可能性のある操作は絶対に実行しない」
+  方針により有料化・組織移管・public化のいずれも行わないため。技術的ブロックの代わりに本ルールと
+  以下の自動化（PRマージ後のブランチ自動削除、コンフリクト自動解消、再レビュー自動化）で運用上担保する
+- PRをマージしたら、対象ブランチは自動削除される（リポジトリ設定 `delete_branch_on_merge: true`。設定済み）
+- 手動マージ方針（後述）の結果、複数のPRが並行してオープンな状態が起こり得る。1つのPRをマージしたことで
+  他のオープンPRにコンフリクトが発生した場合、[.github/workflows/pr-conflict-guard.yml](.github/workflows/pr-conflict-guard.yml)
+  が自動的に検知し、`coder`サブエージェントがmainを取り込む方向でのみマージ（main→feature。mainブランチ自体は
+  一切変更しない）してコンフリクトを解消し、`qa-engineer`が再検証する。機械的に解消できない場合は
+  無理に解消せず、PRにコメントを残して人間の判断を待つ
+- reviewerがレビューした後にcoderが同じPRへ修正コミットをpushした場合（コンフリクト解消による
+  push含む）、[.github/workflows/pr-review-on-update.yml](.github/workflows/pr-review-on-update.yml)
+  が新規コミット（`synchronize`イベント）を検知して自動的に`reviewer`サブエージェントによる再レビューを行う
+  （PMオーケストレーションのセッション内で既に再レビューループが回っている場合は二重実行しない）
 - PR本文の「## 動作確認(エビデンス)」は、各項目に動作手順を明記する。
   pytest実行・評価スクリプト実行など実行コマンドがあるものは、実行した具体的なコマンドを
   明記した上でその生の実行結果を貼る。実機（ブラウザ操作等）による動作確認を行った場合は、
