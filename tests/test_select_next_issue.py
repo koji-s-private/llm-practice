@@ -17,6 +17,7 @@ spec.loader.exec_module(select_next_issue)
 is_cost_warning = select_next_issue.is_cost_warning
 issue_referenced_in_any_pr = select_next_issue.issue_referenced_in_any_pr
 pick_issue = select_next_issue.pick_issue
+main = select_next_issue.main
 
 
 def test_is_cost_warning_detects_prefix():
@@ -94,3 +95,112 @@ def test_pick_issue_returns_none_when_no_candidate():
     )
     assert selected is None
     assert heals == []
+
+
+class _FakeGh:
+    """main()内の gh/gh_json 呼び出しを実プロセスを起動せずに検証するためのフェイク。
+
+    labeled_issues に {ラベル名: Issue一覧} を渡すと `issue list --label <ラベル>` を模擬する。
+    実行されたコマンド一式は calls に記録され、テスト側で `gh issue edit`/`gh issue comment`
+    が期待通り呼ばれたかを確認できる。
+    """
+
+    def __init__(self, labeled_issues, project_items=None, open_prs=None, all_prs=None, comments=None):
+        self.labeled_issues = labeled_issues
+        self.project_items = project_items or []
+        self.open_prs = open_prs or []
+        self.all_prs = all_prs or []
+        self.comments = comments or {}
+        self.calls: list[tuple] = []
+
+    def gh_json(self, *args, token=None):
+        self.calls.append(("gh_json", args))
+        if args[0] == "issue" and args[1] == "list":
+            label = args[args.index("--label") + 1]
+            return self.labeled_issues.get(label, [])
+        if args[0] == "pr" and args[1] == "list":
+            return self.all_prs if "--state" in args and args[args.index("--state") + 1] == "all" else self.open_prs
+        if args[0] == "project" and args[1] == "item-list":
+            return {"items": self.project_items}
+        if args[0] == "issue" and args[1] == "view":
+            number = int(args[2])
+            return {"comments": [None] * self.comments.get(number, 0)}
+        raise AssertionError(f"想定外の gh_json 呼び出し: {args}")
+
+    def gh(self, *args, token=None):
+        self.calls.append(("gh", args))
+        return ""
+
+
+def _run_main_with_fake_gh(monkeypatch, tmp_path, fake: _FakeGh):
+    monkeypatch.setenv("PROJECTS_GH_TOKEN", "dummy-token")
+    monkeypatch.setenv("PROJECT_NUMBER", "3")
+    monkeypatch.setenv("PROJECT_OWNER", "koji-s-private")
+    monkeypatch.setenv("PROJECT_ID", "PROJECT_ID")
+    monkeypatch.setenv("STATUS_FIELD_ID", "STATUS_FIELD_ID")
+    monkeypatch.setenv("STATUS_TODO_ID", "STATUS_TODO_ID")
+    output_file = tmp_path / "github_output"
+    monkeypatch.setenv("GITHUB_OUTPUT", str(output_file))
+    monkeypatch.setattr(select_next_issue, "gh_json", fake.gh_json)
+    monkeypatch.setattr(select_next_issue, "gh", fake.gh)
+    main()
+    return output_file
+
+
+def test_main_promotes_next_label_issue_when_no_now_candidate(monkeypatch, tmp_path):
+    fake = _FakeGh(labeled_issues={"now": [], "next": [{"number": 20, "body": ""}], "later": []})
+    output_file = _run_main_with_fake_gh(monkeypatch, tmp_path, fake)
+
+    assert output_file.read_text(encoding="utf-8") == "issue_number=20\n"
+    assert ("gh", ("issue", "edit", "20", "--add-label", "now", "--remove-label", "next")) in fake.calls
+    comment_calls = [c for c in fake.calls if c[0] == "gh" and c[1][:2] == ("issue", "comment")]
+    assert len(comment_calls) == 1
+    assert comment_calls[0][1][1] == "comment"
+
+
+def test_main_promotes_later_label_issue_when_no_now_or_next_candidate(monkeypatch, tmp_path):
+    fake = _FakeGh(labeled_issues={"now": [], "next": [], "later": [{"number": 27, "body": ""}]})
+    output_file = _run_main_with_fake_gh(monkeypatch, tmp_path, fake)
+
+    assert output_file.read_text(encoding="utf-8") == "issue_number=27\n"
+    assert ("gh", ("issue", "edit", "27", "--add-label", "now", "--remove-label", "later")) in fake.calls
+
+
+def test_main_prefers_next_over_later_when_both_have_candidates(monkeypatch, tmp_path):
+    fake = _FakeGh(
+        labeled_issues={
+            "now": [],
+            "next": [{"number": 20, "body": ""}],
+            "later": [{"number": 5, "body": ""}],
+        }
+    )
+    output_file = _run_main_with_fake_gh(monkeypatch, tmp_path, fake)
+
+    assert output_file.read_text(encoding="utf-8") == "issue_number=20\n"
+    assert ("gh", ("issue", "edit", "20", "--add-label", "now", "--remove-label", "next")) in fake.calls
+
+
+def test_main_skips_cost_warning_issue_when_promoting(monkeypatch, tmp_path):
+    fake = _FakeGh(
+        labeled_issues={
+            "now": [],
+            "next": [
+                {"number": 14, "body": "⚠️ 費用が発生する可能性があります"},
+                {"number": 20, "body": ""},
+            ],
+            "later": [],
+        }
+    )
+    output_file = _run_main_with_fake_gh(monkeypatch, tmp_path, fake)
+
+    assert output_file.read_text(encoding="utf-8") == "issue_number=20\n"
+    assert ("gh", ("issue", "edit", "20", "--add-label", "now", "--remove-label", "next")) in fake.calls
+
+
+def test_main_does_nothing_when_no_candidate_in_any_label(monkeypatch, tmp_path):
+    fake = _FakeGh(labeled_issues={"now": [], "next": [], "later": []})
+    output_file = _run_main_with_fake_gh(monkeypatch, tmp_path, fake)
+
+    assert not output_file.exists()
+    edit_calls = [c for c in fake.calls if c[0] == "gh" and c[1][:2] == ("issue", "edit")]
+    assert edit_calls == []
