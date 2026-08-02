@@ -44,6 +44,12 @@ GitHub Actions上で動くAIチームによって定期的にメンテナンス�
 - コード内コメントは日本語で記載する（新規追加・既存修正のいずれも）。ただし
   `extract_text.py` / `models_and_prompts.py` などLangChain公式チュートリアル由来の
   学習用スクリプト（Issue #23で整理予定）は対象外とする
+- 使用技術（`requirements.txt` 記載の依存パッケージ等）に脆弱性が発覚した場合は、`now` ラベル相当の
+  最優先でバージョンアップ等の対応を行う。無料で使える脆弱性チェック手段として
+  [pip-audit](https://pypi.org/project/pip-audit/)（`pip install --user pip-audit` で一時利用すれば足り、
+  `requirements.txt` への常設追加は不要）や GitHub Dependabot alerts（追加費用なしで利用可能）を使い、
+  `pip-audit -r requirements.txt` のように手動実行して確認する。CIへの自動組み込みはIssue #5（CI導入）
+  側の検討に委ねるため、本項では手動実行での確認手順の明文化にとどめる
 
 ## GitHub Projects 運用
 - Project board: [koji-s-private/llm-practice](https://github.com/orgs/koji-s-private/projects/3)（Projects v2）
@@ -89,6 +95,9 @@ GitHub Actions上で動くAIチームによって定期的にメンテナンス�
 - 3者の作業が完了しテストが通ったらPRを作成し、reviewerに実際のGitHub PRレビューでLGTM判定（`gh pr review --comment`、本文に「LGTM」と明記する慣習。coder/reviewerが同じGitHub App ID(`claude[bot]`)で動作するため、GitHub上の正式な`--approve`は自己承認扱いで必ず拒否される。そのためAIによる判定は常に`--comment`で記録し、GitHub上の正式なApprove状態の付与は行わない）をもらう
 - **reviewerがapprove(LGTM)を出しても、絶対に自動マージしない。マージは必ず人間（koji）が手動で行う。** これは意図的な設計判断であり、将来的にも変更しない前提とする
 - reviewerがrequest changesのまま(approveに至らない)場合も同様にマージしない。PRにこれまでの経緯を要約したコメントを残し、人間の判断を待つ
+- 何らかの理由（技術的制約、優先度変更、要件不明瞭など）によりcoder/qa-engineer/reviewerが実装・検証・レビューを
+  中止する場合は、無言で終了せず必ず対象Issue（PR作成済みなら該当PR）にコメントで理由を残し、人間が状況を
+  把握できるようにする
 
 ## スコープ外の発見事項の扱い
 - coder / qa-engineer / reviewer が作業中に今回のIssueと無関係な問題（バグ、技術的負債、改善点）に気づいた場合、
