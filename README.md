@@ -25,7 +25,7 @@
 |---|---|---|
 | `data/` | 質問対象ファイル・会話ログの保存場所 | [data/README.md](data/README.md) |
 | `tests/` | 自動テスト（pytest） | [tests/README.md](tests/README.md) |
-| `.claude/agents/` | AIチーム（coder/qa-engineer/reviewer）の役割定義 | README.md未整備（別Issueで対応予定） |
+| `.claude/agents/` | AIチーム（coder/qa-engineer/reviewer）の役割定義 | [.claude/agents/README.md](.claude/agents/README.md) |
 | `.github/workflows/` | GitHub Actionsワークフロー定義 | [.github/workflows/README.md](.github/workflows/README.md) |
 
 ディレクトリ構成の全体像は次の通りです（一部抜粋）。
@@ -41,7 +41,7 @@ llm-practice/
 │   └── conversations/<会話ID>/
 ├── tests/                   # 自動テスト（詳細: tests/README.md）
 ├── scripts/                 # 検索精度の評価スクリプトなど
-├── .claude/agents/           # AIチームの役割定義（README.md未整備・別Issueで対応予定）
+├── .claude/agents/           # AIチームの役割定義（詳細: .claude/agents/README.md）
 └── .github/
     ├── workflows/            # GitHub Actionsワークフロー（詳細: .github/workflows/README.md）
     └── scripts/               # ワークフロー専用の補助スクリプト

@@ -18,3 +18,12 @@ chroma_db/
 
 # 会話ログ（個人の実際のやり取りのため除外）
 data/conversations/
+
+# グローバルgitignore(~/.gitignore_global)で.claude全体を除外している環境向けに、
+# バージョン管理したいAIチームのエージェント定義だけを明示的に復活させる
+# （マシン固有の権限設定であるsettings.local.jsonは除外したままにする）
+!.claude/
+!.claude/agents/
+!.claude/agents/*.md
+!.claude/settings.json
+.claude/settings.local.json
