@@ -5,7 +5,7 @@ import socket
 from langchain.chat_models import init_chat_model
 
 try:
-    # load environment variables from .env file (requires `python-dotenv`)
+    # .env ファイルから環境変数を読み込む（`python-dotenv` が必要）
     from dotenv import load_dotenv
 
     load_dotenv()

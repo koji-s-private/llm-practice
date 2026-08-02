@@ -21,6 +21,9 @@ GitHub Actions上で動くAIチームによって定期的にメンテナンス�
   どのファイルでどう使われているかを追記する）。「使用技術」セクションが肥大化してきた場合は、
   `docs/tech-stack.md` のような別ファイルに切り出し、ルートの `README.md` 側にはリンクのみを残す
   （`data/README.md` / `tests/README.md` などの既存の「詳細は別ファイル」構成にならう）
+- コード内コメントは日本語で記載する（新規追加・既存修正のいずれも）。ただし
+  `extract_text.py` / `models_and_prompts.py` などLangChain公式チュートリアル由来の
+  学習用スクリプト（Issue #23で整理予定）は対象外とする
 
 ## GitHub Projects 運用
 - Project board: [koji-s-private/llm-practice](https://github.com/orgs/koji-s-private/projects/3)（Projects v2）
