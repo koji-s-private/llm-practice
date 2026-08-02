@@ -82,6 +82,10 @@ GitHub Actions上で動くAIチームによって定期的にメンテナンス�
 
 ## Issue選定とマージ方針（**このプロジェクトは人間承認必須。参考にした他プロジェクトとの最大の違い**）
 - `now` ラベルが付いたOpen Issueのうち、`Under Review`でも`In Progress`でもなく、オープンなPRも紐づいていないものを対象にする（選定ロジックの詳細は [.github/scripts/select_next_issue.py](.github/scripts/select_next_issue.py)、起動の流れは [ai-team-scheduler.yml](.github/workflows/ai-team-scheduler.yml) / [ai-team.yml](.github/workflows/ai-team.yml) 参照）
+- 選定可能な `now` Issueが1件も無い場合、その日は何もしないのではなく、`next` → `later` の順で
+  同じ選定条件をクリアする最優先（Issue番号が最も小さい＝作成が最も古い）Issueを1件探し、
+  見つかればラベルを `now` に自動で付け替えた上でその日の対象として選定する（昇格した旨をIssueにコメントで残す）。
+  `now`/`next`/`later` のいずれにも対象が無い場合のみ、その日は何も実行しない
 - 3者の作業が完了しテストが通ったらPRを作成し、reviewerに実際のGitHub PRレビューでLGTM判定（`gh pr review --comment`、本文に「LGTM」と明記する慣習。coder/reviewerが同じGitHub App ID(`claude[bot]`)で動作するため、GitHub上の正式な`--approve`は自己承認扱いで必ず拒否される。そのためAIによる判定は常に`--comment`で記録し、GitHub上の正式なApprove状態の付与は行わない）をもらう
 - **reviewerがapprove(LGTM)を出しても、絶対に自動マージしない。マージは必ず人間（koji）が手動で行う。** これは意図的な設計判断であり、将来的にも変更しない前提とする
 - reviewerがrequest changesのまま(approveに至らない)場合も同様にマージしない。PRにこれまでの経緯を要約したコメントを残し、人間の判断を待つ

@@ -18,6 +18,7 @@ import sys
 
 COST_WARNING_PREFIX = "⚠️ 費用が発生する可能性があります"
 STUCK_STATUSES = ("In Progress", "Under Review")
+PROMOTION_LABELS = ("next", "later")
 
 
 def is_cost_warning(body: str) -> bool:
@@ -40,18 +41,22 @@ def issue_referenced_in_any_pr(number: int, prs: list[dict]) -> bool:
 
 
 def pick_issue(
-    now_issues: list[dict],
+    candidates: list[dict],
     project_items: dict[int, dict],
     open_prs: list[dict],
     all_prs: list[dict],
     comment_counts: dict[int, int],
 ) -> tuple[int | None, list[int]]:
-    """条件をクリアした最小番号のIssueを1件選ぶ。
+    """渡されたIssue群(通常は同じラベルのもの)の中から、条件をクリアした最小番号を1件選ぶ。
+
+    `now`ラベルの選定にも、`now`が無い場合の`next`/`later`からの昇格候補選定にも
+    同じ選定可否ロジック(費用警告・オープンPRとの重複・行き詰まり検知)を使い回すため、
+    引数名は特定のラベルに紐付けない汎用的な`candidates`にしている。
 
     戻り値: (選ばれたIssue番号 or None, 自己修復(Statusの差し戻し)が必要なIssue番号のリスト)
     """
     heals: list[int] = []
-    for issue in sorted(now_issues, key=lambda i: i["number"]):
+    for issue in sorted(candidates, key=lambda i: i["number"]):
         number = issue["number"]
         if is_cost_warning(issue.get("body", "")):
             continue
@@ -88,6 +93,18 @@ def gh_json(*args: str, token: str | None = None):
     return json.loads(gh(*args, token=token))
 
 
+def compute_comment_counts(issues: list[dict], project_items: dict[int, dict]) -> dict[int, int]:
+    """行き詰まり判定(STUCK_STATUSES)の対象になるIssueだけ、コメント数を実際に取得する。"""
+    counts: dict[int, int] = {}
+    for issue in issues:
+        n = issue["number"]
+        item = project_items.get(n)
+        if item and item["status"] in STUCK_STATUSES:
+            comments = gh_json("issue", "view", str(n), "--json", "comments")["comments"]
+            counts[n] = len(comments)
+    return counts
+
+
 def main() -> None:
     projects_token = os.environ["PROJECTS_GH_TOKEN"]
     project_number = os.environ["PROJECT_NUMBER"]
@@ -109,15 +126,22 @@ def main() -> None:
         if item.get("content", {}).get("number") is not None
     }
 
-    comment_counts: dict[int, int] = {}
-    for issue in now_issues:
-        n = issue["number"]
-        item = project_items.get(n)
-        if item and item["status"] in STUCK_STATUSES:
-            comments = gh_json("issue", "view", str(n), "--json", "comments")["comments"]
-            comment_counts[n] = len(comments)
-
+    comment_counts = compute_comment_counts(now_issues, project_items)
     selected, heals = pick_issue(now_issues, project_items, open_prs, all_prs, comment_counts)
+
+    promoted_from: str | None = None
+    if selected is None:
+        for label in PROMOTION_LABELS:
+            candidates = gh_json("issue", "list", "--state", "open", "--label", label, "--json", "number,body")
+            candidate_comment_counts = compute_comment_counts(candidates, project_items)
+            candidate_selected, candidate_heals = pick_issue(
+                candidates, project_items, open_prs, all_prs, candidate_comment_counts
+            )
+            if candidate_selected is not None:
+                selected = candidate_selected
+                heals = heals + candidate_heals
+                promoted_from = label
+                break
 
     for n in heals:
         item_id = project_items[n]["id"]
@@ -137,8 +161,19 @@ def main() -> None:
             "放置されていたため、スケジューラが自動的にTodoに差し戻しました。次回以降の実行で改めて着手します。",
         )
 
+    if promoted_from is not None:
+        print(f"nowラベル付きIssueが無かったため、#{selected} を {promoted_from} から now に昇格させます")
+        gh("issue", "edit", str(selected), "--add-label", "now", "--remove-label", promoted_from)
+        gh(
+            "issue", "comment", str(selected),
+            "--body",
+            f"本日着手可能な `now` ラベル付きIssueが無かったため、`{promoted_from}` ラベルの中で"
+            "最も優先度が高い（Issue番号が最も小さい＝作成が最も古い）このIssueをスケジューラが"
+            "自動的に `now` に昇格させました。",
+        )
+
     if selected is None:
-        print("本日着手できるnowラベル付きIssueが見つかりませんでした。")
+        print("本日着手できるIssueが見つかりませんでした（now/next/laterいずれにも対象がありません）。")
         return
 
     print(f"Issue #{selected} を選定しました。")
