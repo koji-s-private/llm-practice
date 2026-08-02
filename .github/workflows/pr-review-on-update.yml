@@ -55,7 +55,7 @@ jobs:
             echo "should_review=false" >> "$GITHUB_OUTPUT"
           fi
 
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
         if: steps.check.outputs.should_review == 'true'
 
       - name: Run reviewer agent
