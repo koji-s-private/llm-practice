@@ -34,7 +34,7 @@ jobs:
       STATUS_FIELD_ID: ${{ vars.STATUS_FIELD_ID }}
       STATUS_TODO_ID: ${{ vars.STATUS_TODO_ID }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - name: Pick next issue
         id: pick

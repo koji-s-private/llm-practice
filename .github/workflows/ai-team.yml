@@ -85,7 +85,7 @@ jobs:
       STATUS_UNDER_REVIEW_ID: ${{ vars.STATUS_UNDER_REVIEW_ID }}
       STATUS_DONE_ID: ${{ vars.STATUS_DONE_ID }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - name: Sanitize issue number input
         id: sanitize
