@@ -5,6 +5,7 @@
 に基づく差分判定だけを検証する（ドキュメントローダー・チャンク分割は実物を使う）。
 """
 import json
+import os
 
 import pytest
 
@@ -322,3 +323,83 @@ def test_safe_upload_dest_accepts_normal_filenames(fake_env, filename):
     assert dest is not None
     assert dest.parent == data_dir.resolve()
     assert dest.name == filename
+
+
+# --- data_dir_signature(): 内容を読まないstat()ベースの軽量変更検知（Issue #70） ---
+
+
+def test_data_dir_signature_is_zero_when_no_target_files(fake_env):
+    # 対象ファイルが1つもない場合は (0, 0.0)
+    data_dir, _store = fake_env
+
+    assert ingest.data_dir_signature() == (0, 0.0)
+
+
+def test_data_dir_signature_is_zero_when_data_dir_missing(fake_env):
+    # DATA_DIR自体が存在しない場合も (0, 0.0)（存在しない前提で例外にならないことも確認）
+    data_dir, _store = fake_env
+    data_dir.rmdir()
+
+    assert ingest.data_dir_signature() == (0, 0.0)
+
+
+def test_data_dir_signature_counts_single_file_with_its_mtime(fake_env):
+    # ファイルを1つ追加すると (1, そのファイルのmtime) を返す
+    data_dir, _store = fake_env
+    path = _write(data_dir, "a.txt", "1件目のファイルです。")
+    os.utime(path, (1_700_000_000, 1_700_000_000))
+
+    assert ingest.data_dir_signature() == (1, 1_700_000_000.0)
+
+
+def test_data_dir_signature_increases_with_second_file(fake_env):
+    # ファイルをもう1つ追加すると件数が増え、最新mtimeも新しい方に更新される
+    data_dir, _store = fake_env
+    path1 = _write(data_dir, "a.txt", "1件目のファイルです。")
+    os.utime(path1, (1_700_000_000, 1_700_000_000))
+    path2 = _write(data_dir, "b.txt", "2件目のファイルです。")
+    os.utime(path2, (1_700_000_100, 1_700_000_100))
+
+    assert ingest.data_dir_signature() == (2, 1_700_000_100.0)
+
+
+def test_data_dir_signature_ignores_unsupported_extension(fake_env):
+    # LOADERSに無い拡張子（対象外）のファイルは件数にもmtime計算にも含まれない
+    data_dir, _store = fake_env
+    path = _write(data_dir, "a.txt", "対象ファイルです。")
+    os.utime(path, (1_700_000_000, 1_700_000_000))
+    unsupported = _write(data_dir, "notes.docx", "対応していない拡張子です。")
+    os.utime(unsupported, (1_800_000_000, 1_800_000_000))  # より新しいmtimeでも無視される
+
+    assert ingest.data_dir_signature() == (1, 1_700_000_000.0)
+
+
+def test_data_dir_signature_decreases_when_file_removed(fake_env):
+    # ファイルを削除すると件数が減る
+    data_dir, _store = fake_env
+    path1 = _write(data_dir, "a.txt", "1件目のファイルです。")
+    os.utime(path1, (1_700_000_000, 1_700_000_000))
+    path2 = _write(data_dir, "b.txt", "2件目のファイルです。")
+    os.utime(path2, (1_700_000_100, 1_700_000_100))
+    assert ingest.data_dir_signature()[0] == 2
+
+    path2.unlink()
+
+    assert ingest.data_dir_signature() == (1, 1_700_000_000.0)
+
+
+def test_data_dir_signature_reflects_mtime_update_on_content_change(fake_env):
+    # 既存ファイルの中身だけ変更（mtime更新）すると、件数は同じでも最新mtimeが変わる
+    data_dir, _store = fake_env
+    path = _write(data_dir, "a.txt", "元の内容です。")
+    os.utime(path, (1_700_000_000, 1_700_000_000))
+    before = ingest.data_dir_signature()
+    assert before == (1, 1_700_000_000.0)
+
+    path.write_text("変更後の内容です。", encoding="utf-8")
+    os.utime(path, (1_700_000_500, 1_700_000_500))
+    after = ingest.data_dir_signature()
+
+    assert after[0] == before[0] == 1
+    assert after[1] != before[1]
+    assert after == (1, 1_700_000_500.0)

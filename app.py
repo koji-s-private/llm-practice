@@ -5,7 +5,10 @@
     python -m streamlit run app.py
 
 data/ フォルダにファイルを置く（またはサイドバーからアップロードする）だけでOK。
-起動時・サイドバーの「再同期」ボタン・アップロード時に自動でベクトルDBへ反映されます。
+data/ フォルダの変更は、ページの操作（リロード・チャットの送信など、Streamlitが
+スクリプトを再実行するタイミング）のたびに軽量な変更検知で自動的に検知され、
+裏側で自動的にベクトルDBへ反映されます（手動での再同期は基本不要。即時性が必要な
+場合のフォールバックとして、サイドバーの折りたたみ内に手動の再同期ボタンもあります）。
 
 さらに、チャットでの質問・回答も自動で data/conversations/<会話スレッドID>/ に保存され、
 「このスレッド」の次回以降の質問（別セッション・別タブでも同じスレッドを開けば）の
@@ -20,7 +23,7 @@ from pathlib import Path
 import streamlit as st
 from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 
-from ingest import DATA_DIR, safe_upload_dest, sync_data_dir
+from ingest import DATA_DIR, data_dir_signature, safe_upload_dest, sync_data_dir
 from memory import conversation_count, new_thread_id, save_conversation
 from rag_chain import build_agent
 
@@ -35,6 +38,8 @@ def _sync_and_report(spinner_text: str) -> None:
             result = sync_data_dir(verbose=False)
     except Exception as e:
         st.error(f"ドキュメントの同期に失敗しました。時間をおいて再度お試しください。（詳細: {e}）")
+        # 失敗時はシグネチャを更新しない。次回の再実行時もdata/の内容は
+        # 「未同期」のままとみなされ、トップレベルの軽量チェックが再度同期を試みる。
         return
     if any(result.values()):
         st.toast(
@@ -48,6 +53,10 @@ def _sync_and_report(spinner_text: str) -> None:
             "（破損・パスワード付き・不正なエンコーディング等の可能性があります）:\n"
             + "\n".join(f"- {name}" for name in result["failed"])
         )
+    # 同期成功後の最新シグネチャを保存しておく。これにより、この直後にトップレベルの
+    # 軽量チェックが再実行されても「変更なし」と判定され、無駄な二重同期が走らない
+    # （手動の再同期ボタン・アップロード時の呼び出しでも共通してこの関数を通るため）。
+    st.session_state.data_dir_signature = data_dir_signature()
 
 
 def _start_new_chat() -> None:
@@ -59,9 +68,20 @@ def _start_new_chat() -> None:
 if "thread_id" not in st.session_state:
     st.session_state.thread_id = new_thread_id()
 
-# 初回アクセス時にdata/の内容をベクトルDBへ自動同期
-if "agent" not in st.session_state:
+# data/ の変更検知（Issue #70）: Streamlitはユーザー操作（チャット送信・ボタン押下・
+# トグル操作等）のたびにこのスクリプト全体を再実行する仕様なので、トップレベルで
+# 「ファイル数+最新mtime」だけの軽量シグネチャ（data_dir_signature、内容の読み込みや
+# 埋め込み処理は一切しない）を毎回計算し、前回値と比較する。これにより、
+# 1) ページのリロード時（アプリ外からdata/を直接編集して戻ってきた場合を含む）
+# 2) チャットの往復が続いたタイミング（会話ログの保存でdata/内のファイルが増えるため）
+# の両方を、この1つの仕組みだけで自動検知できる（差分が無ければ何もしない静かなno-op）。
+current_data_dir_signature = data_dir_signature()
+if st.session_state.get("data_dir_signature") != current_data_dir_signature:
     _sync_and_report("data/ をベクトルDBに同期中...")
+
+# エージェント自体はdata/の変更とは独立して一度だけ構築すればよい
+# （検索ツールはベクトルストアを都度クエリするため、同期結果は再構築なしで自動的に反映される）。
+if "agent" not in st.session_state:
     with st.spinner("RAGエージェントを準備中..."):
         st.session_state.agent = build_agent(st.session_state.thread_id)
 
@@ -82,9 +102,16 @@ with st.sidebar:
 
     st.divider()
     st.subheader("ドキュメント管理")
-    st.caption("data/ フォルダにファイルを追加・削除したら押してください。")
-    if st.button("🔄 data/ を再同期"):
-        _sync_and_report("再同期中...")
+    st.caption(
+        "data/ フォルダの変更はページの操作（リロード・会話など）のたびに自動で検知され、"
+        "裏側で自動的にDBへ反映されます。"
+    )
+    # 自動検知はファイル数+最新mtimeによる近似的な判定のため、理論上は「同じmtime・
+    # 同じサイズのまま中身だけ入れ替わる」ような極めて稀なケースを取りこぼす可能性がある。
+    # 即時性・確実性が必要な場合のフォールバック手段として、目立たない場所に残しておく。
+    with st.expander("今すぐ強制的に再同期したい場合"):
+        if st.button("🔄 data/ を再同期"):
+            _sync_and_report("再同期中...")
 
     st.caption("ファイルをアップロードすると自動で data/ に保存・DB反映されます。")
     uploaded_files = st.file_uploader(
@@ -165,10 +192,10 @@ if user_input:
         st.session_state.messages.append(HumanMessage(content=user_input))
         st.session_state.messages.append(AIMessage(content=answer))
 
-        # 会話を自動でナレッジ化（このスレッド専用としてローカル保存 → 即座にDB反映）
+        # 会話を自動でナレッジ化（このスレッド専用としてローカル保存）。
+        # 保存したログファイルのDB反映は、この場ですぐには行わない。
+        # 次回このスクリプトが再実行されたタイミング（次の会話・ボタン操作・リロード等）で、
+        # トップレベルの軽量シグネチャチェックがファイル数の増加を検知し、自動的に同期される
+        # （Issue #70。チャット1往復ごとに毎回フル同期していた従来実装より軽量）。
         if st.session_state.auto_save_memory:
             save_conversation(user_input, answer, st.session_state.thread_id)
-            try:
-                sync_data_dir(verbose=False)
-            except Exception as e:
-                st.error(f"会話ログの同期に失敗しました。（詳細: {e}）")

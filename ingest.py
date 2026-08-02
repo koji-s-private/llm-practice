@@ -148,6 +148,28 @@ def _thread_id_for(rel_path: str) -> str:
     return GLOBAL_THREAD_ID
 
 
+def data_dir_signature() -> tuple[int, float]:
+    """data/ の変更有無を、内容を読まずにstat()だけで軽量に判定するためのシグネチャを返す。
+
+    sync_data_dir()が対象とするのと同じファイル集合（拡張子がLOADERSに含まれるもの）に対し、
+    (ファイル数, 最新mtime) のタプルを返す。ファイルの読み込み・分割・埋め込み・
+    ベクトルストア接続・manifest.jsonの読み書きは一切行わない（Issue #33で指摘された
+    重い処理を避けるための、あくまで近似的な変更検知）。
+    app.py側はStreamlitが再実行されるたびにこの関数を呼び、前回値と比較することで、
+    「data/に変更があった場合だけ」本格的な sync_data_dir() を呼び出す（Issue #70）。
+    DATA_DIRが存在しない、または対象ファイルが1つもない場合は (0, 0.0) を返す。
+    """
+    if not DATA_DIR.exists():
+        return (0, 0.0)
+    target_files = [
+        f for f in DATA_DIR.rglob("*") if f.is_file() and f.suffix.lower() in LOADERS
+    ]
+    if not target_files:
+        return (0, 0.0)
+    latest_mtime = max(f.stat().st_mtime for f in target_files)
+    return (len(target_files), latest_mtime)
+
+
 def sync_data_dir(verbose: bool = True) -> dict:
     """data/ の内容とベクトルDBを同期する。
 
