@@ -4,6 +4,7 @@
 軽量なフェイクベクトルストアに monkeypatch して、data/ の内容と manifest.json
 に基づく差分判定だけを検証する（ドキュメントローダー・チャンク分割は実物を使う）。
 """
+
 import json
 import os
 
@@ -164,9 +165,7 @@ def test_pdf_load_failure_is_recorded_as_failed(fake_env, monkeypatch):
     assert store.docs_by_id == {}
 
 
-def test_failed_file_is_not_recorded_in_manifest_and_retried_next_sync(
-    fake_env, monkeypatch
-):
+def test_failed_file_is_not_recorded_in_manifest_and_retried_next_sync(fake_env, monkeypatch):
     # 失敗したファイルはmanifestに記録されず、次回同期時に再度読み込みが試みられる（リトライ）
     data_dir, store = fake_env
     _write(data_dir, "bad.txt", "壊れていることにするテキストです。" * 5)
@@ -177,9 +176,7 @@ def test_failed_file_is_not_recorded_in_manifest_and_retried_next_sync(
         load_attempts.append(path)
         return _FailingLoader(path)
 
-    monkeypatch.setattr(
-        ingest, "LOADERS", {**ingest.LOADERS, ".txt": always_failing_loader}
-    )
+    monkeypatch.setattr(ingest, "LOADERS", {**ingest.LOADERS, ".txt": always_failing_loader})
 
     result_1 = ingest.sync_data_dir(verbose=False)
     assert result_1["failed"] == ["bad.txt"]
@@ -199,9 +196,7 @@ def test_all_files_failing_completes_without_raising(fake_env, monkeypatch):
     _write(data_dir, "bad1.txt", "壊れていることにするテキスト1です。" * 5)
     _write(data_dir, "bad2.txt", "壊れていることにするテキスト2です。" * 5)
 
-    monkeypatch.setattr(
-        ingest, "LOADERS", {**ingest.LOADERS, ".txt": lambda path: _FailingLoader(path)}
-    )
+    monkeypatch.setattr(ingest, "LOADERS", {**ingest.LOADERS, ".txt": lambda path: _FailingLoader(path)})
 
     result = ingest.sync_data_dir(verbose=False)
 
@@ -221,9 +216,7 @@ def test_previously_synced_file_that_now_fails_keeps_old_chunks(fake_env, monkey
     assert old_chunk_ids
 
     path.write_text("2回目の同期時は壊れていることにするテキストです。" * 5, encoding="utf-8")
-    monkeypatch.setattr(
-        ingest, "LOADERS", {**ingest.LOADERS, ".txt": lambda p: _FailingLoader(p)}
-    )
+    monkeypatch.setattr(ingest, "LOADERS", {**ingest.LOADERS, ".txt": lambda p: _FailingLoader(p)})
 
     result = ingest.sync_data_dir(verbose=False)
 

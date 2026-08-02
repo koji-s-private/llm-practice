@@ -11,6 +11,7 @@
   rag_chain.build_agent(thread_id) が「このスレッドの会話ログ＋共通ナレッジ」だけを
   検索対象にでき、無関係な別スレッドの会話が回答に混ざらないようにしている。
 """
+
 import re
 import uuid
 from datetime import datetime
@@ -42,17 +43,11 @@ def save_conversation(question: str, answer: str, thread_id: str) -> Path:
     thread_dir.mkdir(parents=True, exist_ok=True)
 
     now = datetime.now()
-    filename = (
-        f"{now.strftime('%Y%m%d_%H%M%S')}_{uuid.uuid4().hex[:6]}_"
-        f"{_slugify_snippet(question)}.md"
-    )
+    filename = f"{now.strftime('%Y%m%d_%H%M%S')}_{uuid.uuid4().hex[:6]}_{_slugify_snippet(question)}.md"
     path = thread_dir / filename
 
     content = (
-        f"# 会話ログ\n\n"
-        f"- 日時: {now.strftime('%Y-%m-%d %H:%M:%S')}\n\n"
-        f"## 質問\n\n{question}\n\n"
-        f"## 回答\n\n{answer}\n"
+        f"# 会話ログ\n\n- 日時: {now.strftime('%Y-%m-%d %H:%M:%S')}\n\n## 質問\n\n{question}\n\n## 回答\n\n{answer}\n"
     )
     path.write_text(content, encoding="utf-8")
     return path

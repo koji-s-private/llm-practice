@@ -33,6 +33,7 @@ pytest
 | `test_app.py` | `app.py` | Streamlitのチャット画面のエラーハンドリングのテスト（`streamlit.testing.v1.AppTest` を使いスクリプト実行エンジン上で検証） |
 | `test_evaluate_retrieval.py` | `scripts/evaluate_retrieval.py` | 検索結果の適合率・再現率・F1計算ロジックのテスト |
 | `test_select_next_issue.py` | `.github/scripts/select_next_issue.py` | AIチームのIssue選定ロジックのテスト（CI専用スクリプトのためファイルパスから直接import） |
+| `test_ci_config.py` | `.github/workflows/ci.yml` / `pyproject.toml` | CIワークフロー定義（トリガー・実行ステップの順序）とruff設定（除外ファイル・ルールセット）の静的検証 |
 
 ## 新しいテストを追加する際の命名規則
 

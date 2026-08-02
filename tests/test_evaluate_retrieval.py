@@ -4,6 +4,7 @@
 差し替えたフェイクのベクトルストアを注入して、`evaluate()`（適合率・再現率の
 平均計算）と `main()` の集計・出力（F1計算を含む）のみを検証する。
 """
+
 import scripts.evaluate_retrieval as evaluate_retrieval
 
 
@@ -54,9 +55,7 @@ def test_evaluate_false_positive_lowers_precision_but_not_recall(monkeypatch):
         "EVAL_SET",
         [{"query": "q1", "relevant_ids": {"doc_a"}}],
     )
-    store = _FakeVectorStore(
-        {"q1": [(_FakeDocument("doc_a"), 0.1), (_FakeDocument("doc_noise"), 0.2)]}
-    )
+    store = _FakeVectorStore({"q1": [(_FakeDocument("doc_a"), 0.1), (_FakeDocument("doc_noise"), 0.2)]})
 
     precision, recall = evaluate_retrieval.evaluate(store, candidate_k=8, distance_threshold=1.3)
 
@@ -161,16 +160,12 @@ def test_main_prints_f1_for_every_candidate_k_and_threshold_combination(monkeypa
     # candidate_k / distance_thresholdによらず常に正解ドキュメントだけがヒットするようにし、
     # グリッド全組み合わせでprecision=recall=1.0 (F1=1.000) になることを検証する。
     store = _FakeVectorStore({"q1": [(_FakeDocument("doc_a"), 0.1)]})
-    monkeypatch.setattr(
-        evaluate_retrieval, "build_eval_vectorstore", lambda: (store, "/tmp/does-not-matter")
-    )
+    monkeypatch.setattr(evaluate_retrieval, "build_eval_vectorstore", lambda: (store, "/tmp/does-not-matter"))
 
     evaluate_retrieval.main()
 
     out = capsys.readouterr().out
-    expected_rows = len(evaluate_retrieval.CANDIDATE_K_VALUES) * len(
-        evaluate_retrieval.DISTANCE_THRESHOLD_VALUES
-    )
+    expected_rows = len(evaluate_retrieval.CANDIDATE_K_VALUES) * len(evaluate_retrieval.DISTANCE_THRESHOLD_VALUES)
     assert out.count("1.000") == expected_rows * 3  # 適合率・再現率・F1がすべて1.000
     assert store.calls[0]["k"] in evaluate_retrieval.CANDIDATE_K_VALUES
 
@@ -183,9 +178,7 @@ def test_main_avoids_division_by_zero_when_precision_and_recall_are_zero(monkeyp
     )
     # 常に無関係なドキュメントしかヒットしない → precision=recall=0.0 → F1計算で0除算が起きうる。
     store = _FakeVectorStore({"q1": [(_FakeDocument("doc_noise"), 0.1)]})
-    monkeypatch.setattr(
-        evaluate_retrieval, "build_eval_vectorstore", lambda: (store, "/tmp/does-not-matter")
-    )
+    monkeypatch.setattr(evaluate_retrieval, "build_eval_vectorstore", lambda: (store, "/tmp/does-not-matter"))
 
     evaluate_retrieval.main()  # 例外を送出せずに完了すること
 

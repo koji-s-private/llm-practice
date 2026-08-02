@@ -7,9 +7,7 @@
 import importlib.util
 import pathlib
 
-MODULE_PATH = (
-    pathlib.Path(__file__).resolve().parent.parent / ".github" / "scripts" / "select_next_issue.py"
-)
+MODULE_PATH = pathlib.Path(__file__).resolve().parent.parent / ".github" / "scripts" / "select_next_issue.py"
 spec = importlib.util.spec_from_file_location("select_next_issue", MODULE_PATH)
 select_next_issue = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(select_next_issue)
@@ -59,9 +57,7 @@ def test_pick_issue_skips_issue_with_cost_warning():
 def test_pick_issue_skips_issue_with_open_pr():
     now_issues = [{"number": 14, "body": ""}, {"number": 18, "body": ""}]
     open_prs = [{"number": 30, "title": "", "body": "Closes #14", "headRefName": "fix/14"}]
-    selected, heals = pick_issue(
-        now_issues, project_items={}, open_prs=open_prs, all_prs=open_prs, comment_counts={}
-    )
+    selected, heals = pick_issue(now_issues, project_items={}, open_prs=open_prs, all_prs=open_prs, comment_counts={})
     assert selected == 18
     assert heals == []
 

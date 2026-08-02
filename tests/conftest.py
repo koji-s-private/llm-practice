@@ -13,6 +13,7 @@
 - `langchain.chat_models.init_chat_model` と `langchain.agents.create_agent` は
   実際のLLM呼び出し・エージェント構築を避けるためフェイクに差し替える。
 """
+
 import os
 import sys
 import types
@@ -46,9 +47,7 @@ class _FakeChatModel:
     """
 
     def invoke(self, *args, **kwargs):
-        raise AssertionError(
-            "model.invoke() は各テストで monkeypatch してから呼び出してください"
-        )
+        raise AssertionError("model.invoke() は各テストで monkeypatch してから呼び出してください")
 
 
 def _fake_init_chat_model(*args, **kwargs):
@@ -65,8 +64,8 @@ _install_stub_module("langchain_chroma", Chroma=object)
 _install_stub_module("langchain_huggingface", HuggingFaceEmbeddings=object)
 
 # setup.py / rag_chain.py が実LLM・実エージェントを構築しないよう差し替える。
-import langchain.chat_models  # noqa: E402
 import langchain.agents  # noqa: E402
+import langchain.chat_models  # noqa: E402
 
 langchain.chat_models.init_chat_model = _fake_init_chat_model
 langchain.agents.create_agent = _fake_create_agent

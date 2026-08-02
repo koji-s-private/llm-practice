@@ -1,13 +1,12 @@
 """memory.py の会話ログ保存・件数カウントのテスト。"""
+
 import memory
 
 
 def test_save_conversation_writes_markdown_file(tmp_path, monkeypatch):
     monkeypatch.setattr(memory, "CONVERSATIONS_DIR", tmp_path)
 
-    path = memory.save_conversation(
-        question="質問内容です", answer="回答内容です", thread_id="thread-a"
-    )
+    path = memory.save_conversation(question="質問内容です", answer="回答内容です", thread_id="thread-a")
 
     assert path.exists()
     assert path.parent == tmp_path / "thread-a"
@@ -19,9 +18,7 @@ def test_save_conversation_writes_markdown_file(tmp_path, monkeypatch):
 def test_save_conversation_filename_contains_question_snippet(tmp_path, monkeypatch):
     monkeypatch.setattr(memory, "CONVERSATIONS_DIR", tmp_path)
 
-    path = memory.save_conversation(
-        question="  日本語の 質問!!  ", answer="回答", thread_id="thread-a"
-    )
+    path = memory.save_conversation(question="  日本語の 質問!!  ", answer="回答", thread_id="thread-a")
 
     assert "日本語の_質問" in path.name
     assert path.suffix == ".md"
