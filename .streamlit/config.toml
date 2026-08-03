@@ -1,0 +1,15 @@
+# Streamlitのカスタムテーマ設定（Issue #72）。
+# デフォルトのStreamlit配色のままだと「プロトタイプ感」が出てしまうため、
+# インディゴ系を基調にした落ち着いた配色に変更している。
+# 追加インストール・追加費用は不要（Streamlit標準のtheme機能のみで完結）。
+[theme]
+base = "light"
+# ボタン・チェック状態・強調表示などに使われるメインカラー
+primaryColor = "#4F46E5"
+# メインエリアの背景色
+backgroundColor = "#FFFFFF"
+# サイドバー・expander・コードブロックなどの背景色
+secondaryBackgroundColor = "#F3F4F6"
+# 本文の文字色
+textColor = "#1F2937"
+font = "sans serif"

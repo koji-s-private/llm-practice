@@ -1,5 +1,5 @@
 """
-ローカルドキュメントに質問できるRAGチャットアプリ（Streamlit / 最低限のUI）。
+ローカルドキュメントに質問できるRAGチャットアプリ「DocPilot」（Streamlit）。
 
 起動:
     python -m streamlit run app.py
@@ -28,8 +28,16 @@ from ingest import DATA_DIR, data_dir_signature, safe_upload_dest, sync_data_dir
 from memory import conversation_count, new_thread_id, save_conversation
 from rag_chain import build_agent
 
-st.set_page_config(page_title="llm-practice RAGチャット", page_icon="📚")
-st.title("📚 ローカルドキュメントQ&A")
+# Issue #72: 「ローカルドキュメントQ&A」という機能そのままの名称から、
+# プロダクトとして外向けに使える名称「DocPilot」に刷新（詳細な選定理由はPR説明を参照）。
+# 配色・フォントは .streamlit/config.toml のカスタムテーマで設定している。
+st.set_page_config(
+    page_title="DocPilot | ドキュメントAIアシスタント",
+    page_icon="🧭",
+    layout="centered",
+)
+st.title("🧭 DocPilot")
+st.markdown("##### あなたの資料から、迷わず答えへ。")
 st.caption("data/ フォルダにファイルを置くと自動でDBに反映され、AIエージェントが検索しながら回答します。")
 
 
@@ -117,7 +125,7 @@ with st.sidebar:
         st.caption(f"会話ID（内部識別用）: `{st.session_state.thread_id}`")
 
     st.divider()
-    st.subheader("ドキュメント管理")
+    st.subheader("📂 ドキュメント管理")
     st.caption(
         "data/ フォルダの変更はページの操作（リロード・会話など）のたびに自動で検知され、"
         "裏側で自動的にDBへ反映されます。"
@@ -152,7 +160,7 @@ for message in st.session_state.messages:
     with st.chat_message(role):
         st.markdown(message.content)
 
-user_input = st.chat_input("ドキュメントについて質問してください")
+user_input = st.chat_input("資料について気になることを聞いてみましょう")
 
 if user_input:
     with st.chat_message("user"):
