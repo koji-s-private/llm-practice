@@ -1,6 +1,6 @@
 # llm-practice
 
-無料ツールを活用した、ローカルドキュメントQ&A（RAG）チャットアプリの個人開発プロジェクトです。
+無料ツールを活用した、ローカルドキュメントQ&A（RAG）チャットアプリ「DocPilot」の個人開発プロジェクトです。
 
 ## 構成
 
@@ -11,6 +11,7 @@
 | `rag_chain.py` | 検索ツール付きRAGエージェント（`create_agent`）の定義 |
 | `memory.py` | 質問・回答を `data/conversations/<会話ID>/` に自動保存する会話ナレッジ化機能 |
 | `app.py` | Streamlitのチャット画面（ファイルアップロードUI・新しい会話ボタンを含む） |
+| `.streamlit/config.toml` | Streamlitのカスタムテーマ設定（配色・フォント。Issue #72） |
 | `data/` | 質問させたいPDF/テキストファイルを置く場所（アップロードUIからもここに保存される） |
 | `data/conversations/<会話ID>/` | 自動保存された過去の質問・回答（会話ログ。会話IDごとにフォルダが分かれる） |
 | `models_and_prompts.py` / `extract_text.py` | LangChain公式チュートリアルの学習用スクリプト（そのまま残しています） |
