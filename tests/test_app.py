@@ -458,3 +458,35 @@ def test_rerun_with_signature_change_triggers_resync(monkeypatch):
     # シグネチャがさらに変化しなければ、その後は再び呼ばれない
     at = at.run()
     assert sync_calls["n"] == 2
+
+
+# --- 6. Issue #72: プロダクト感のあるUI/UXへのリニューアル（画面表示文言） ---
+
+
+def test_docpilot_branding_title_and_tagline_are_displayed():
+    """正常系: タイトルが新ブランド名「DocPilot」、その下にキャッチコピーが
+    表示される（`st.set_page_config` の page_title/page_icon 自体は要素ツリーに
+    現れないメタ情報のため、静的検証は tests/test_theme_config.py 側で行う）。"""
+    at = _run_app()
+
+    assert at.exception == []
+    assert len(at.title) == 1
+    assert at.title[0].value == "🧭 DocPilot"
+    assert any(m.value == "##### あなたの資料から、迷わず答えへ。" for m in at.markdown)
+
+
+def test_sidebar_document_management_heading_has_folder_icon():
+    """境界値: サイドバーの「ドキュメント管理」見出しに📂アイコンが付与され、
+    かつ既存の見出しテキスト自体は変わっていない（絵文字の付け忘れ・文言の
+    意図しない変更の両方を検知できるようにする）。"""
+    at = _run_app()
+
+    headings = [s.value for s in at.sidebar.subheader]
+    assert headings == ["📂 ドキュメント管理"]
+
+
+def test_chat_input_placeholder_uses_renewed_wording():
+    """正常系: チャット入力欄のプレースホルダーが刷新後の文言になっている。"""
+    at = _run_app()
+
+    assert at.chat_input[0].placeholder == "資料について気になることを聞いてみましょう"
