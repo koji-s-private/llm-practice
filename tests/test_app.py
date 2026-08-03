@@ -340,7 +340,7 @@ def test_post_chat_sync_failure_on_next_run_shows_error(monkeypatch):
 
 
 def test_post_chat_save_conversation_not_called_when_auto_save_memory_disabled(monkeypatch):
-    """境界値: 「質問・回答を自動で保存する」トグルOFFの場合は
+    """境界値: 「今の会話を記憶として保存する」トグルOFFの場合は
     save_conversation が呼ばれず、それに伴う事後の同期も発生しない。"""
     fake_agent = _FakeAgent(answer="回答")
     monkeypatch.setattr(rag_chain, "build_agent", lambda thread_id=None: fake_agent)
@@ -370,7 +370,34 @@ def test_post_chat_save_conversation_not_called_when_auto_save_memory_disabled(m
     assert sync_calls["n"] == 1  # 事後同期は呼ばれていない（data/自体に変化がないため）
 
 
-# --- 4. トップレベルの軽量シグネチャチェック（data_dir_signature）そのもの ---
+# --- 4. サイドバーの記憶設定UI（Issue #71: 会話ID表示とナレッジ化トグルの統合） ---
+
+
+def test_memory_settings_expander_integrates_thread_info(monkeypatch):
+    """正常系: 「🧠 記憶設定」expander内に、記憶保存トグル・保存件数・会話ID（補足情報）が
+    まとめて表示され、生の会話IDそのものはユーザー向け説明文の主語になっていない
+    （説明文キャプションの先頭は「今のチャット」であり、会話IDを含まない）。"""
+    monkeypatch.setattr(memory, "new_thread_id", lambda: "abcd1234")
+    monkeypatch.setattr(memory, "conversation_count", lambda thread_id: 3)
+
+    at = _run_app()
+
+    expander_labels = [e.label for e in at.sidebar.expander]
+    assert any("記憶設定" in label for label in expander_labels)
+
+    captions = [c.value for c in at.sidebar.caption]
+    # 説明文（主語）に生の会話IDが含まれていないこと
+    assert any("今のチャット" in c and "覚えておいて" in c for c in captions)
+    assert not any(c.strip().startswith("abcd1234") for c in captions)
+    # 保存件数・会話ID（補足情報としての表示）はそれぞれ確認できる
+    assert any("保存済みのやりとり: 3件" in c for c in captions)
+    assert any("会話ID（内部識別用）: `abcd1234`" in c for c in captions)
+
+    toggles = [t.label for t in at.sidebar.toggle]
+    assert "今の会話を記憶として保存する" in toggles
+
+
+# --- 5. トップレベルの軽量シグネチャチェック（data_dir_signature）そのもの ---
 
 
 def test_rerun_without_signature_change_skips_resync(monkeypatch):

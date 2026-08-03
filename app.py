@@ -96,9 +96,25 @@ with st.sidebar:
     if st.button("🆕 新しい会話を始める", use_container_width=True):
         _start_new_chat()
         st.rerun()
-    st.caption(
-        f"会話ID: `{st.session_state.thread_id}`（このIDの会話ログだけが、この会話の回答材料として検索されます）"
-    )
+
+    st.divider()
+    # Issue #71: 「会話ID」という生のID文字列を主語にした表示と、独立項目だった
+    # 「会話の自動ナレッジ化」トグルを、「今の会話を記憶に残すか」という1つの
+    # 設定にまとめる。session_stateのキー名（auto_save_memory）は既存の保存処理
+    # ロジックとの互換性のため変更しない。
+    with st.expander("🧠 記憶設定", expanded=False):
+        st.caption("今のチャットでのやりとりを覚えておいて、次回以降の質問の回答材料に使うかどうかを設定します。")
+        st.session_state.auto_save_memory = st.toggle(
+            "今の会話を記憶として保存する",
+            value=st.session_state.auto_save_memory,
+            help=(
+                "ONの場合、やりとりを data/conversations/ にローカル保存し、"
+                "この会話スレッド内での以降の質問の回答材料にします"
+                "（別スレッドの会話には混ざりません）。外部・クラウドへの追加送信は一切行いません。"
+            ),
+        )
+        st.caption(f"この会話で保存済みのやりとり: {conversation_count(st.session_state.thread_id)}件")
+        st.caption(f"会話ID（内部識別用）: `{st.session_state.thread_id}`")
 
     st.divider()
     st.subheader("ドキュメント管理")
@@ -129,19 +145,6 @@ with st.sidebar:
                 continue
             dest.write_bytes(f.getvalue())
         _sync_and_report("アップロードされたファイルを取り込み中...")
-
-    st.divider()
-    st.subheader("会話の自動ナレッジ化")
-    st.session_state.auto_save_memory = st.toggle(
-        "質問・回答を自動で保存する",
-        value=st.session_state.auto_save_memory,
-        help=(
-            "ONの場合、やりとりを data/conversations/ にローカル保存し、"
-            "この会話スレッド内での以降の質問の回答材料にします"
-            "（別スレッドの会話には混ざりません）。外部・クラウドへの追加送信は一切行いません。"
-        ),
-    )
-    st.caption(f"このスレッドの保存済み会話: {conversation_count(st.session_state.thread_id)}件")
 
 # 過去の会話を再描画
 for message in st.session_state.messages:
