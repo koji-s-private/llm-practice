@@ -376,25 +376,32 @@ def test_post_chat_save_conversation_not_called_when_auto_save_memory_disabled(m
 def test_memory_settings_expander_integrates_thread_info(monkeypatch):
     """正常系: 「🧠 記憶設定」expander内に、記憶保存トグル・保存件数・会話ID（補足情報）が
     まとめて表示され、生の会話IDそのものはユーザー向け説明文の主語になっていない
-    （説明文キャプションの先頭は「今のチャット」であり、会話IDを含まない）。"""
+    （説明文キャプションの先頭は「今のチャット」であり、会話IDを含まない）。
+
+    `AppTest`の`Block`（expanderを含む）は`.caption`/`.toggle`等の子要素アクセサを
+    持ち、そのブロック配下のみを再帰的に収集する。ここではあえてサイドバー全体
+    （`at.sidebar.caption`）ではなく取得した「🧠 記憶設定」expanderオブジェクト自身
+    から辿ることで、これらの要素が実際にこの1つのexpander配下にまとまっていること
+    （＝サイドバーの他の場所に分散していないこと）まで検証する。"""
     monkeypatch.setattr(memory, "new_thread_id", lambda: "abcd1234")
     monkeypatch.setattr(memory, "conversation_count", lambda thread_id: 3)
 
     at = _run_app()
 
-    expander_labels = [e.label for e in at.sidebar.expander]
-    assert any("記憶設定" in label for label in expander_labels)
+    memory_expanders = [e for e in at.sidebar.expander if "記憶設定" in e.label]
+    assert len(memory_expanders) == 1
+    expander = memory_expanders[0]
 
-    captions = [c.value for c in at.sidebar.caption]
+    captions = [c.value for c in expander.caption]
     # 説明文（主語）に生の会話IDが含まれていないこと
     assert any("今のチャット" in c and "覚えておいて" in c for c in captions)
     assert not any(c.strip().startswith("abcd1234") for c in captions)
-    # 保存件数・会話ID（補足情報としての表示）はそれぞれ確認できる
+    # 保存件数・会話ID（補足情報としての表示）はそれぞれこのexpander配下で確認できる
     assert any("保存済みのやりとり: 3件" in c for c in captions)
     assert any("会話ID（内部識別用）: `abcd1234`" in c for c in captions)
 
-    toggles = [t.label for t in at.sidebar.toggle]
-    assert "今の会話を記憶として保存する" in toggles
+    toggles = [t.label for t in expander.toggle]
+    assert toggles == ["今の会話を記憶として保存する"]
 
 
 # --- 5. トップレベルの軽量シグネチャチェック（data_dir_signature）そのもの ---
