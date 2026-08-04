@@ -20,8 +20,11 @@ UX上の妥協が必要になる。
 
 ## 採用技術
 
-**TypeScript/JavaScript製フロントエンド（React + Vite） + Python（FastAPI）によるバックエンドAPI化を
-採用する。**
+**TypeScript製フロントエンド（React + Vite） + Python（FastAPI）によるバックエンドAPI化を採用する。**
+
+JavaScript（無型）は採用しない。フロントエンドのコードはすべてTypeScriptで記述し、`.js`/`.jsx`
+ファイルは作成しない（設定ファイル等でJS形式が事実上標準のものを除く）。`tsconfig.json`は`strict`
+モードを有効にし、`.js`/`.jsx`の混入をCI/実装レビューで検出できるようにする。
 
 - Streamlit継続や他のPython製UIフレームワーク（NiceGUI/Reflex等）と比較して、複数ファイル一括
   アップロードや会話管理操作を含む複雑なUI/UXを実現できる自由度が最も高い
