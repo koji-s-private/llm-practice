@@ -14,6 +14,8 @@
 ファイルを追加・変更・削除したら、アプリのサイドバーの「🔄 data/ を再同期」ボタンを押すか、
 CLIで `python ingest.py` を実行すると、差分だけがDB（Chroma）に反映されます
 （`ingest.py` が `chroma_db/manifest.json` と比較して差分を検知する仕組みです）。
+このファイル・manifest.json・Chromaのチャンク・会話スレッドの関係をER図で整理したものが
+[docs/data-model.md](../docs/data-model.md) にあります。
 
 ## data/conversations/&lt;会話ID&gt;/
 

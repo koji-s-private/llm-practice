@@ -28,6 +28,7 @@
 | `tests/` | 自動テスト（pytest） | [tests/README.md](tests/README.md) |
 | `.claude/agents/` | AIチーム（coder/qa-engineer/reviewer）の役割定義 | [.claude/agents/README.md](.claude/agents/README.md) |
 | `.github/workflows/` | GitHub Actionsワークフロー定義 | [.github/workflows/README.md](.github/workflows/README.md) |
+| `docs/` | 技術方針・設計に関するドキュメント | [docs/data-model.md](docs/data-model.md)（データ構造のER図）、[docs/frontend-tech-policy.md](docs/frontend-tech-policy.md) |
 
 ディレクトリ構成の全体像は次の通りです（一部抜粋）。
 
@@ -324,6 +325,9 @@ chroma_db/
 ├── manifest.json     # data/ のファイルとチャンクIDの対応表（このプロジェクト独自）
 └── （Chroma本体のデータファイル一式）
 ```
+
+各要素の詳しい関係（ファイル・manifest.json・Chromaのチャンク・会話スレッドが互いにどう
+紐づいているか）はER図として [docs/data-model.md](docs/data-model.md) にまとめています。
 
 ### DBの中身を確認する
 
