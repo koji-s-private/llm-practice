@@ -102,12 +102,12 @@ def _load_set_page_config_kwargs() -> dict:
     return kwargs
 
 
-def test_set_page_config_uses_docpilot_branding():
+def test_set_page_config_uses_doclore_branding():
     """正常系: `st.set_page_config` のタイトル・アイコンがリニューアル後の
-    ブランド名「DocPilot」に統一されている（プロトタイプ感のあった旧名称
+    ブランド名「Doclore」に統一されている（プロトタイプ感のあった旧名称
     「llm-practice RAGチャット」/「📚」に戻っていないことも合わせて確認する）。"""
     kwargs = _load_set_page_config_kwargs()
-    assert kwargs["page_title"] == "DocPilot | ドキュメントAIアシスタント"
-    assert kwargs["page_icon"] == "🧭"
+    assert kwargs["page_title"] == "Doclore | ドキュメントAIアシスタント"
+    assert kwargs["page_icon"] == "📖"
     assert kwargs["layout"] == "centered"
     assert "llm-practice" not in kwargs["page_title"]
