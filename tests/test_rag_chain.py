@@ -133,3 +133,18 @@ def test_retrieve_context_restricts_search_to_global_and_own_thread(monkeypatch)
 
     allowed_ids = set(store.last_call["filter"]["thread_id"]["$in"])
     assert allowed_ids == {rag_chain.GLOBAL_THREAD_ID, "thread-1"}
+
+
+# --- get_vectorstore のdocstring（Issue #81: CVE-2026-45829に関するセキュリティ注記） ---
+
+
+def test_get_vectorstore_docstring_documents_known_chromadb_cve():
+    """get_vectorstore() のdocstringに、既知のChromaDB脆弱性(CVE-2026-45829)への
+    言及と、本実装（ローカル永続化モードのみ）では該当しない旨の説明が
+    残っていることを確認する（将来のリファクタでうっかり削除されないためのガード）。
+    """
+    docstring = rag_chain.get_vectorstore.__doc__
+
+    assert docstring is not None
+    assert "CVE-2026-45829" in docstring
+    assert "persist_directory" in docstring

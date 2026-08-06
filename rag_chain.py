@@ -93,7 +93,18 @@ def get_embeddings() -> HuggingFaceEmbeddings:
 
 
 def get_vectorstore() -> Chroma:
-    """ローカル永続化されたChromaベクトルストアを返す（ingest.py と共通で使用）。"""
+    """ローカル永続化されたChromaベクトルストアを返す（ingest.py と共通で使用）。
+
+    セキュリティ上の注意（Issue #81で追跡）:
+    本実装はChromaDBをローカル永続化モード（persist_directory）のみで使用しており、
+    ChromaDBのHTTPサーバーAPI（/api/v2/...）を一切起動・公開していない。
+    そのため、CVE-2026-45829 / PYSEC-2026-311（chromadbの
+    /api/v2/tenants/{tenant}/databases/{db}/collections エンドポイントに対する
+    pre-authentication code injection脆弱性。1.0.0以降の全バージョンが対象で、
+    本Issue対応時点では修正版は未リリース）の攻撃経路は現状存在しない。
+    将来的にChromaDBをサーバーモードで動かす（例: Docker化、別プロセスとしての公開など）
+    実装変更を行う際は、この脆弱性の修正状況を必ず再確認すること。
+    """
     return Chroma(
         collection_name=COLLECTION_NAME,
         embedding_function=get_embeddings(),
