@@ -463,15 +463,15 @@ def test_rerun_with_signature_change_triggers_resync(monkeypatch):
 # --- 6. Issue #72: プロダクト感のあるUI/UXへのリニューアル（画面表示文言） ---
 
 
-def test_docpilot_branding_title_and_tagline_are_displayed():
-    """正常系: タイトルが新ブランド名「DocPilot」、その下にキャッチコピーが
+def test_doclore_branding_title_and_tagline_are_displayed():
+    """正常系: タイトルが新ブランド名「Doclore」、その下にキャッチコピーが
     表示される（`st.set_page_config` の page_title/page_icon 自体は要素ツリーに
     現れないメタ情報のため、静的検証は tests/test_theme_config.py 側で行う）。"""
     at = _run_app()
 
     assert at.exception == []
     assert len(at.title) == 1
-    assert at.title[0].value == "🧭 DocPilot"
+    assert at.title[0].value == "📖 Doclore"
     assert any(m.value == "##### あなたの資料から、迷わず答えへ。" for m in at.markdown)
 
 

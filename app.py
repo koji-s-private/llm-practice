@@ -1,5 +1,5 @@
 """
-ローカルドキュメントに質問できるRAGチャットアプリ「DocPilot」（Streamlit）。
+ローカルドキュメントに質問できるRAGチャットアプリ「Doclore」（Streamlit）。
 
 起動:
     python -m streamlit run app.py
@@ -29,14 +29,15 @@ from memory import conversation_count, new_thread_id, save_conversation
 from rag_chain import build_agent
 
 # Issue #72: 「ローカルドキュメントQ&A」という機能そのままの名称から、
-# プロダクトとして外向けに使える名称「DocPilot」に刷新（詳細な選定理由はPR説明を参照）。
+# プロダクトとして外向けに使える名称「DocPilot」に刷新したが、Issue #86で商標リスク
+# （既存の複数の類似サービスとの名称衝突）が判明したため「Doclore」に改称（詳細な選定理由はPR説明を参照）。
 # 配色・フォントは .streamlit/config.toml のカスタムテーマで設定している。
 st.set_page_config(
-    page_title="DocPilot | ドキュメントAIアシスタント",
-    page_icon="🧭",
+    page_title="Doclore | ドキュメントAIアシスタント",
+    page_icon="📖",
     layout="centered",
 )
-st.title("🧭 DocPilot")
+st.title("📖 Doclore")
 st.markdown("##### あなたの資料から、迷わず答えへ。")
 st.caption("data/ フォルダにファイルを置くと自動でDBに反映され、AIエージェントが検索しながら回答します。")
 
