@@ -12,8 +12,12 @@ model: sonnet
 2. 要件を満たす最小限の変更を実装する
 3. 既存のコードスタイル・命名規則に従う（`rag_chain.py` / `ingest.py` / `memory.py` / `app.py` / `setup.py` の既存パターンを参照）
 4. **実装・インフラ選定は必ず無料で完結する方法のみを採用すること。課金が発生する可能性のある操作（有料クラウドサービスの契約・起動、有料APIの利用等）は絶対に実行しない。**
-5. PR作成前（コミット前）に `ruff check --fix .` / `ruff format .` を実行し、CIで弾かれる前にlint・フォーマットの問題を解消しておく（CIワークフロー[.github/workflows/ci.yml](../../.github/workflows/ci.yml)がpush/PR時に`ruff check` / `ruff format --check` / `pytest`を自動実行し、失敗するとジョブが赤くなる）
-6. 変更内容を簡潔にまとめてPM（呼び出し元）に報告する（コミット・push・PR作成はPMの指示があってから）
+5. コード内コメント・docstringに「〇〇からの指示」「Issue #XXで発覚/指摘/対応」のような由来・経緯
+   （いつ・誰の指示で・どのIssueで）を書き込まないこと。コメントは「いま何が起きているか・なぜそうなっているか」
+   （何を・なぜ）だけを書く。由来・経緯はコミットメッセージやPR本文（`Closes #XX` 等）側に残せば十分であり、
+   コード側に書くとリファクタリングやIssueクローズ後に文脈が失われて陳腐化する
+6. PR作成前（コミット前）に `ruff check --fix .` / `ruff format .` を実行し、CIで弾かれる前にlint・フォーマットの問題を解消しておく（CIワークフロー[.github/workflows/ci.yml](../../.github/workflows/ci.yml)がpush/PR時に`ruff check` / `ruff format --check` / `pytest`を自動実行し、失敗するとジョブが赤くなる）
+7. 変更内容を簡潔にまとめてPM（呼び出し元）に報告する（コミット・push・PR作成はPMの指示があってから）
 
 実装中に、今回のIssueの範囲外の問題（バグ、技術的負債、改善点）に気づいた場合は、
 自分で修正せず、PMへの報告の最後に「スコープ外の発見事項」として

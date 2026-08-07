@@ -29,9 +29,6 @@ from ingest import DATA_DIR, data_dir_signature, safe_upload_dest, sync_data_dir
 from memory import conversation_count, new_thread_id, save_conversation
 from rag_chain import GLOBAL_THREAD_ID, build_agent
 
-# Issue #72: 「ローカルドキュメントQ&A」という機能そのままの名称から、
-# プロダクトとして外向けに使える名称「DocPilot」に刷新したが、Issue #86で商標リスク
-# （既存の複数の類似サービスとの名称衝突）が判明したため「Doclore」に改称（詳細な選定理由はPR説明を参照）。
 # 配色・フォントは .streamlit/config.toml のカスタムテーマで設定している。
 st.set_page_config(
     page_title="Doclore | ドキュメントAIアシスタント",
@@ -44,7 +41,7 @@ st.caption("data/ フォルダにファイルを置くと自動でDBに反映さ
 
 
 def _format_snippet(text: str, limit: int = 300) -> str:
-    """参照元プレビュー用に本文を整形する（Issue #4）。
+    """参照元プレビュー用に本文を整形する。
 
     単純に先頭limit文字で切ると、文や単語の途中で不自然に切れてしまい、
     limit未満の短いテキストにまで"..."が付いてしまう問題があった。
@@ -71,7 +68,7 @@ def _format_snippet(text: str, limit: int = 300) -> str:
 
 
 def _format_source_label(metadata: dict) -> str:
-    """参照元ドキュメントのメタデータから表示用ラベルを組み立てる（Issue #4）。
+    """参照元ドキュメントのメタデータから表示用ラベルを組み立てる。
 
     - source: ファイルパス → ファイル名のみを表示
     - thread_id: 会話ログ由来のチャンクにのみ付与される（GLOBAL_THREAD_IDは
@@ -119,7 +116,7 @@ def _sync_and_report(spinner_text: str) -> None:
 
 
 def _format_invoke_error_message(e: Exception) -> str:
-    """agent.invoke()失敗時のエラーメッセージを、実際に使用中のプロバイダに応じて出し分ける（Issue #52）。
+    """agent.invoke()失敗時のエラーメッセージを、実際に使用中のプロバイダに応じて出し分ける。
 
     setup.py の _build_model() はOllama→Anthropic→OpenAIの順にフォールバックするため、
     Claude/OpenAIで動作しているセッションでは「Ollamaサーバーに接続できません」という
@@ -145,7 +142,7 @@ def _start_new_chat() -> None:
 if "thread_id" not in st.session_state:
     st.session_state.thread_id = new_thread_id()
 
-# data/ の変更検知（Issue #70）: Streamlitはユーザー操作（チャット送信・ボタン押下・
+# data/ の変更検知: Streamlitはユーザー操作（チャット送信・ボタン押下・
 # トグル操作等）のたびにこのスクリプト全体を再実行する仕様なので、トップレベルで
 # 「ファイル数+最新mtime」だけの軽量シグネチャ（data_dir_signature、内容の読み込みや
 # 埋め込み処理は一切しない）を毎回計算し、前回値と比較する。これにより、
@@ -174,10 +171,9 @@ with st.sidebar:
         st.rerun()
 
     st.divider()
-    # Issue #71: 「会話ID」という生のID文字列を主語にした表示と、独立項目だった
-    # 「会話の自動ナレッジ化」トグルを、「今の会話を記憶に残すか」という1つの
-    # 設定にまとめる。session_stateのキー名（auto_save_memory）は既存の保存処理
-    # ロジックとの互換性のため変更しない。
+    # 「会話ID」という生のID文字列を主語にした表示ではなく、「今の会話を記憶に残すか」
+    # という1つの設定としてまとめて提示する。session_stateのキー名（auto_save_memory）
+    # は既存の保存処理ロジックとの互換性のため変更しない。
     with st.expander("🧠 記憶設定", expanded=False):
         st.caption("今のチャットでのやりとりを覚えておいて、次回以降の質問の回答材料に使うかどうかを設定します。")
         st.session_state.auto_save_memory = st.toggle(
@@ -268,6 +264,6 @@ if user_input:
         # 保存したログファイルのDB反映は、この場ですぐには行わない。
         # 次回このスクリプトが再実行されたタイミング（次の会話・ボタン操作・リロード等）で、
         # トップレベルの軽量シグネチャチェックがファイル数の増加を検知し、自動的に同期される
-        # （Issue #70。チャット1往復ごとに毎回フル同期していた従来実装より軽量）。
+        # （チャット1往復ごとに毎回フル同期する実装より軽量）。
         if st.session_state.auto_save_memory:
             save_conversation(user_input, answer, st.session_state.thread_id)

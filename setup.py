@@ -32,8 +32,7 @@ OLLAMA_PORT = int(os.environ.get("OLLAMA_PORT", "11434"))
 OLLAMA_MODEL = os.environ.get("OLLAMA_MODEL", "llama3.1")
 
 # 現在実際に使用しているプロバイダ名（"ollama" / "anthropic" / "openai"）。
-# _build_model() 実行時に確定させ、app.py 側から参照してエラーメッセージの出し分けに使う
-# （Issue #52: agent.invoke()失敗時のメッセージが常にOllama決め打ちだった問題への対応）。
+# _build_model() 実行時に確定させ、app.py 側から参照してエラーメッセージの出し分けに使う。
 CURRENT_PROVIDER: str | None = None
 
 
