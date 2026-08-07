@@ -44,7 +44,7 @@ def test_grade_relevance_returns_empty_for_no_candidates():
 
 def test_grade_relevance_parses_comma_separated_indices(monkeypatch):
     docs = [_FakeDocument("a"), _FakeDocument("b"), _FakeDocument("c")]
-    fake_model = SimpleNamespace(invoke=lambda prompt: SimpleNamespace(content="1,3"))
+    fake_model = SimpleNamespace(invoke=lambda prompt: SimpleNamespace(content="回答:1,3"))
     monkeypatch.setattr(rag_chain, "model", fake_model)
 
     assert rag_chain._grade_relevance("質問", docs) == [0, 2]
@@ -52,7 +52,7 @@ def test_grade_relevance_parses_comma_separated_indices(monkeypatch):
 
 def test_grade_relevance_returns_empty_when_llm_says_none(monkeypatch):
     docs = [_FakeDocument("a"), _FakeDocument("b")]
-    fake_model = SimpleNamespace(invoke=lambda prompt: SimpleNamespace(content="なし"))
+    fake_model = SimpleNamespace(invoke=lambda prompt: SimpleNamespace(content="回答:なし"))
     monkeypatch.setattr(rag_chain, "model", fake_model)
 
     assert rag_chain._grade_relevance("質問", docs) == []
@@ -61,10 +61,50 @@ def test_grade_relevance_returns_empty_when_llm_says_none(monkeypatch):
 def test_grade_relevance_ignores_out_of_range_indices(monkeypatch):
     docs = [_FakeDocument("a"), _FakeDocument("b")]
     # 候補は2件しかないのに "5" という範囲外の番号を返してきた場合は無視する
-    fake_model = SimpleNamespace(invoke=lambda prompt: SimpleNamespace(content="5"))
+    fake_model = SimpleNamespace(invoke=lambda prompt: SimpleNamespace(content="回答:5"))
     monkeypatch.setattr(rag_chain, "model", fake_model)
 
     assert rag_chain._grade_relevance("質問", docs) == []
+
+
+def test_grade_relevance_ignores_numbers_in_freeform_explanation_lines(monkeypatch):
+    """Issue #53のリグレッションテスト。
+
+    LLMが1行目の「回答:」形式は守りつつ、2行目以降に自由文の説明を付け足した場合、
+    その説明文中に含まれる無関係な数字（例: 年号の2024）まで拾ってしまわないことを確認する。
+    """
+    docs = [_FakeDocument("a"), _FakeDocument("b"), _FakeDocument("c")]
+    content = "回答:1,3\n文書1は2024年に関する内容でした。文書3が最も関連しています。"
+    fake_model = SimpleNamespace(invoke=lambda prompt: SimpleNamespace(content=content))
+    monkeypatch.setattr(rag_chain, "model", fake_model)
+
+    assert rag_chain._grade_relevance("質問", docs) == [0, 2]
+
+
+def test_grade_relevance_falls_back_to_empty_when_answer_prefix_missing(monkeypatch):
+    """Issue #53のリグレッションテスト。
+
+    LLMが「回答:」形式のプレフィックス行を一切出力せず、完全に自由文（例:
+    「文書1と文書3が関連しています。」）で回答した場合、誤って文書を採用せず
+    安全側（空リスト）にフォールバックすることを確認する。
+    """
+    docs = [_FakeDocument("a"), _FakeDocument("b"), _FakeDocument("c")]
+    content = "文書1と文書3が関連しています。"
+    fake_model = SimpleNamespace(invoke=lambda prompt: SimpleNamespace(content=content))
+    monkeypatch.setattr(rag_chain, "model", fake_model)
+
+    assert rag_chain._grade_relevance("質問", docs) == []
+
+
+def test_grade_relevance_parses_fullwidth_colon_answer_prefix(monkeypatch):
+    """Issue #53のリグレッションテスト。全角コロン「：」を使った「回答：1,3」形式でも
+    半角コロンの場合と同様に正しくパースできることを確認する。
+    """
+    docs = [_FakeDocument("a"), _FakeDocument("b"), _FakeDocument("c")]
+    fake_model = SimpleNamespace(invoke=lambda prompt: SimpleNamespace(content="回答：1,3"))
+    monkeypatch.setattr(rag_chain, "model", fake_model)
+
+    assert rag_chain._grade_relevance("質問", docs) == [0, 2]
 
 
 # --- retrieve_context (build_agent の中で作られる検索ツール) ---

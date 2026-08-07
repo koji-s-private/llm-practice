@@ -113,11 +113,19 @@ def get_vectorstore() -> Chroma:
 
 
 def _grade_relevance(query: str, docs: list) -> list[int]:
-    """候補文書をLLMに採点させ、質問に実際に使えるものだけのインデックス一覧を返す。
+    r"""候補文書をLLMに採点させ、質問に実際に使えるものだけのインデックス一覧を返す。
 
     ベクトル類似度だけだと「単語は近いが意味的には無関係」な文書（例:
     人体骨格の一覧表が無関係な質問にヒットする等）を弾けないため、
     ここでLLM自身に関連性を判定させて絞り込む（reranking相当）。
+
+    Issue #53: 以前は応答全体を re.findall(r"\d+", text) で無差別にスキャンしていたため、
+    LLMが指示に厳密に従わず「文書1は2024年の話で関連しません。文書3が関連しています。」
+    のような自由文で答えた場合、本文中の無関係な数字（1, 2024）まで関連文書番号として
+    誤って拾ってしまう問題があった。そのため、LLMには「回答:」から始まる1行だけに
+    判定結果を書くよう厳密なフォーマットを強制し、パース処理もその行だけを対象にする。
+    LLMがフォーマットを完全に無視して「回答:」行を出力しなかった場合は、
+    誤って関連文書を拾うより安全なので、全除外（空リスト）にフォールバックする。
     """
     if not docs:
         return []
@@ -125,16 +133,22 @@ def _grade_relevance(query: str, docs: list) -> list[int]:
     listing = "\n\n".join(f"[{i}] {doc.page_content[:300]}" for i, doc in enumerate(docs, start=1))
     prompt = (
         f"質問: {query}\n\n"
-        "以下は検索でヒットした候補文書です。質問に実際に答えるのに使える文書の番号だけを"
-        "カンマ区切りの数字で答えてください（例: 1,3）。使えるものが一つもなければ"
-        "「なし」とだけ出力し、それ以外の文章は一切書かないでください。\n\n"
+        "以下は検索でヒットした候補文書です。質問に実際に答えるのに使える文書の番号を判定してください。\n"
+        "回答は必ず1行目に「回答:」から始まる行だけを出力し、その行には使える文書番号のカンマ区切りリスト"
+        "または「なし」だけを書いてください（例: 回答:1,3 / 回答:なし）。理由や説明を書きたい場合は"
+        "2行目以降に書いてください（判定には使用しません）が、1行目にはそれらを含めないでください。\n\n"
         f"{listing}"
     )
     response = model.invoke(prompt)
     text = response.content.strip()
-    if "なし" in text:
+    match = re.search(r"^回答[:：]\s*(.*)$", text, re.MULTILINE)
+    if not match:
+        # フォーマット違反時は安全側（全除外）にフォールバックする
         return []
-    return sorted({int(n) - 1 for n in re.findall(r"\d+", text) if 0 < int(n) <= len(docs)})
+    answer_line = match.group(1).strip()
+    if "なし" in answer_line:
+        return []
+    return sorted({int(n) - 1 for n in re.findall(r"\d+", answer_line) if 0 < int(n) <= len(docs)})
 
 
 def build_agent(thread_id: str = GLOBAL_THREAD_ID):
