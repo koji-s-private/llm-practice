@@ -26,7 +26,7 @@ from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 
 from ingest import DATA_DIR, data_dir_signature, safe_upload_dest, sync_data_dir
 from memory import conversation_count, new_thread_id, save_conversation
-from rag_chain import build_agent
+from rag_chain import GLOBAL_THREAD_ID, build_agent
 
 # Issue #72: 「ローカルドキュメントQ&A」という機能そのままの名称から、
 # プロダクトとして外向けに使える名称「DocPilot」に刷新したが、Issue #86で商標リスク
@@ -40,6 +40,54 @@ st.set_page_config(
 st.title("📖 Doclore")
 st.markdown("##### あなたの資料から、迷わず答えへ。")
 st.caption("data/ フォルダにファイルを置くと自動でDBに反映され、AIエージェントが検索しながら回答します。")
+
+
+def _format_snippet(text: str, limit: int = 300) -> str:
+    """参照元プレビュー用に本文を整形する（Issue #4）。
+
+    単純に先頭limit文字で切ると、文や単語の途中で不自然に切れてしまい、
+    limit未満の短いテキストにまで"..."が付いてしまう問題があった。
+    - limit文字以内に収まる場合はそのまま返し、"..."は付けない。
+    - limitを超える場合は、句点・改行などの区切り文字のうち最も末尾に近いものを探し、
+      そこで区切る（区切り位置が手前すぎる場合は意味が無いのでlimitの半分より
+      後ろにある場合のみ採用し、見つからなければ直近の空白で単語の途中を避けて切る）。
+    """
+    stripped = text.strip()
+    if len(stripped) <= limit:
+        return stripped
+
+    truncated = stripped[:limit]
+    break_chars = "。\n！？!?"
+    best_pos = max((truncated.rfind(ch) for ch in break_chars), default=-1)
+    if best_pos >= limit // 2:
+        truncated = truncated[: best_pos + 1]
+    else:
+        space_pos = truncated.rfind(" ")
+        if space_pos >= limit // 2:
+            truncated = truncated[:space_pos]
+
+    return truncated.rstrip() + "..."
+
+
+def _format_source_label(metadata: dict) -> str:
+    """参照元ドキュメントのメタデータから表示用ラベルを組み立てる（Issue #4）。
+
+    - source: ファイルパス → ファイル名のみを表示
+    - thread_id: 会話ログ由来のチャンクにのみ付与される（GLOBAL_THREAD_IDは
+      全スレッド共通ドキュメントを表すため対象外）。付与されている場合は
+      「会話ログ（スレッド: xxx）」であることが分かるように先頭に付ける
+    - page: PDFのページ番号（0始まり）があれば「（p.N）」を末尾に付ける
+    """
+    source = metadata.get("source", "unknown")
+    page = metadata.get("page")
+    thread_id = metadata.get("thread_id")
+
+    label = Path(source).name if source != "unknown" else source
+    if thread_id and thread_id != GLOBAL_THREAD_ID:
+        label = f"会話ログ（スレッド: {thread_id}） - {label}"
+    if page is not None:
+        label += f"（p.{page + 1}）"
+    return label
 
 
 def _sync_and_report(spinner_text: str) -> None:
@@ -187,13 +235,9 @@ if user_input:
                 if sources:
                     with st.expander("参照した箇所を見る"):
                         for i, doc in enumerate(sources, start=1):
-                            source = doc.metadata.get("source", "unknown")
-                            page = doc.metadata.get("page")
-                            label = Path(source).name if source != "unknown" else source
-                            if page is not None:
-                                label += f"（p.{page + 1}）"
+                            label = _format_source_label(doc.metadata)
                             st.markdown(f"**[{i}] {label}**")
-                            st.text(doc.page_content[:300] + "...")
+                            st.text(_format_snippet(doc.page_content))
         except Exception as e:
             st.error(
                 "回答の生成に失敗しました。Ollamaサーバーに接続できません。"
