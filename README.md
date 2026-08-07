@@ -238,6 +238,23 @@ HTTP API層を提供する。
 > 新しい技術・ライブラリを追加した際の更新ルールは [AGENTS.md](AGENTS.md) の
 > 「コード品質」セクションを参照してください。
 
+### 依存パッケージのバージョン管理・更新方針（Issue #64）
+
+`requirements.txt`に記載の全パッケージは、動作確認済みのバージョンに`==`で固定しています。
+LangChain関連は短期間で破壊的変更が入った実績がある（`RetrievalQA`/`create_retrieval_chain`の
+非推奨化など）ため、`pip install -r requirements.txt`実行のたびに意図せず最新版へ
+アップグレードされてCIやローカル環境が突然壊れることを防ぐのが目的です。
+
+- **通常運用**: バージョン固定を維持し、`pip`による自動アップグレードは行いません。
+- **更新のタイミング**: 新機能で新しいAPIが必要になった場合、または下記のセキュリティ監視で
+  脆弱性が見つかった場合に、手動でバージョンを上げてから動作確認（`python -m pytest`等）を行います。
+- **脆弱性監視**: 追加費用なしで使える [GitHub Dependabot alerts](https://docs.github.com/ja/code-security/dependabot/dependabot-alerts)
+  と、手動実行の[pip-audit](https://pypi.org/project/pip-audit/)（`pip install --user pip-audit` &&
+  `pip-audit -r requirements.txt`）を組み合わせて監視します（詳細は[AGENTS.md](AGENTS.md)の
+  「コード品質」セクション参照）。Dependabotの自動更新PR（`.github/dependabot.yml`によるバージョン
+  自動引き上げPR）は現時点では導入せず、alertsによる検知のみを利用します（自動更新PRの導入は
+  必要になった時点で別Issueとして検討します）。
+
 ## 技術構成とベストプラクティスのポイント
 
 2026年時点のLangChain公式ドキュメント（[docs.langchain.com/oss/python/langchain/rag](https://docs.langchain.com/oss/python/langchain/rag)）が
