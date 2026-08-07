@@ -1,6 +1,7 @@
 import getpass
 import os
 import socket
+import sys
 
 from langchain.chat_models import init_chat_model
 
@@ -54,6 +55,15 @@ def _build_model():
 
     openai_key = os.environ.get("OPENAI_API_KEY")
     if not openai_key:
+        # 標準入力がTTYでない非対話環境（CI・Dockerのバックグラウンド起動等）では
+        # getpass()が入力を待ち続けて無限にブロック（環境によってはEOFErrorで異常終了）するため、
+        # その場合は対話入力を試みずに明確なエラーメッセージを出して即座に終了する。
+        if not sys.stdin.isatty():
+            raise RuntimeError(
+                "Ollamaが起動しておらず、ANTHROPIC_API_KEY も OPENAI_API_KEY も未設定です。"
+                "非対話環境のため対話入力を求めることができません。"
+                "Ollamaを起動するか、環境変数 ANTHROPIC_API_KEY / OPENAI_API_KEY を設定してください。"
+            )
         openai_key = getpass.getpass(
             "Ollamaが起動しておらず、ANTHROPIC_API_KEY も OPENAI_API_KEY も未設定です。"
             "OpenAI APIキーを入力してください: "
