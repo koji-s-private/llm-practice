@@ -23,16 +23,17 @@ Issue #88（フロントエンド移行 Step1: API層の切り出し）で、既
 """
 
 import json
+import re
 from collections.abc import Generator
 
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 from langchain_core.messages import AIMessage, HumanMessage
 from pydantic import BaseModel
 
 from ingest import sync_data_dir
-from memory import conversation_count, new_thread_id, save_conversation
+from memory import CONVERSATIONS_DIR, conversation_count, new_thread_id, save_conversation
 from rag_chain import build_agent
 
 app = FastAPI(
@@ -54,6 +55,28 @@ app.add_middleware(
 def health() -> dict:
     """疎通確認用のヘルスチェックエンドポイント（サーバがローカル起動できているかの確認用）。"""
     return {"status": "ok"}
+
+
+# --- thread_id のバリデーション（パストラバーサル対策） ---
+
+# memory.py の save_conversation() / conversation_count() は thread_id をそのまま
+# `CONVERSATIONS_DIR / thread_id` としてファイルシステムパスに組み込む。これまで
+# thread_id は app.py（Streamlit版）が new_thread_id()（uuid4().hex[:8]）で生成した
+# サーバー内部値のみだったが、本API層ではHTTPリクエストの生の thread_id が直接渡って
+# くるため、絶対パスや `../` を含む値を許可すると data/conversations/ の外への
+# 任意ファイル書き込み・情報漏えいにつながる。ingest.py の safe_upload_dest() と
+# 同様の考え方で、許可する文字種を制限した上で resolve() 後の実パスも念のため検証する。
+_THREAD_ID_PATTERN = re.compile(r"^[A-Za-z0-9_-]+$")
+
+
+def _validate_thread_id(thread_id: str) -> str:
+    """thread_id がファイルパスとして安全か検証し、不正であれば400エラーを送出する。"""
+    if not thread_id or not _THREAD_ID_PATTERN.fullmatch(thread_id):
+        raise HTTPException(status_code=400, detail="thread_id の形式が不正です")
+    resolved = (CONVERSATIONS_DIR / thread_id).resolve()
+    if resolved.parent != CONVERSATIONS_DIR.resolve():
+        raise HTTPException(status_code=400, detail="thread_id の形式が不正です")
+    return thread_id
 
 
 # --- チャット応答（ストリーミング） ---
@@ -117,7 +140,12 @@ def chat(request: ChatRequest) -> StreamingResponse:
     現行Streamlit版（app.py）の `agent.invoke()` による一括回答表示と異なり、
     トークンが生成され次第クライアントに送信するため、フロントエンド側で
     逐次表示（タイプライター表示）を実現できる。
+
+    thread_id はファイルパスには使われない（Chromaのメタデータフィルタとしてのみ使用）が、
+    クライアントからの直接入力である点は他のエンドポイントと同じなので、一貫性のため
+    同じ形式検証を行う。
     """
+    _validate_thread_id(request.thread_id)
     return StreamingResponse(
         _stream_chat_response(request.thread_id, request.message, request.history),
         media_type="text/event-stream",
@@ -167,6 +195,8 @@ class ConversationCountResponse(BaseModel):
 @app.get("/api/conversations/count", response_model=ConversationCountResponse)
 def get_conversation_count(thread_id: str | None = None) -> dict:
     """保存済み会話ログの件数を取得する（thread_id省略時は全スレッド合計）。"""
+    if thread_id is not None:
+        _validate_thread_id(thread_id)
     return {"thread_id": thread_id, "count": conversation_count(thread_id)}
 
 
@@ -190,5 +220,6 @@ def save_conversation_endpoint(request: SaveConversationRequest) -> dict:
 
     保存後のベクトルDBへの反映は行わない（Streamlit版と同様、次回の /api/sync 呼び出しに委ねる）。
     """
+    _validate_thread_id(request.thread_id)
     path = save_conversation(request.question, request.answer, request.thread_id)
     return {"path": str(path)}

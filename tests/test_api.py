@@ -163,6 +163,29 @@ def test_chat_missing_required_field_returns_422(client):
     assert response.status_code == 422
 
 
+# --- thread_id のパストラバーサル対策 ---
+
+_MALICIOUS_THREAD_IDS = [
+    "/etc/pwned_by_thread_id",
+    "../../etc/passwd",
+    "..",
+    "sub/dir",
+    "",
+]
+
+
+@pytest.mark.parametrize("thread_id", _MALICIOUS_THREAD_IDS)
+def test_chat_rejects_path_traversal_thread_id(client, monkeypatch, thread_id):
+    """絶対パス・相対トラバーサル等の不正なthread_idは400で拒否され、agentは呼ばれない。"""
+    fake_agent = _FakeAgent(chunks=[_FakeChunk("応答")])
+    monkeypatch.setattr(api_main, "build_agent", lambda thread_id: fake_agent)
+
+    response = client.post("/api/chat", json={"thread_id": thread_id, "message": "質問", "history": []})
+
+    assert response.status_code == 400
+    assert fake_agent.stream_calls == []
+
+
 # --- POST /api/sync ---
 
 
@@ -250,6 +273,23 @@ def test_get_conversation_count_zero_boundary(client, monkeypatch):
     assert response.json()["count"] == 0
 
 
+@pytest.mark.parametrize("thread_id", _MALICIOUS_THREAD_IDS)
+def test_get_conversation_count_rejects_path_traversal_thread_id(client, monkeypatch, thread_id):
+    """絶対パス・相対トラバーサル等の不正なthread_idは400で拒否され、conversation_count()は呼ばれない。"""
+    called = {"count": 0}
+
+    def _fake_count(thread_id=None):
+        called["count"] += 1
+        return 0
+
+    monkeypatch.setattr(api_main, "conversation_count", _fake_count)
+
+    response = client.get("/api/conversations/count", params={"thread_id": thread_id})
+
+    assert response.status_code == 400
+    assert called["count"] == 0
+
+
 # --- POST /api/conversations/save ---
 
 
@@ -277,3 +317,26 @@ def test_save_conversation_missing_field_returns_422(client):
     response = client.post("/api/conversations/save", json={"question": "質問だけ"})
 
     assert response.status_code == 422
+
+
+@pytest.mark.parametrize("thread_id", _MALICIOUS_THREAD_IDS)
+def test_save_conversation_rejects_path_traversal_thread_id(client, monkeypatch, thread_id):
+    """絶対パス・相対トラバーサル等の不正なthread_idは400で拒否され、save_conversation()は呼ばれない。
+
+    data/conversations/ の外への任意ファイル書き込みを防ぐための検証（PR #97 レビュー指摘対応）。
+    """
+    called = {"count": 0}
+
+    def _fake_save(question, answer, thread_id):
+        called["count"] += 1
+        return None
+
+    monkeypatch.setattr(api_main, "save_conversation", _fake_save)
+
+    response = client.post(
+        "/api/conversations/save",
+        json={"question": "質問内容", "answer": "回答内容", "thread_id": thread_id},
+    )
+
+    assert response.status_code == 400
+    assert called["count"] == 0
