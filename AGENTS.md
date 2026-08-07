@@ -50,6 +50,10 @@ GitHub Actions上で動くAIチームによって定期的にメンテナンス�
   `requirements.txt` への常設追加は不要）や GitHub Dependabot alerts（追加費用なしで利用可能）を使い、
   `pip-audit -r requirements.txt` のように手動実行して確認する。CIへの自動組み込みはIssue #5（CI導入）
   側の検討に委ねるため、本項では手動実行での確認手順の明文化にとどめる
+- テストを実行するAIチームのワークフロー（`ai-team.yml` / `pr-conflict-guard.yml` / `ci-failure-guard.yml`）は
+  `actions/checkout` の直後に `pip install -r requirements.txt` を実行済みのため、coder/qa-engineerが
+  動く時点で依存パッケージはインストール済みである。新規追加した依存など、それでも不足している場合は
+  サブエージェント自身が `pip install` を追加実行してよい
 
 ## GitHub Projects 運用
 - Project board: [koji-s-private/llm-practice](https://github.com/orgs/koji-s-private/projects/3)（Projects v2）

@@ -87,6 +87,15 @@ jobs:
     steps:
       - uses: actions/checkout@v5
 
+      - name: Python セットアップ
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: "pip"
+
+      - name: 依存パッケージのインストール
+        run: pip install -r requirements.txt
+
       - name: Sanitize issue number input
         id: sanitize
         run: |
