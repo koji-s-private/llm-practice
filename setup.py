@@ -31,6 +31,11 @@ OLLAMA_HOST = os.environ.get("OLLAMA_HOST", "localhost")
 OLLAMA_PORT = int(os.environ.get("OLLAMA_PORT", "11434"))
 OLLAMA_MODEL = os.environ.get("OLLAMA_MODEL", "llama3.1")
 
+# 現在実際に使用しているプロバイダ名（"ollama" / "anthropic" / "openai"）。
+# _build_model() 実行時に確定させ、app.py 側から参照してエラーメッセージの出し分けに使う
+# （Issue #52: agent.invoke()失敗時のメッセージが常にOllama決め打ちだった問題への対応）。
+CURRENT_PROVIDER: str | None = None
+
 
 def _ollama_available() -> bool:
     """ローカルでOllamaサーバーが起動しているかを軽くチェックする（起動が遅くならないよう短いタイムアウト）。"""
@@ -44,13 +49,21 @@ def _ollama_available() -> bool:
 
 
 def _build_model():
-    """優先順位: 1) Ollama（無料・ローカル） 2) ANTHROPIC_API_KEY 3) OPENAI_API_KEY。"""
+    """優先順位: 1) Ollama（無料・ローカル） 2) ANTHROPIC_API_KEY 3) OPENAI_API_KEY。
+
+    選定したプロバイダ名はモジュールレベル変数 CURRENT_PROVIDER にも記録する
+    （app.py が agent.invoke() 失敗時のエラーメッセージ出し分けに使う）。
+    """
+    global CURRENT_PROVIDER
+
     if _ollama_available():
         print(f"[setup] Ollama を検出: {OLLAMA_MODEL}（ローカル・無料）を使用します。")
+        CURRENT_PROVIDER = "ollama"
         return init_chat_model(OLLAMA_MODEL, model_provider="ollama")
 
     if os.environ.get("ANTHROPIC_API_KEY"):
         print("[setup] ANTHROPIC_API_KEY を検出: Claude (claude-sonnet-5) を使用します。")
+        CURRENT_PROVIDER = "anthropic"
         return init_chat_model("claude-sonnet-5", model_provider="anthropic")
 
     openai_key = os.environ.get("OPENAI_API_KEY")
@@ -71,6 +84,7 @@ def _build_model():
         os.environ["OPENAI_API_KEY"] = openai_key
 
     print("[setup] Ollama未起動・ANTHROPIC_API_KEY未設定のため、OpenAI (gpt-5-chat-latest) にフォールバックします。")
+    CURRENT_PROVIDER = "openai"
     return init_chat_model("gpt-5-chat-latest", model_provider="openai")
 
 
