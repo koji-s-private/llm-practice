@@ -21,6 +21,10 @@ langchain-docling
 # UI
 streamlit
 
+# バックエンドAPI（フロントエンド移行 Step1, Issue #88）
+fastapi
+uvicorn[standard]
+
 # 環境変数読み込み
 python-dotenv
 
