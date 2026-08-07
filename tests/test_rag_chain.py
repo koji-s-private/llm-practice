@@ -44,7 +44,7 @@ def test_grade_relevance_returns_empty_for_no_candidates():
 
 def test_grade_relevance_parses_comma_separated_indices(monkeypatch):
     docs = [_FakeDocument("a"), _FakeDocument("b"), _FakeDocument("c")]
-    fake_model = SimpleNamespace(invoke=lambda prompt: SimpleNamespace(content="1,3"))
+    fake_model = SimpleNamespace(invoke=lambda prompt: SimpleNamespace(content="回答:1,3"))
     monkeypatch.setattr(rag_chain, "model", fake_model)
 
     assert rag_chain._grade_relevance("質問", docs) == [0, 2]
@@ -52,7 +52,7 @@ def test_grade_relevance_parses_comma_separated_indices(monkeypatch):
 
 def test_grade_relevance_returns_empty_when_llm_says_none(monkeypatch):
     docs = [_FakeDocument("a"), _FakeDocument("b")]
-    fake_model = SimpleNamespace(invoke=lambda prompt: SimpleNamespace(content="なし"))
+    fake_model = SimpleNamespace(invoke=lambda prompt: SimpleNamespace(content="回答:なし"))
     monkeypatch.setattr(rag_chain, "model", fake_model)
 
     assert rag_chain._grade_relevance("質問", docs) == []
@@ -61,7 +61,7 @@ def test_grade_relevance_returns_empty_when_llm_says_none(monkeypatch):
 def test_grade_relevance_ignores_out_of_range_indices(monkeypatch):
     docs = [_FakeDocument("a"), _FakeDocument("b")]
     # 候補は2件しかないのに "5" という範囲外の番号を返してきた場合は無視する
-    fake_model = SimpleNamespace(invoke=lambda prompt: SimpleNamespace(content="5"))
+    fake_model = SimpleNamespace(invoke=lambda prompt: SimpleNamespace(content="回答:5"))
     monkeypatch.setattr(rag_chain, "model", fake_model)
 
     assert rag_chain._grade_relevance("質問", docs) == []
