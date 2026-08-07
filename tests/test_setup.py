@@ -149,3 +149,33 @@ def test_setup_module_still_imports_getpass_module_directly():
     テストでの `monkeypatch.setattr(setup.getpass, "getpass", ...)` が意味を持つための前提条件。
     """
     assert setup.getpass is getpass
+
+
+# --- CURRENT_PROVIDER（Issue #52: app.pyのエラーメッセージ出し分け用）の更新確認 ---
+
+
+def test_build_model_sets_current_provider_ollama(monkeypatch):
+    monkeypatch.setattr(setup, "_ollama_available", lambda: True)
+
+    setup._build_model()
+
+    assert setup.CURRENT_PROVIDER == "ollama"
+
+
+def test_build_model_sets_current_provider_anthropic(monkeypatch):
+    monkeypatch.setattr(setup, "_ollama_available", lambda: False)
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "test-dummy-key")
+
+    setup._build_model()
+
+    assert setup.CURRENT_PROVIDER == "anthropic"
+
+
+def test_build_model_sets_current_provider_openai(monkeypatch):
+    monkeypatch.setattr(setup, "_ollama_available", lambda: False)
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    monkeypatch.setenv("OPENAI_API_KEY", "already-set-key")
+
+    setup._build_model()
+
+    assert setup.CURRENT_PROVIDER == "openai"

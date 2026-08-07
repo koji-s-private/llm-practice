@@ -192,9 +192,12 @@ def test_chat_success_appends_history_and_shows_answer(monkeypatch):
     assert messages[1].content == "これが回答です"
 
 
-def test_chat_invoke_failure_shows_error_and_does_not_crash(monkeypatch):
-    """異常系: agent.invoke() が例外（Ollama未起動を想定）を送出した場合、
-    st.error でメッセージが表示され、会話履歴には追加されない。"""
+def test_chat_invoke_failure_shows_ollama_message_when_provider_is_ollama(monkeypatch):
+    """異常系（Issue #52）: 使用中プロバイダがOllamaの場合、従来通り
+    「Ollamaサーバーに接続できません」というメッセージが表示され、会話履歴には追加されない。"""
+    import setup
+
+    monkeypatch.setattr(setup, "CURRENT_PROVIDER", "ollama")
     fake_agent = _FakeAgent(exc=ConnectionError("connection refused"))
     monkeypatch.setattr(rag_chain, "build_agent", lambda thread_id=None: fake_agent)
 
@@ -206,6 +209,49 @@ def test_chat_invoke_failure_shows_error_and_does_not_crash(monkeypatch):
     assert "Ollamaサーバーに接続できません" in at.error[0].value
     assert "connection refused" in at.error[0].value
     # 例外時は履歴に追加されない（answerがNoneのまま後続処理がスキップされる）
+    assert at.session_state["messages"] == []
+
+
+@pytest.mark.parametrize("provider", ["anthropic", "openai"])
+def test_chat_invoke_failure_shows_api_message_when_provider_is_cloud(monkeypatch, provider):
+    """異常系（Issue #52）: 使用中プロバイダがAnthropic/OpenAIの場合、
+    Ollama決め打ちの誤ったメッセージではなく、APIへの接続失敗を示す汎用的な文言が表示される。"""
+    import setup
+
+    monkeypatch.setattr(setup, "CURRENT_PROVIDER", provider)
+    fake_agent = _FakeAgent(exc=RuntimeError("invalid api key"))
+    monkeypatch.setattr(rag_chain, "build_agent", lambda thread_id=None: fake_agent)
+
+    at = _run_app()
+    at.chat_input[0].set_value("質問です").run()
+
+    assert at.exception == []
+    assert len(at.error) == 1
+    assert "Ollamaサーバーに接続できません" not in at.error[0].value
+    assert "APIへの接続に失敗しました" in at.error[0].value
+    assert "invalid api key" in at.error[0].value
+    assert at.session_state["messages"] == []
+
+
+def test_chat_invoke_failure_shows_generic_fallback_when_provider_is_none(monkeypatch):
+    """境界値（Issue #52）: CURRENT_PROVIDER が未設定（None、想定外の状態）の場合、
+    Ollama決め打ちの文言にもAPI決め打ちの文言にもならず、汎用的なフォールバック文言が
+    表示される（_build_model()が何らかの理由で未実行・失敗した場合の保険）。"""
+    import setup
+
+    monkeypatch.setattr(setup, "CURRENT_PROVIDER", None)
+    fake_agent = _FakeAgent(exc=RuntimeError("unexpected"))
+    monkeypatch.setattr(rag_chain, "build_agent", lambda thread_id=None: fake_agent)
+
+    at = _run_app()
+    at.chat_input[0].set_value("質問です").run()
+
+    assert at.exception == []
+    assert len(at.error) == 1
+    assert "Ollamaサーバーに接続できません" not in at.error[0].value
+    assert "APIへの接続に失敗しました" not in at.error[0].value
+    assert "モデルへの接続に失敗しました" in at.error[0].value
+    assert "unexpected" in at.error[0].value
     assert at.session_state["messages"] == []
 
 

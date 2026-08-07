@@ -24,6 +24,7 @@ from pathlib import Path
 import streamlit as st
 from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 
+import setup
 from ingest import DATA_DIR, data_dir_signature, safe_upload_dest, sync_data_dir
 from memory import conversation_count, new_thread_id, save_conversation
 from rag_chain import GLOBAL_THREAD_ID, build_agent
@@ -115,6 +116,24 @@ def _sync_and_report(spinner_text: str) -> None:
     # 軽量チェックが再実行されても「変更なし」と判定され、無駄な二重同期が走らない
     # （手動の再同期ボタン・アップロード時の呼び出しでも共通してこの関数を通るため）。
     st.session_state.data_dir_signature = data_dir_signature()
+
+
+def _format_invoke_error_message(e: Exception) -> str:
+    """agent.invoke()失敗時のエラーメッセージを、実際に使用中のプロバイダに応じて出し分ける（Issue #52）。
+
+    setup.py の _build_model() はOllama→Anthropic→OpenAIの順にフォールバックするため、
+    Claude/OpenAIで動作しているセッションでは「Ollamaサーバーに接続できません」という
+    固定メッセージは原因と食い違い、ユーザーを誤った方向（Ollamaの起動確認）に
+    誘導してしまう。setup.CURRENT_PROVIDER を参照し、実際の使用プロバイダに即した文言にする。
+    """
+    if setup.CURRENT_PROVIDER == "ollama":
+        cause = "Ollamaサーバーに接続できません。起動しているか確認してください。"
+    elif setup.CURRENT_PROVIDER in ("anthropic", "openai"):
+        cause = "APIへの接続に失敗しました。APIキーやネットワーク接続、レート制限などをご確認ください。"
+    else:
+        # CURRENT_PROVIDER未設定（想定外のケース）でも汎用的な文言でフォールバックする
+        cause = "モデルへの接続に失敗しました。"
+    return f"回答の生成に失敗しました。{cause}（詳細: {e}）"
 
 
 def _start_new_chat() -> None:
@@ -239,10 +258,7 @@ if user_input:
                             st.markdown(f"**[{i}] {label}**")
                             st.text(_format_snippet(doc.page_content))
         except Exception as e:
-            st.error(
-                "回答の生成に失敗しました。Ollamaサーバーに接続できません。"
-                f"起動しているか確認してください。（詳細: {e}）"
-            )
+            st.error(_format_invoke_error_message(e))
 
     if answer is not None:
         st.session_state.messages.append(HumanMessage(content=user_input))
