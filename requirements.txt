@@ -1,35 +1,38 @@
 # LLM本体（LangChainチュートリアル用）
-langchain[openai]
-langchain-anthropic       # Claude連携（フォールバック用）
-langchain-ollama          # Ollama連携（無料・ローカルLLM。検出できれば最優先で使用）
+# バージョンは全て動作確認済みのものに固定（Issue #64）。
+# LangChainは短期間で破壊的変更が入った実績があるため、pipによる意図しない
+# 自動アップグレードを防ぐ目的。更新方針はREADME.md「使用技術」セクション参照。
+langchain[openai]==1.3.14
+langchain-anthropic==1.5.4        # Claude連携（フォールバック用）
+langchain-ollama==1.1.0           # Ollama連携（無料・ローカルLLM。検出できれば最優先で使用）
 
 # RAG（検索拡張生成）用
-langchain-community      # ドキュメントローダー(PyMuPDFLoader等)
-langchain-text-splitters # チャンク分割
-langchain-chroma         # ベクトルDB(Chroma)
-langchain-huggingface    # ローカル無料埋め込みモデル
-sentence-transformers    # HuggingFace埋め込みの実行エンジン
-pymupdf                  # PDF読み込み（高速な一次抽出。pypdfより文字化けに強い）
-cryptography             # 暗号化されたPDF（AES）を読むために必要
+langchain-community==0.4.2       # ドキュメントローダー(PyMuPDFLoader等)
+langchain-text-splitters==1.1.2  # チャンク分割
+langchain-chroma==1.1.0          # ベクトルDB(Chroma)
+langchain-huggingface==1.2.2     # ローカル無料埋め込みモデル
+sentence-transformers==5.7.0     # HuggingFace埋め込みの実行エンジン
+pymupdf==1.28.2                  # PDF読み込み（高速な一次抽出。pypdfより文字化けに強い）
+cryptography==50.0.0             # 暗号化されたPDF（AES）を読むために必要
 
 # 図解・スキャンPDFの高品質フォールバック解析（任意インストール）
 # 通常のPDFには使われません（PyMuPDFの抽出量が少ない場合のみ自動で使われます）。
 # 依存が重く（torch等）初回はモデルダウンロードが発生するため、不要なら省略可能です。
-docling
-langchain-docling
+docling==2.118.0
+langchain-docling==2.0.0
 
 # UI
-streamlit
+streamlit==1.61.1
 
 # バックエンドAPI（フロントエンド移行 Step1, Issue #88）
-fastapi
-uvicorn[standard]
+fastapi==0.141.1
+uvicorn[standard]==0.52.1
 
 # 環境変数読み込み
-python-dotenv
+python-dotenv==1.2.2
 
 # テスト用
-pytest
+pytest==9.1.1
 
 # lint・フォーマット用（CIでruff check / ruff format --checkを実行）
-ruff
+ruff==0.16.1
