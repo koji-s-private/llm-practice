@@ -211,17 +211,30 @@ def sync_data_dir(verbose: bool = True) -> dict:
                 print(f"スキップ（読み込み失敗）: {name}（{e}）")
             continue
 
-        # 既存チャンクがあれば先に削除してから入れ直す（重複防止）
-        if entry and entry.get("chunk_ids"):
-            vector_store.delete(ids=entry["chunk_ids"])
-
         # 会話ログはそのスレッドのみ、それ以外（通常ドキュメント・アップロード）は
         # 全スレッド共通で検索できるよう、チャンクにthread_idをメタデータとして付与する。
         thread_id = _thread_id_for(name)
         for chunk in chunks:
             chunk.metadata["thread_id"] = thread_id
 
-        chunk_ids = vector_store.add_documents(documents=chunks) if chunks else []
+        # 新チャンクの追加を先に行い、成功してから旧チャンクを削除する（delete→addの逆順）。
+        # delete→addの順だと、削除成功後にadd_documents()が失敗した場合、旧チャンクは
+        # 消えたのに新チャンクも登録されない「データが検索対象から消える」状態になり、
+        # manifestも更新されないため次回同期でも気づかれず放置されてしまう（Issue #82）。
+        # add→deleteの順なら、追加が失敗しても旧チャンクがそのまま残るため安全
+        # （追加成功〜削除完了までの一瞬だけ新旧チャンクが両方検索にヒットしうるが、
+        # データが消えるより十分マシな許容範囲の副作用とする）。
+        try:
+            chunk_ids = vector_store.add_documents(documents=chunks) if chunks else []
+        except Exception as e:
+            logger.warning("%s のベクトルストアへの追加に失敗したためスキップします: %s", name, e)
+            result["failed"].append(name)
+            if verbose:
+                print(f"スキップ（ベクトルストアへの追加失敗）: {name}（{e}）")
+            continue
+
+        if entry and entry.get("chunk_ids"):
+            vector_store.delete(ids=entry["chunk_ids"])
 
         manifest[name] = {**fingerprint, "chunk_ids": chunk_ids}
         result["updated" if entry else "added"].append(name)

@@ -226,6 +226,90 @@ def test_previously_synced_file_that_now_fails_keeps_old_chunks(fake_env, monkey
     assert store.docs_by_id.keys() == old_chunk_ids
 
 
+def test_add_documents_failure_on_update_keeps_old_chunks_and_records_failed(fake_env, monkeypatch):
+    # Issue #82: 更新時にadd_documents()が失敗しても、旧チャンクを消さず
+    # result["failed"]に積んで次回リトライされるようにする（データが消える事故の防止）
+    data_dir, store = fake_env
+    path = _write(data_dir, "a.txt", "最初は正常なテキストです。" * 5)
+    ingest.sync_data_dir(verbose=False)
+    old_chunk_ids = set(store.docs_by_id.keys())
+    assert old_chunk_ids
+
+    path.write_text("更新後のテキストです。" * 5, encoding="utf-8")
+
+    def flaky_add_documents(documents):
+        raise RuntimeError("埋め込みモデルの一時的な失敗を想定")
+
+    monkeypatch.setattr(store, "add_documents", flaky_add_documents)
+
+    result = ingest.sync_data_dir(verbose=False)
+
+    assert result == {"added": [], "updated": [], "removed": [], "failed": ["a.txt"]}
+    # 追加が失敗しても旧チャンクは削除されず残っている（検索対象から消えない）
+    assert store.docs_by_id.keys() == old_chunk_ids
+
+    manifest = json.loads(ingest.MANIFEST_PATH.read_text(encoding="utf-8"))
+    # manifestは更新されない（旧chunk_idsのまま）ので、次回同期時も再試行される
+    assert set(manifest["a.txt"]["chunk_ids"]) == old_chunk_ids
+
+
+def test_add_documents_failure_on_new_file_has_no_old_chunks_to_keep(fake_env, monkeypatch):
+    # 境界値: 新規ファイル追加時（entryが存在せず旧チャンクが無いケース）にadd_documents()が
+    # 失敗しても、delete()が呼ばれたり例外で落ちたりせず、failedに記録されるだけで正常終了すること
+    data_dir, store = fake_env
+    _write(data_dir, "new.txt", "新規追加されるファイルの内容です。" * 5)
+
+    def flaky_add_documents(documents):
+        raise RuntimeError("埋め込みモデルの一時的な失敗を想定")
+
+    monkeypatch.setattr(store, "add_documents", flaky_add_documents)
+
+    result = ingest.sync_data_dir(verbose=False)
+
+    assert result == {"added": [], "updated": [], "removed": [], "failed": ["new.txt"]}
+    # そもそも旧チャンクが無いので、ベクトルストアには何も登録されないまま
+    assert store.docs_by_id == {}
+
+    manifest = json.loads(ingest.MANIFEST_PATH.read_text(encoding="utf-8"))
+    # 失敗したファイルはmanifestに記録されないため、次回同期時に再試行される
+    assert "new.txt" not in manifest
+
+
+def test_add_documents_failure_for_one_file_does_not_block_other_files(fake_env, monkeypatch):
+    # 複数ファイル同期中に1ファイルのadd_documents()だけが失敗しても、
+    # 他のファイルの同期処理は中断されず継続すること
+    data_dir, store = fake_env
+    _write(data_dir, "good.txt", "正常に追加できるテキストです。" * 5)
+    _write(data_dir, "bad.txt", "追加に失敗することにするテキストです。" * 5)
+
+    real_add_documents = store.add_documents
+
+    def flaky_add_documents(documents):
+        sources = {doc.metadata.get("source", "") for doc in documents}
+        if any("bad.txt" in s for s in sources):
+            raise RuntimeError("埋め込みモデルの一時的な失敗を想定")
+        return real_add_documents(documents)
+
+    monkeypatch.setattr(store, "add_documents", flaky_add_documents)
+
+    result = ingest.sync_data_dir(verbose=False)
+
+    assert result == {
+        "added": ["good.txt"],
+        "updated": [],
+        "removed": [],
+        "failed": ["bad.txt"],
+    }
+    # 失敗したファイルの分は登録されていないが、正常なファイルのチャンクは登録されている
+    sources = {doc.metadata.get("source") for doc in store.docs_by_id.values()}
+    assert any("good.txt" in (s or "") for s in sources)
+    assert not any("bad.txt" in (s or "") for s in sources)
+
+    manifest = json.loads(ingest.MANIFEST_PATH.read_text(encoding="utf-8"))
+    assert "good.txt" in manifest
+    assert "bad.txt" not in manifest
+
+
 def test_unsupported_extension_is_ignored(fake_env):
     data_dir, store = fake_env
     _write(data_dir, "notes.docx", "対応していない拡張子")
