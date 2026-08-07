@@ -12,6 +12,7 @@
 | `memory.py` | 質問・回答を `data/conversations/<会話ID>/` に自動保存する会話ナレッジ化機能 |
 | `app.py` | Streamlitのチャット画面（ファイルアップロードUI・新しい会話ボタンを含む） |
 | `.streamlit/config.toml` | Streamlitのカスタムテーマ設定（配色・フォント。Issue #72） |
+| `api/main.py` | FastAPI製バックエンドAPI（`ingest.py`/`rag_chain.py`/`memory.py`をラップ。フロントエンド移行Step1, Issue #88） |
 | `data/` | 質問させたいPDF/テキストファイルを置く場所（アップロードUIからもここに保存される） |
 | `data/conversations/<会話ID>/` | 自動保存された過去の質問・回答（会話ログ。会話IDごとにフォルダが分かれる） |
 | `models_and_prompts.py` / `extract_text.py` | LangChain公式チュートリアルの学習用スクリプト（そのまま残しています） |
@@ -35,6 +36,7 @@
 ```
 llm-practice/
 ├── app.py                  # Streamlitのチャット画面
+├── api/main.py              # FastAPI製バックエンドAPI（Issue #88, ingest/rag_chain/memoryをラップ）
 ├── ingest.py                # data/ とベクトルDBの差分同期
 ├── rag_chain.py              # RAGエージェントの定義
 ├── memory.py                 # 会話ログの自動保存
@@ -111,6 +113,31 @@ Ollamaが起動していてもあえて使いたくない場合は `.env` に `D
 まとめてファイルを取り込みたい場合や、アプリを起動せずにDBだけ更新したい場合は
 `python ingest.py` をCLIで実行することもできます（内部の処理は同じです）。
 
+### バックエンドAPI（FastAPI）を起動する場合
+
+フロントエンド移行（Issue #88, Step1）の一環として、Streamlit版とは別にFastAPI製のバックエンドAPIも
+用意しています。現時点ではAPIを呼び出すフロントエンド（React等）は未実装のため、動作確認には
+`curl` やブラウザの `http://localhost:8000/docs`（Swagger UI）を使ってください。
+
+```bash
+source .venv/bin/activate
+uvicorn api.main:app --reload
+```
+
+主なエンドポイント:
+
+| メソッド・パス | 役割 |
+|---|---|
+| `POST /api/chat` | チャット応答をSSE（Server-Sent Events）でストリーミング返却（`rag_chain.build_agent()`のラッパー） |
+| `POST /api/sync` | `data/` 配下ドキュメントをベクトルDBに同期（`ingest.sync_data_dir()`のラッパー） |
+| `POST /api/conversations/new` | 新しい会話スレッドIDを発行（`memory.new_thread_id()`のラッパー） |
+| `GET /api/conversations/count` | 保存済み会話ログの件数を取得（`memory.conversation_count()`のラッパー） |
+| `POST /api/conversations/save` | 質問・回答を会話ログとして保存（`memory.save_conversation()`のラッパー） |
+| `GET /api/health` | 疎通確認用のヘルスチェック |
+
+Streamlit版（`app.py`）と本APIは同じ `data/` / `chroma_db/` を参照するため、どちらか一方だけを
+起動して使う分には競合しません（同時起動も可能です）。
+
 ### ファイルをdata/に手動で置かなくてもいい方法
 
 `data/` フォルダを直接触らなくても、ブラウザ上の操作だけでナレッジを増やせます。
@@ -157,6 +184,17 @@ Ollamaが起動していてもあえて使いたくない場合は `.env` に `D
 | ライブラリ | 役割 | このプロジェクトでの使用箇所 |
 |---|---|---|
 | [Streamlit](https://streamlit.io/) | Pythonだけでブラウザ上のチャットUIを構築できるフレームワーク | `app.py`。チャット画面本体（`st.chat_input` / `st.chat_message`）、サイドバー（ファイルアップロード・再同期ボタン・会話管理トグル）を実装 |
+
+### バックエンドAPI（Issue #88）
+
+[docs/frontend-tech-policy.md](docs/frontend-tech-policy.md)の移行計画Step1として追加。既存の
+Streamlit版（`app.py`）とは別に、将来のTypeScript製フロントエンド（React + Vite）から呼び出せる
+HTTP API層を提供する。
+
+| ライブラリ | 役割 | このプロジェクトでの使用箇所 |
+|---|---|---|
+| [FastAPI](https://fastapi.tiangolo.com/) | Python製のWeb APIフレームワーク（型ヒントベースのリクエスト/レスポンス検証、`StreamingResponse`によるストリーミング配信に対応） | `api/main.py`。`ingest.py` / `rag_chain.py` / `memory.py` をラップするエンドポイント（`/api/chat` / `/api/sync` / `/api/conversations/*`）を定義 |
+| [uvicorn](https://www.uvicorn.org/)（`uvicorn[standard]`） | FastAPIアプリをローカルで起動するASGIサーバー | `uvicorn api.main:app --reload` でローカル起動（詳細は「[バックエンドAPI（FastAPI）を起動する場合](#バックエンドapifastapiを起動する場合)」） |
 
 ### LLMエージェント・オーケストレーション（LangChain）
 
