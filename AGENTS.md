@@ -6,6 +6,11 @@ GitHub Actions上で動くAIチームによって定期的にメンテナンス�
 ## コミット・PR
 - コミットメッセージは Conventional Commits（feat:, fix:, test: など）を厳守
 - PRの本文に必ず `Closes #<issue番号>` を入れて Issue と自動リンクさせる
+- ただし、ハーネス側の権限制約などによりIssueの受け入れ条件を完全には満たせず、部分的にしか解決できない
+  PRを作成する場合は `Closes` を使わず `Related to #<issue番号>` のような表現にする（Issueを誤って
+  自動クローズしないため）。この場合、GitHub Projectsの「Pull request linked to issue」自動ワークフローが
+  発火せずStatusが自動的に `Under Review` へ遷移しないため、PM（またはcoder）が手動で `Under Review` に
+  更新する（前例: PR #74、Issue #48対応）
 - 1PRの変更ファイルは目安5枚以内。大きくなりそうなら Issue を分割する
 
 ## mainブランチの運用
