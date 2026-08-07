@@ -1,0 +1,167 @@
+name: CI Failure Guard
+
+# CIワークフロー(.github/workflows/ci.yml、jobは lint-and-test)が失敗した際に、
+# 失敗原因を自動的に切り分け、対応する。
+#
+# 背景: PR #95で、コードには問題が無い(pytest全パス・ruff問題なし)にもかかわらず、
+# 「Set up job」段階でのGitHub Actions基盤側の一時障害(Service Unavailable)でCIが
+# 失敗したことがあった。このときCI失敗をトリガーに自動対応する仕組みが無く、人間が
+# 気づいて手動でre-runするしかなかった。
+#
+# 設計意図:
+# - 失敗原因の切り分けは、ログのテキストgrepではなく、GitHub Actions APIで取得できる
+#   ジョブ・ステップの構造的な情報(各ステップのname/conclusion)を使う。
+# - ruff check(lint)/ruff format --check(フォーマットチェック)/pytest のいずれかの
+#   ステップがfailureで終わっている場合のみ「コード起因」と判定し、coderサブエージェントに
+#   修正を依頼する。reviewerはここでは呼ばない。修正コミットのpushが
+#   pull_request:synchronize イベントを発火させ、pr-review-on-update.yml が自動的に
+#   再レビューを行うため。
+# - 上記いずれのステップも実行されず(Set up job/Python セットアップなど前段のステップで
+#   落ちている、またはステップ自体が無い)ジョブ全体がfailureの場合は「インフラ起因」と判定し、
+#   `gh run rerun --failed` による自動再実行のみに留める(coderは呼ばない、PRコメントも残さない)。
+# - どちらとも判断できない想定外の構造の場合は、無理に自動対応せずPRにコメントを残して
+#   人間の判断を待つ。
+#
+# NOTE: `workflow_run` イベントはbot(github-actions)による起動のため、
+# allowed_bots に github-actions を含めておかないと claude-code-action が
+# 「非人間アクターからの起動」として拒否する(ai-team.ymlのNOTEコメント参照)。
+#
+# NOTE: `.github/workflows/`配下のファイル自体をpushする場合は、通常のGITHUB_TOKENでは
+# `refusing to allow a GitHub App to create or update workflow ... without workflows
+# permission` で拒否されるため、workflowスコープ付きの専用トークン($WORKFLOW_GH_TOKEN)を
+# 使う(coder.md参照)。
+
+on:
+  workflow_run:
+    workflows: ["CI"]
+    types: [completed]
+
+permissions:
+  contents: write
+  pull-requests: write
+  actions: write
+  id-token: write
+
+concurrency:
+  group: ci-failure-guard-${{ github.event.workflow_run.id }}
+  cancel-in-progress: false
+
+jobs:
+  triage:
+    if: github.event.workflow_run.conclusion == 'failure'
+    runs-on: ubuntu-latest
+    env:
+      # .github/workflows/配下のファイルをpushする際に使う、workflowスコープ付きの専用PAT。
+      # 未登録の場合は空文字列になる(coder.md側でその場合の扱いを指示している)。
+      WORKFLOW_GH_TOKEN: ${{ secrets.WORKFLOW_GH_TOKEN }}
+    steps:
+      - name: 対象PRを特定
+        id: pr
+        env:
+          PR_JSON: ${{ toJson(github.event.workflow_run.pull_requests) }}
+        run: |
+          count="$(echo "$PR_JSON" | jq 'length')"
+          if [ "$count" -eq 0 ]; then
+            echo "workflow_run.pull_requestsが空のため対象PRなし(pushトリガー等)。終了します。"
+            echo "has_pr=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          pr_number="$(echo "$PR_JSON" | jq '.[0].number')"
+          echo "対象PR: #$pr_number"
+          echo "has_pr=true" >> "$GITHUB_OUTPUT"
+          echo "pr_number=$pr_number" >> "$GITHUB_OUTPUT"
+
+      - name: 失敗原因を切り分け
+        id: classify
+        if: steps.pr.outputs.has_pr == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          RUN_ID: ${{ github.event.workflow_run.id }}
+        run: |
+          set -e
+          jobs_json="$(gh api "repos/$REPO/actions/runs/$RUN_ID/jobs")"
+
+          # ci.ymlのlint-and-testジョブにおける、コード起因判定の対象ステップ名
+          code_step_names='["ruff check（lint）", "ruff format --check（フォーマットチェック）", "pytest"]'
+
+          # 上記いずれかのステップがfailureで終わっていれば「コード起因」
+          code_caused="$(echo "$jobs_json" | jq --argjson names "$code_step_names" '
+            [.jobs[].steps[]? | select(.conclusion == "failure" and (.name as $n | $names | index($n) != null))] | length > 0
+          ')"
+
+          # 上記いずれかのステップが実行された形跡があるか(conclusionがnull=未実行ではない)
+          code_step_ran="$(echo "$jobs_json" | jq --argjson names "$code_step_names" '
+            [.jobs[].steps[]? | select(.conclusion != null and (.name as $n | $names | index($n) != null))] | length > 0
+          ')"
+
+          job_failed="$(echo "$jobs_json" | jq '[.jobs[] | select(.conclusion == "failure")] | length > 0')"
+
+          echo "code_caused=$code_caused code_step_ran=$code_step_ran job_failed=$job_failed"
+
+          if [ "$code_caused" = "true" ]; then
+            echo "classification=code" >> "$GITHUB_OUTPUT"
+          elif [ "$code_step_ran" = "false" ] && [ "$job_failed" = "true" ]; then
+            echo "classification=infra" >> "$GITHUB_OUTPUT"
+          else
+            echo "classification=unknown" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: インフラ起因のため自動再実行
+        if: steps.classify.outputs.classification == 'infra'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          RUN_ID: ${{ github.event.workflow_run.id }}
+        run: gh run rerun "$RUN_ID" --repo "$REPO" --failed
+
+      - name: 切り分け不可のためPRにコメント
+        if: steps.classify.outputs.classification == 'unknown'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          PR_NUMBER: ${{ steps.pr.outputs.pr_number }}
+          RUN_URL: ${{ github.event.workflow_run.html_url }}
+        run: |
+          gh pr comment "$PR_NUMBER" --repo "$REPO" --body "CI失敗の自動判定ができませんでした(想定外のジョブ/ステップ構造のため、インフラ起因/コード起因のいずれとも機械的に判断できませんでした)。人間による確認をお願いします。
+
+          失敗したCI run: $RUN_URL"
+
+      - uses: actions/checkout@v5
+        if: steps.classify.outputs.classification == 'code'
+
+      - name: コード起因のためcoderに修正を依頼
+        if: steps.classify.outputs.classification == 'code'
+        uses: anthropics/claude-code-action@v1
+        with:
+          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          allowed_bots: "claude,github-actions"
+          prompt: |
+            PR #${{ steps.pr.outputs.pr_number }} のCI(run ID: ${{ github.event.workflow_run.id }} 、
+            ${{ github.event.workflow_run.html_url }})が失敗しました。ruff check(lint)/
+            ruff format --check(フォーマットチェック)/pytestのいずれかのステップが失敗しており、
+            コード起因の可能性が高いと判定されています。
+
+            `gh run view ${{ github.event.workflow_run.id }} --log-failed` で失敗したステップの
+            詳細ログを確認できます。
+
+            以下の手順で対応してください。サブエージェントはTask tool経由で必ず
+            `run_in_background: false`(同期実行)で呼び出すこと。
+
+            1. **新しいブランチは作らず**、`gh pr checkout ${{ steps.pr.outputs.pr_number }}` で
+               既存のPRブランチをチェックアウトすること。
+            2. `coder` サブエージェントに、失敗ログの内容を伝えて修正を依頼する。
+            3. 修正後、ローカルで `ruff check .` / `ruff format --check .` / `pytest` を実行し、
+               全て通ることを確認してから `git push` で同じブランチに反映する
+               (`.github/workflows/`配下のファイルを修正する場合は`$WORKFLOW_GH_TOKEN`を使うこと。
+               手順は[.claude/agents/coder.md](.claude/agents/coder.md)参照)。
+            4. 修正できない場合、または失敗原因がコード起因と判断できないとcoderが判断した場合は、
+               pushせず `gh pr comment ${{ steps.pr.outputs.pr_number }} --body "..."` で理由を残して
+               終了すること(無理に修正を強行しない)。
+            5. ここでは reviewer は呼び出さないこと(修正コミットのpushが
+               pull_request:synchronize イベントを発火させ、pr-review-on-update.yml が
+               自動的に再レビューを行うため)。
+            6. PRのマージやProjectsのステータス更新は行わないこと(このワークフローの担当範囲外)。
+               課金が発生する可能性のある操作は絶対に実行しないこと。
+          claude_args: |
+            --max-turns 40 --allowedTools "Bash,Read,Write,Edit,Grep,Glob,Task"
