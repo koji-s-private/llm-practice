@@ -49,3 +49,50 @@ def test_conversation_count_accumulates_multiple_entries(tmp_path, monkeypatch):
         memory.save_conversation(f"質問{i}", f"回答{i}", thread_id="thread-a")
 
     assert memory.conversation_count("thread-a") == 3
+
+
+# --- 一般知識フォールバックのメタデータ行 ---
+
+
+def test_save_conversation_writes_fallback_true_metadata_when_is_fallback_true(tmp_path, monkeypatch):
+    monkeypatch.setattr(memory, "CONVERSATIONS_DIR", tmp_path)
+
+    path = memory.save_conversation(
+        question="質問内容です", answer="回答内容です", thread_id="thread-a", is_fallback=True
+    )
+
+    content = path.read_text(encoding="utf-8")
+    assert "- 一般知識フォールバック: true" in content
+
+
+def test_save_conversation_writes_fallback_false_metadata_by_default(tmp_path, monkeypatch):
+    # is_fallback を省略した場合はデフォルトでFalse扱いになる
+    monkeypatch.setattr(memory, "CONVERSATIONS_DIR", tmp_path)
+
+    path = memory.save_conversation(question="質問内容です", answer="回答内容です", thread_id="thread-a")
+
+    content = path.read_text(encoding="utf-8")
+    assert "- 一般知識フォールバック: false" in content
+
+
+def test_save_conversation_writes_fallback_false_metadata_when_explicitly_false(tmp_path, monkeypatch):
+    monkeypatch.setattr(memory, "CONVERSATIONS_DIR", tmp_path)
+
+    path = memory.save_conversation(
+        question="質問内容です", answer="回答内容です", thread_id="thread-a", is_fallback=False
+    )
+
+    content = path.read_text(encoding="utf-8")
+    assert "- 一般知識フォールバック: false" in content
+
+
+def test_save_conversation_fallback_metadata_line_immediately_follows_datetime_line(tmp_path, monkeypatch):
+    # ingest.FALLBACK_METADATA_PATTERN が検出できる位置関係（日時行の次）で
+    # 書き込まれていることを確認する
+    monkeypatch.setattr(memory, "CONVERSATIONS_DIR", tmp_path)
+
+    path = memory.save_conversation(question="質問", answer="回答", thread_id="thread-a", is_fallback=True)
+
+    lines = path.read_text(encoding="utf-8").splitlines()
+    datetime_line_index = next(i for i, line in enumerate(lines) if line.startswith("- 日時:"))
+    assert lines[datetime_line_index + 1] == "- 一般知識フォールバック: true"
