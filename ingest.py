@@ -103,7 +103,25 @@ def _fingerprint(path: Path) -> dict:
 
 def _load_pdf(path: Path, verbose: bool = True) -> list:
     """PDFを読み込む（PyMuPDFで高速抽出 → 必要な場合のみDoclingでフォールバック）。"""
-    fast_docs = PyMuPDFLoader(str(path)).load()
+    try:
+        fast_docs = PyMuPDFLoader(str(path)).load()
+    except Exception as e:
+        # PyMuPDF自体が例外を送出した場合（暗号化PDF・破損PDF・特殊なPDF構造など）。
+        # Doclingが利用可能なら、レイアウト認識・OCRで読める可能性があるためフォールバックする。
+        # Doclingが未インストール、またはDoclingも失敗した場合は元の例外をそのまま送出し、
+        # 呼び出し元（sync_data_dir）で "failed" として記録・次回リトライさせる。
+        if not DOCLING_AVAILABLE:
+            raise
+        if verbose:
+            print(f"    → PyMuPDFでの読み込みに失敗したため、Doclingでの再解析を試みます（{e}）...")
+        docling_docs = _load_pdf_with_docling(path)
+        if not docling_docs:
+            raise
+        if verbose:
+            docling_chars = sum(len(d.page_content.strip()) for d in docling_docs)
+            print(f"    → Doclingで{docling_chars}文字を抽出しました。")
+        return docling_docs
+
     total_chars = sum(len(d.page_content.strip()) for d in fast_docs)
     avg_chars_per_page = total_chars / max(len(fast_docs), 1)
 
@@ -115,20 +133,28 @@ def _load_pdf(path: Path, verbose: bool = True) -> list:
             f"    → テキスト抽出量が少ない（平均{avg_chars_per_page:.0f}文字/ページ）ため、"
             "Doclingで図解・OCR解析を試みます（時間がかかる場合があります）..."
         )
-    try:
-        docling_docs = DoclingLoader(file_path=str(path), export_type=ExportType.MARKDOWN).load()
+    docling_docs = _load_pdf_with_docling(path, verbose=verbose)
+    if docling_docs:
         docling_chars = sum(len(d.page_content.strip()) for d in docling_docs)
-        if docling_docs and docling_chars > total_chars:
-            for doc in docling_docs:
-                doc.metadata.setdefault("source", str(path))
+        if docling_chars > total_chars:
             if verbose:
                 print(f"    → Doclingで{docling_chars}文字を抽出しました（PyMuPDF: {total_chars}文字）。")
             return docling_docs
-    except Exception as e:
-        if verbose:
-            print(f"    → Docling解析に失敗、PyMuPDFの結果をそのまま使用します（{e}）")
 
     return fast_docs
+
+
+def _load_pdf_with_docling(path: Path, verbose: bool = True) -> list:
+    """Doclingでの再解析を試みる。失敗した場合は空リストを返す（例外は送出しない）。"""
+    try:
+        docling_docs = DoclingLoader(file_path=str(path), export_type=ExportType.MARKDOWN).load()
+    except Exception as e:
+        if verbose:
+            print(f"    → Docling解析に失敗しました（{e}）")
+        return []
+    for doc in docling_docs:
+        doc.metadata.setdefault("source", str(path))
+    return docling_docs
 
 
 def _thread_id_for(rel_path: str) -> str:

@@ -9,6 +9,7 @@ import json
 import os
 
 import pytest
+from langchain_core.documents import Document
 
 import ingest
 
@@ -163,6 +164,65 @@ def test_pdf_load_failure_is_recorded_as_failed(fake_env, monkeypatch):
 
     assert result == {"added": [], "updated": [], "removed": [], "failed": ["broken.pdf"]}
     assert store.docs_by_id == {}
+
+
+def test_load_pdf_falls_back_to_docling_when_pymupdf_raises(monkeypatch, tmp_path):
+    # Issue #89: PyMuPDF自体が例外を送出した場合（暗号化PDF・破損PDF等）でも、
+    # Doclingが利用可能ならフォールバックして読み込めることを検証する
+    fake_pdf_path = tmp_path / "encrypted.pdf"
+    fake_pdf_path.write_bytes(b"not a real pdf")
+
+    class _FailingPyMuPDFLoader:
+        def __init__(self, path):
+            self.path = path
+
+        def load(self):
+            raise ValueError("暗号化されたPDFは読み込めません")
+
+    class _SucceedingDoclingLoader:
+        def __init__(self, file_path, export_type):
+            self.file_path = file_path
+
+        def load(self):
+            return [Document(page_content="Doclingで抽出した本文です。")]
+
+    monkeypatch.setattr(ingest, "DOCLING_AVAILABLE", True)
+    monkeypatch.setattr(ingest, "PyMuPDFLoader", _FailingPyMuPDFLoader)
+    monkeypatch.setattr(ingest, "DoclingLoader", _SucceedingDoclingLoader)
+
+    docs = ingest._load_pdf(fake_pdf_path, verbose=False)
+
+    assert len(docs) == 1
+    assert docs[0].page_content == "Doclingで抽出した本文です。"
+    assert docs[0].metadata["source"] == str(fake_pdf_path)
+
+
+def test_load_pdf_raises_original_error_when_docling_also_fails(monkeypatch, tmp_path):
+    # PyMuPDFが失敗し、Doclingも失敗（または未インストール）した場合は
+    # 元の例外がそのまま伝播し、呼び出し元で "failed" として扱われリトライ対象になる
+    fake_pdf_path = tmp_path / "broken.pdf"
+    fake_pdf_path.write_bytes(b"not a real pdf")
+
+    class _FailingPyMuPDFLoader:
+        def __init__(self, path):
+            self.path = path
+
+        def load(self):
+            raise ValueError("破損したPDFです")
+
+    class _FailingDoclingLoader:
+        def __init__(self, file_path, export_type):
+            self.file_path = file_path
+
+        def load(self):
+            raise RuntimeError("Doclingでも読み込めません")
+
+    monkeypatch.setattr(ingest, "DOCLING_AVAILABLE", True)
+    monkeypatch.setattr(ingest, "PyMuPDFLoader", _FailingPyMuPDFLoader)
+    monkeypatch.setattr(ingest, "DoclingLoader", _FailingDoclingLoader)
+
+    with pytest.raises(ValueError, match="破損したPDFです"):
+        ingest._load_pdf(fake_pdf_path, verbose=False)
 
 
 def test_failed_file_is_not_recorded_in_manifest_and_retried_next_sync(fake_env, monkeypatch):
