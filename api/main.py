@@ -67,11 +67,18 @@ def health() -> dict:
 # 同様の考え方で、許可する文字種を制限した上で resolve() 後の実パスも念のため検証する。
 _THREAD_ID_PATTERN = re.compile(r"^[A-Za-z0-9_-]+$")
 
+# new_thread_id() が生成する値（uuid4().hex[:8]、8文字）に対して十分な余裕を持たせつつ、
+# OSのファイル名長制限（一般的に255バイト程度）に触れないよう上限を設ける。
+# 英数字・アンダースコア・ハイフンのみなら1文字1バイトのため、この上限を超えることは無い。
+_THREAD_ID_MAX_LENGTH = 64
+
 
 def _validate_thread_id(thread_id: str) -> str:
     """thread_id がファイルパスとして安全か検証し、不正であれば400エラーを送出する。"""
     if not thread_id or not _THREAD_ID_PATTERN.fullmatch(thread_id):
         raise HTTPException(status_code=400, detail="thread_id の形式が不正です")
+    if len(thread_id) > _THREAD_ID_MAX_LENGTH:
+        raise HTTPException(status_code=400, detail="thread_id が長すぎます")
     resolved = (CONVERSATIONS_DIR / thread_id).resolve()
     if resolved.parent != CONVERSATIONS_DIR.resolve():
         raise HTTPException(status_code=400, detail="thread_id の形式が不正です")
