@@ -27,6 +27,40 @@ class _FakeVectorStore:
         return self._results
 
 
+def _matches_filter(metadata, condition):
+    """Chromaのwhereフィルタ（$and/$in/$ne/完全一致）を模した簡易評価器。
+
+    実際のChromaと同じ挙動（メタデータにキーが存在しない場合、$ne条件は
+    「値が一致しない」ものとしてマッチする）を再現し、後方互換性のテストに使う。
+    """
+    if "$and" in condition:
+        return all(_matches_filter(metadata, c) for c in condition["$and"])
+    ((key, sub_condition),) = condition.items()
+    if isinstance(sub_condition, dict):
+        if "$in" in sub_condition:
+            return metadata.get(key) in sub_condition["$in"]
+        if "$ne" in sub_condition:
+            return metadata.get(key) != sub_condition["$ne"]
+        raise ValueError(f"unsupported filter operator: {sub_condition}")
+    return metadata.get(key) == sub_condition
+
+
+class _FakeFilteringVectorStore:
+    """渡されたwhereフィルタをメタデータに実際に適用してから結果を返すフェイクストア。
+
+    _FakeVectorStoreと違い、filter引数を無視せず評価するため、フィルタの
+    後方互換性（is_fallbackキーを持たないドキュメントの扱いなど）を検証できる。
+    """
+
+    def __init__(self, results):
+        self._results = results
+        self.last_call = None
+
+    def similarity_search_with_score(self, query, k, filter):
+        self.last_call = {"query": query, "k": k, "filter": filter}
+        return [(doc, score) for doc, score in self._results if _matches_filter(doc.metadata, filter)]
+
+
 def _build_agent_with_store(monkeypatch, results):
     store = _FakeVectorStore(results)
     monkeypatch.setattr(rag_chain, "get_vectorstore", lambda: store)
@@ -187,7 +221,36 @@ def test_retrieve_context_excludes_fallback_conversations_from_search_filter(mon
 
     and_conditions = store.last_call["filter"]["$and"]
     fallback_condition = next(c for c in and_conditions if "is_fallback" in c)
-    assert fallback_condition == {"is_fallback": False}
+    assert fallback_condition == {"is_fallback": {"$ne": True}}
+
+
+def test_retrieve_context_includes_docs_without_is_fallback_key(monkeypatch):
+    """is_fallbackメタデータ自体を持たない既存ドキュメント（フィルタ導入前に取り込み済みの
+    チャンク）が、完全一致フィルタとの後方互換性の問題で誤って検索対象から除外されないことを
+    確認する。"""
+    doc_no_key = _FakeDocument(
+        "既存ドキュメント（is_fallbackキー無し）",
+        {"source": "legacy.txt", "thread_id": rag_chain.GLOBAL_THREAD_ID},
+    )
+    doc_fallback_false = _FakeDocument(
+        "フォールバックではない会話ログ",
+        {"source": "log.txt", "thread_id": rag_chain.GLOBAL_THREAD_ID, "is_fallback": False},
+    )
+    doc_fallback_true = _FakeDocument(
+        "フォールバック回答の会話ログ",
+        {"source": "log2.txt", "thread_id": rag_chain.GLOBAL_THREAD_ID, "is_fallback": True},
+    )
+    store = _FakeFilteringVectorStore([(doc_no_key, 0.1), (doc_fallback_false, 0.1), (doc_fallback_true, 0.1)])
+    monkeypatch.setattr(rag_chain, "get_vectorstore", lambda: store)
+    agent = rag_chain.build_agent(thread_id="thread-1")
+    retrieve_context = agent.tools[0]
+    monkeypatch.setattr(rag_chain, "_grade_relevance", lambda query, docs: list(range(len(docs))))
+
+    _, artifact = retrieve_context.func("質問")
+
+    assert doc_no_key in artifact
+    assert doc_fallback_false in artifact
+    assert doc_fallback_true not in artifact
 
 
 # --- get_vectorstore のdocstring（Issue #81: CVE-2026-45829に関するセキュリティ注記） ---

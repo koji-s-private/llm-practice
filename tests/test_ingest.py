@@ -594,7 +594,7 @@ def test_legacy_flat_conversation_file_falls_back_to_global_thread_id(fake_env):
     assert thread_ids == {ingest.GLOBAL_THREAD_ID}
 
 
-# --- _is_fallback_conversation() / is_fallbackメタデータ（Issue #9） ---
+# --- _is_fallback_conversation() / is_fallbackメタデータ ---
 
 
 class _FakeRawDoc:
