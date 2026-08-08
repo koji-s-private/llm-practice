@@ -230,6 +230,7 @@ HTTP API層を提供する。
 |---|---|---|
 | `python-dotenv` | `.env`ファイルから環境変数を読み込む | `setup.py`（`load_dotenv()`）。`ANTHROPIC_API_KEY`等のAPIキーやOllama関連の設定を読み込む |
 | `pytest` | テストフレームワーク | `tests/`配下の自動テスト一式（実行方法は下記「[テスト](#テスト)」を参照） |
+| `PyYAML` | YAMLファイルのパース | `tests/test_ci_config.py` / `tests/test_ci_failure_guard_config.py`。GitHub Actionsのワークフロー定義（YAML）を読み込んで内容を検証するために使用（従来は他パッケージの推移的依存として導入されていたが、明示的に固定） |
 | [ruff](https://docs.astral.sh/ruff/) | lint（静的解析）・コードフォーマットを1ツールでカバーするツール | `pyproject.toml`の`[tool.ruff]`でルールセットを設定。[.github/workflows/ci.yml](.github/workflows/ci.yml)がpush/PR時に`ruff check`・`ruff format --check`を自動実行 |
 
 > **README肥大化時の分割方針**: このセクションが今後さらに大きくなった場合は、`docs/tech-stack.md`
