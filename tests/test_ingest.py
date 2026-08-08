@@ -197,6 +197,36 @@ def test_load_pdf_falls_back_to_docling_when_pymupdf_raises(monkeypatch, tmp_pat
     assert docs[0].metadata["source"] == str(fake_pdf_path)
 
 
+def test_load_pdf_docling_fallback_on_pymupdf_error_respects_verbose_false(monkeypatch, tmp_path, capsys):
+    # PyMuPDF例外時のDoclingフォールバック経路でも、verbose=Falseが
+    # _load_pdf_with_docling() まで正しく伝播し、標準出力に何も出力されないことを検証する
+    # （sync_data_dir(verbose=False)を使う app.py / api/main.py の本番導線での退行防止）
+    fake_pdf_path = tmp_path / "encrypted.pdf"
+    fake_pdf_path.write_bytes(b"not a real pdf")
+
+    class _FailingPyMuPDFLoader:
+        def __init__(self, path):
+            self.path = path
+
+        def load(self):
+            raise ValueError("暗号化されたPDFは読み込めません")
+
+    class _SucceedingDoclingLoader:
+        def __init__(self, file_path, export_type):
+            self.file_path = file_path
+
+        def load(self):
+            return [Document(page_content="Doclingで抽出した本文です。")]
+
+    monkeypatch.setattr(ingest, "DOCLING_AVAILABLE", True)
+    monkeypatch.setattr(ingest, "PyMuPDFLoader", _FailingPyMuPDFLoader)
+    monkeypatch.setattr(ingest, "DoclingLoader", _SucceedingDoclingLoader)
+
+    ingest._load_pdf(fake_pdf_path, verbose=False)
+
+    assert capsys.readouterr().out == ""
+
+
 def test_load_pdf_raises_original_error_when_docling_also_fails(monkeypatch, tmp_path):
     # PyMuPDFが失敗し、Doclingも失敗（または未インストール）した場合は
     # 元の例外がそのまま伝播し、呼び出し元で "failed" として扱われリトライ対象になる

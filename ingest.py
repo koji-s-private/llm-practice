@@ -114,7 +114,7 @@ def _load_pdf(path: Path, verbose: bool = True) -> list:
             raise
         if verbose:
             print(f"    → PyMuPDFでの読み込みに失敗したため、Doclingでの再解析を試みます（{e}）...")
-        docling_docs = _load_pdf_with_docling(path)
+        docling_docs = _load_pdf_with_docling(path, verbose=verbose)
         if not docling_docs:
             raise
         if verbose:
