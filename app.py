@@ -25,7 +25,7 @@ import streamlit as st
 from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 
 import setup
-from ingest import DATA_DIR, data_dir_signature, safe_upload_dest, sync_data_dir
+from ingest import DATA_DIR, data_dir_signature, resolve_upload_dest, sync_data_dir
 from memory import conversation_count, new_thread_id, save_conversation
 from rag_chain import GLOBAL_THREAD_ID, build_agent
 
@@ -210,12 +210,26 @@ with st.sidebar:
     )
     if uploaded_files:
         DATA_DIR.mkdir(parents=True, exist_ok=True)
+        # data/に同名ファイルが既にある場合、または同一バッチ内に同名ファイルが
+        # 複数含まれる場合に、無警告で上書きされないようにする。
+        # resolve_upload_dest()が連番サフィックス付きの空いているパスを返すので、
+        # 元のファイル名と異なる場合はリネームされたとみなしてまとめて警告表示する。
+        saved_paths: set[Path] = set()
+        renamed = []
         for f in uploaded_files:
-            dest = safe_upload_dest(f.name)
+            dest = resolve_upload_dest(f.name, taken_paths=saved_paths)
             if dest is None:
                 st.error(f"不正なファイル名のためスキップしました: {f.name}")
                 continue
+            if dest.name != f.name:
+                renamed.append((f.name, dest.name))
             dest.write_bytes(f.getvalue())
+            saved_paths.add(dest)
+        if renamed:
+            st.warning(
+                "同名のファイルが既に存在したため、既存ファイルを上書きせず別名で保存しました:\n"
+                + "\n".join(f"- {old} → {new}" for old, new in renamed)
+            )
         _sync_and_report("アップロードされたファイルを取り込み中...")
 
 # 過去の会話を再描画

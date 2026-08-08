@@ -636,6 +636,94 @@ def test_safe_upload_dest_accepts_normal_filenames(fake_env, filename):
     assert dest.name == filename
 
 
+# --- resolve_upload_dest(): 同名ファイルアップロード時の無警告上書き防止 ---
+
+
+def test_resolve_upload_dest_returns_plain_path_when_no_conflict(fake_env):
+    data_dir, _store = fake_env
+
+    dest = ingest.resolve_upload_dest("report.pdf")
+
+    assert dest == data_dir.resolve() / "report.pdf"
+
+
+def test_resolve_upload_dest_appends_suffix_when_file_already_exists_on_disk(fake_env):
+    data_dir, _store = fake_env
+    _write(data_dir, "report.txt", "既存ファイルの内容です。")
+
+    dest = ingest.resolve_upload_dest("report.txt")
+
+    assert dest.name == "report (2).txt"
+    assert not dest.exists()
+
+
+def test_resolve_upload_dest_increments_suffix_until_free(fake_env):
+    data_dir, _store = fake_env
+    _write(data_dir, "report.txt", "1つ目")
+    _write(data_dir, "report (2).txt", "2つ目")
+
+    dest = ingest.resolve_upload_dest("report.txt")
+
+    assert dest.name == "report (3).txt"
+
+
+def test_resolve_upload_dest_avoids_duplicate_within_same_batch(fake_env):
+    # data/上にはまだ存在しなくても、同一アップロードバッチ内で
+    # 既に使用済みのパス（taken_paths）とは衝突しないようにする
+    data_dir, _store = fake_env
+    first = ingest.resolve_upload_dest("report.txt")
+    taken = {first}
+
+    second = ingest.resolve_upload_dest("report.txt", taken_paths=taken)
+
+    assert first.name == "report.txt"
+    assert second.name == "report (2).txt"
+
+
+def test_resolve_upload_dest_rejects_bare_dotdot(fake_env):
+    # safe_upload_dest()がNoneを返すケース（".."自体はDATA_DIR自身/外を指してしまう）をそのまま伝播する
+    dest = ingest.resolve_upload_dest("..")
+
+    assert dest is None
+
+
+def test_resolve_upload_dest_appends_suffix_for_filename_without_extension(fake_env):
+    # 拡張子がないファイル名でも "name (2)" のようにサフィックスが正しく付与される
+    # （拡張子ありの場合と違い、末尾に直接 " (2)" が付くだけで拡張子相当の文字列は生まれない）
+    data_dir, _store = fake_env
+    _write(data_dir, "README", "既存のREADMEです。")
+
+    dest = ingest.resolve_upload_dest("README")
+
+    assert dest.name == "README (2)"
+    assert dest.suffix == ""
+
+
+def test_resolve_upload_dest_continues_numbering_from_existing_suffixed_file(fake_env):
+    # 元のファイル名は存在せず、連番サフィックス付きの "file (2).txt" だけが
+    # 既に存在するケース。この場合は無印の "file.txt" がまだ空いているため
+    # そちらが返る（「まず無印から順に空きを探す」仕様であることの確認）
+    data_dir, _store = fake_env
+    _write(data_dir, "file (2).txt", "サフィックス付きの既存ファイル")
+
+    dest = ingest.resolve_upload_dest("file.txt")
+
+    assert dest.name == "file.txt"
+
+
+def test_resolve_upload_dest_skips_to_next_free_number_when_lower_numbers_taken(fake_env):
+    # "file.txt" と "file (2).txt" の両方が既に存在する状態でさらに "file.txt" を
+    # アップロードすると、"file (3).txt" まで連番が繰り上がる（境界値）
+    data_dir, _store = fake_env
+    _write(data_dir, "file.txt", "1つ目")
+    _write(data_dir, "file (2).txt", "2つ目")
+
+    dest = ingest.resolve_upload_dest("file.txt")
+
+    assert dest.name == "file (3).txt"
+    assert not dest.exists()
+
+
 # --- data_dir_signature(): 内容を読まないstat()ベースの軽量変更検知（Issue #70） ---
 
 
