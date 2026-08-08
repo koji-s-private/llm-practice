@@ -340,3 +340,78 @@ def test_save_conversation_rejects_path_traversal_thread_id(client, monkeypatch,
 
     assert response.status_code == 400
     assert called["count"] == 0
+
+
+# --- thread_id の最大長チェック ---
+
+
+def test_save_conversation_accepts_thread_id_at_max_length_boundary(client, monkeypatch):
+    """境界値: 上限ちょうど（64文字）のthread_idは正常に保存できる。"""
+    thread_id = "a" * 64
+    saved_path = f"/tmp/{thread_id}/dummy.md"
+
+    def _fake_save(question, answer, thread_id_arg):
+        assert thread_id_arg == thread_id
+        return saved_path
+
+    monkeypatch.setattr(api_main, "save_conversation", _fake_save)
+
+    response = client.post(
+        "/api/conversations/save",
+        json={"question": "質問内容", "answer": "回答内容", "thread_id": thread_id},
+    )
+
+    assert response.status_code == 200
+    assert response.json() == {"path": saved_path}
+
+
+def test_save_conversation_accepts_thread_id_under_max_length(client, monkeypatch):
+    """正常系: 上限未満（63文字）のthread_idも問題なく保存できる。"""
+    thread_id = "a" * 63
+    monkeypatch.setattr(api_main, "save_conversation", lambda question, answer, thread_id_arg: "/tmp/dummy.md")
+
+    response = client.post(
+        "/api/conversations/save",
+        json={"question": "質問内容", "answer": "回答内容", "thread_id": thread_id},
+    )
+
+    assert response.status_code == 200
+
+
+def test_save_conversation_rejects_thread_id_exceeding_max_length(client, monkeypatch):
+    """異常系: 上限を1文字超える（65文字）thread_idは400で拒否され、save_conversation()は呼ばれない。"""
+    thread_id = "a" * 65
+    called = {"count": 0}
+
+    def _fake_save(question, answer, thread_id_arg):
+        called["count"] += 1
+        return None
+
+    monkeypatch.setattr(api_main, "save_conversation", _fake_save)
+
+    response = client.post(
+        "/api/conversations/save",
+        json={"question": "質問内容", "answer": "回答内容", "thread_id": thread_id},
+    )
+
+    assert response.status_code == 400
+    assert response.json()["detail"] == "thread_id が長すぎます"
+    assert called["count"] == 0
+
+
+def test_get_conversation_count_rejects_thread_id_exceeding_max_length(client, monkeypatch):
+    """異常系: GET /api/conversations/count でも上限超過のthread_idは400で拒否される。"""
+    thread_id = "b" * 65
+    called = {"count": 0}
+
+    def _fake_count(thread_id=None):
+        called["count"] += 1
+        return 0
+
+    monkeypatch.setattr(api_main, "conversation_count", _fake_count)
+
+    response = client.get("/api/conversations/count", params={"thread_id": thread_id})
+
+    assert response.status_code == 400
+    assert response.json()["detail"] == "thread_id が長すぎます"
+    assert called["count"] == 0
