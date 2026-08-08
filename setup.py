@@ -1,7 +1,10 @@
 import getpass
+import json
 import os
 import socket
 import sys
+import urllib.error
+import urllib.request
 
 from langchain.chat_models import init_chat_model
 
@@ -47,6 +50,30 @@ def _ollama_available() -> bool:
         return False
 
 
+def _ollama_model_pulled() -> bool:
+    """OLLAMA_MODELがOllamaに実際にpull済みかを `/api/tags` で確認する。
+
+    サーバー自体は起動していてもモデルが未pullだと、モデル呼び出し時になって
+    初めて "model not found" のようなエラーになるため、事前に検出してフォールバックに回す。
+    Ollamaのモデル名はタグ付き（例: "llama3.1:latest"）で返るため、OLLAMA_MODELに
+    タグが無い場合は暗黙のデフォルトタグ "latest" を補って比較する。
+    APIへの到達自体に失敗した場合は判定不能なだけで「Ollamaが使えない」ことを意味しない
+    ため、過検出を避けて安全側（pull済みとみなしOllamaを使い続ける）に倒す。
+    """
+    url = f"http://{OLLAMA_HOST}:{OLLAMA_PORT}/api/tags"
+    try:
+        with urllib.request.urlopen(url, timeout=0.5) as response:
+            data = json.loads(response.read())
+    except (OSError, urllib.error.URLError, ValueError):
+        return True
+
+    names = {model.get("name", "") for model in data.get("models", [])}
+    candidates = {OLLAMA_MODEL}
+    if ":" not in OLLAMA_MODEL:
+        candidates.add(f"{OLLAMA_MODEL}:latest")
+    return bool(names & candidates)
+
+
 def _build_model():
     """優先順位: 1) Ollama（無料・ローカル） 2) ANTHROPIC_API_KEY 3) OPENAI_API_KEY。
 
@@ -56,9 +83,16 @@ def _build_model():
     global CURRENT_PROVIDER
 
     if _ollama_available():
-        print(f"[setup] Ollama を検出: {OLLAMA_MODEL}（ローカル・無料）を使用します。")
-        CURRENT_PROVIDER = "ollama"
-        return init_chat_model(OLLAMA_MODEL, model_provider="ollama")
+        if _ollama_model_pulled():
+            print(f"[setup] Ollama を検出: {OLLAMA_MODEL}（ローカル・無料）を使用します。")
+            CURRENT_PROVIDER = "ollama"
+            return init_chat_model(OLLAMA_MODEL, model_provider="ollama")
+        print(
+            f"[setup] Ollama は起動していますが、モデル '{OLLAMA_MODEL}' が見つかりません"
+            "（pull未実施の可能性）。"
+            f"'ollama pull {OLLAMA_MODEL}' を実行するか、OLLAMA_MODEL を既存のモデル名に"
+            "変更してください。"
+        )
 
     if os.environ.get("ANTHROPIC_API_KEY"):
         print("[setup] ANTHROPIC_API_KEY を検出: Claude (claude-sonnet-5) を使用します。")

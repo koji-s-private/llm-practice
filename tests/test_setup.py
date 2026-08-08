@@ -7,6 +7,8 @@
 """
 
 import getpass
+import json
+import urllib.error
 
 import pytest
 
@@ -179,3 +181,142 @@ def test_build_model_sets_current_provider_openai(monkeypatch):
     setup._build_model()
 
     assert setup.CURRENT_PROVIDER == "openai"
+
+
+# --- _ollama_model_pulled()（Ollama起動済みだがモデル未pullの検出） ---
+
+
+class _FakeTagsResponse:
+    """`urllib.request.urlopen()` の戻り値（コンテキストマネージャ）を模したフェイク。"""
+
+    def __init__(self, payload):
+        self._body = json.dumps(payload).encode("utf-8")
+
+    def read(self):
+        return self._body
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc_value, traceback):
+        return False
+
+
+def _patch_tags_response(monkeypatch, payload):
+    monkeypatch.setattr(
+        setup.urllib.request,
+        "urlopen",
+        lambda url, timeout=None: _FakeTagsResponse(payload),
+    )
+
+
+def test_ollama_model_pulled_true_when_exact_name_present(monkeypatch):
+    monkeypatch.setattr(setup, "OLLAMA_MODEL", "llama3.1:latest")
+    _patch_tags_response(monkeypatch, {"models": [{"name": "llama3.1:latest"}]})
+
+    assert setup._ollama_model_pulled() is True
+
+
+def test_ollama_model_pulled_true_when_default_tag_matches_untagged_model(monkeypatch):
+    """OLLAMA_MODELにタグが無い場合、暗黙の`:latest`が付与されたモデル名とも一致させる。"""
+    monkeypatch.setattr(setup, "OLLAMA_MODEL", "llama3.1")
+    _patch_tags_response(monkeypatch, {"models": [{"name": "llama3.1:latest"}]})
+
+    assert setup._ollama_model_pulled() is True
+
+
+def test_ollama_model_pulled_false_when_model_not_in_list(monkeypatch):
+    monkeypatch.setattr(setup, "OLLAMA_MODEL", "llama3.1")
+    _patch_tags_response(monkeypatch, {"models": [{"name": "mistral:latest"}]})
+
+    assert setup._ollama_model_pulled() is False
+
+
+def test_ollama_model_pulled_true_when_api_unreachable(monkeypatch):
+    """/api/tagsへの到達自体に失敗した場合は判定不能として安全側（Trueのまま）に倒す。"""
+    monkeypatch.setattr(setup, "OLLAMA_MODEL", "llama3.1")
+
+    def _raise(url, timeout=None):
+        raise urllib.error.URLError("connection refused")
+
+    monkeypatch.setattr(setup.urllib.request, "urlopen", _raise)
+
+    assert setup._ollama_model_pulled() is True
+
+
+def test_ollama_model_pulled_true_when_response_is_not_valid_json(monkeypatch):
+    """レスポンスがJSONとしてパースできない場合も安全側（Trueのまま）に倒す。"""
+    monkeypatch.setattr(setup, "OLLAMA_MODEL", "llama3.1")
+
+    class _BrokenResponse:
+        def read(self):
+            return b"not-json"
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc_value, traceback):
+            return False
+
+    monkeypatch.setattr(setup.urllib.request, "urlopen", lambda url, timeout=None: _BrokenResponse())
+
+    assert setup._ollama_model_pulled() is True
+
+
+def test_build_model_falls_back_to_anthropic_when_ollama_model_not_pulled(monkeypatch, capsys):
+    """サーバーは起動しているがモデル未pullの場合、Ollamaを候補から除外しフォールバックする。"""
+    monkeypatch.setattr(setup, "_ollama_available", lambda: True)
+    monkeypatch.setattr(setup, "_ollama_model_pulled", lambda: False)
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "test-dummy-key")
+
+    setup._build_model()
+
+    assert setup.CURRENT_PROVIDER == "anthropic"
+    assert "見つかりません" in capsys.readouterr().out
+
+
+def test_ollama_model_pulled_false_when_models_list_is_empty(monkeypatch):
+    """境界値: /api/tags には正常に到達したが1件もpull済みモデルが無い場合はFalse。"""
+    monkeypatch.setattr(setup, "OLLAMA_MODEL", "llama3.1")
+    _patch_tags_response(monkeypatch, {"models": []})
+
+    assert setup._ollama_model_pulled() is False
+
+
+def test_ollama_model_pulled_false_when_models_key_missing(monkeypatch):
+    """境界値: レスポンスJSONは妥当だが"models"キー自体が無いスキーマ不一致の場合もFalse
+    （安全側フォールバックは「APIに到達できない」場合のみで、到達できた上での
+    スキーマ不一致まで安全側に倒すと誤検出を隠してしまうため）。"""
+    monkeypatch.setattr(setup, "OLLAMA_MODEL", "llama3.1")
+    _patch_tags_response(monkeypatch, {})
+
+    assert setup._ollama_model_pulled() is False
+
+
+def test_ollama_model_pulled_false_when_only_different_tag_present(monkeypatch):
+    """境界値: 同じベース名でもタグが異なる場合は別モデル扱いでFalse
+    （例: OLLAMA_MODEL="llama3.1:8b" なのにpull済みは"llama3.1:latest"のみ）。"""
+    monkeypatch.setattr(setup, "OLLAMA_MODEL", "llama3.1:8b")
+    _patch_tags_response(monkeypatch, {"models": [{"name": "llama3.1:latest"}]})
+
+    assert setup._ollama_model_pulled() is False
+
+
+def test_build_model_falls_back_through_to_runtime_error_when_ollama_model_not_pulled_and_no_keys(
+    monkeypatch,
+):
+    """異常系: Ollamaは起動しているがモデル未pullで、かつクラウド側のAPIキーも
+    無い非対話環境の場合、Ollamaが使えないときと同じRuntimeErrorに正しくフォールスルーする
+    （モデル未pull検出がOllama以外の分岐に悪影響を与えていないことの確認）。"""
+    monkeypatch.setattr(setup, "_ollama_available", lambda: True)
+    monkeypatch.setattr(setup, "_ollama_model_pulled", lambda: False)
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    monkeypatch.setattr(setup.sys, "stdin", _FakeStdin(is_tty=False))
+
+    with pytest.raises(RuntimeError) as exc_info:
+        setup._build_model()
+
+    message = str(exc_info.value)
+    assert "ANTHROPIC_API_KEY" in message
+    assert "OPENAI_API_KEY" in message
