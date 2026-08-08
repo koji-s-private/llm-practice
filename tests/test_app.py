@@ -536,3 +536,92 @@ def test_chat_input_placeholder_uses_renewed_wording():
     at = _run_app()
 
     assert at.chat_input[0].placeholder == "資料について気になることを聞いてみましょう"
+
+
+# --- 7. ファイルアップロード時の同名ファイル上書き防止（Issue #90） ---
+
+
+def test_upload_new_file_is_saved_as_is_without_warning(tmp_path, monkeypatch):
+    """正常系: data/に同名ファイルが存在しない通常のアップロードでは、
+    元のファイル名のまま保存され、st.warningは表示されない。"""
+    data_dir = tmp_path / "data"
+    monkeypatch.setattr(ingest, "DATA_DIR", data_dir)
+
+    at = _run_app()
+    at.file_uploader[0].set_value(("report.txt", b"new content", "text/plain"))
+    at = at.run()
+
+    assert at.exception == []
+    assert at.error == []
+    assert at.warning == []
+    saved = data_dir / "report.txt"
+    assert saved.exists()
+    assert saved.read_bytes() == b"new content"
+
+
+def test_upload_duplicate_filename_shows_warning_and_preserves_existing_file(tmp_path, monkeypatch):
+    """異常系境界値(Issue #90): data/に既に同名ファイルが存在する場合、
+    既存ファイルを上書きせず連番サフィックス付きの別名で保存し、
+    st.warningでリネームされた旨をまとめて通知する。"""
+    data_dir = tmp_path / "data"
+    data_dir.mkdir(parents=True)
+    (data_dir / "report.txt").write_bytes(b"existing content")
+    monkeypatch.setattr(ingest, "DATA_DIR", data_dir)
+
+    at = _run_app()
+    at.file_uploader[0].set_value(("report.txt", b"new content", "text/plain"))
+    at = at.run()
+
+    assert at.exception == []
+    assert at.error == []
+    assert len(at.warning) == 1
+    assert "report.txt" in at.warning[0].value
+    assert "report (2).txt" in at.warning[0].value
+    # 既存ファイルは上書きされず内容が保たれている
+    assert (data_dir / "report.txt").read_bytes() == b"existing content"
+    # 新しいファイルは連番サフィックス付きの別名で保存される
+    assert (data_dir / "report (2).txt").read_bytes() == b"new content"
+
+
+def test_upload_same_name_files_in_one_batch_shows_warning(tmp_path, monkeypatch):
+    """境界値(Issue #90): data/上にはまだ存在しなくても、同一アップロードバッチ内に
+    同名ファイルが複数含まれる場合は2件目以降が別名で保存され、st.warningが表示される。"""
+    data_dir = tmp_path / "data"
+    monkeypatch.setattr(ingest, "DATA_DIR", data_dir)
+
+    at = _run_app()
+    at.file_uploader[0].set_value(
+        [
+            ("dup.txt", b"first content", "text/plain"),
+            ("dup.txt", b"second content", "text/plain"),
+        ]
+    )
+    at = at.run()
+
+    assert at.exception == []
+    assert at.error == []
+    assert len(at.warning) == 1
+    assert "dup.txt" in at.warning[0].value
+    assert "dup (2).txt" in at.warning[0].value
+    assert (data_dir / "dup.txt").read_bytes() == b"first content"
+    assert (data_dir / "dup (2).txt").read_bytes() == b"second content"
+
+
+def test_upload_invalid_filename_shows_error_without_warning(tmp_path, monkeypatch):
+    """異常系境界値: resolve_upload_dest()がNoneを返す場合（パストラバーサルの疑い等、
+    実際の再現には st.file_uploader 自身の拡張子制限を回避する必要があるため、
+    ここでは resolve_upload_dest() 自体を直接フェイクにして分岐だけを検証する）、
+    該当ファイルはst.errorでスキップ表示され、リネーム扱いにならないためst.warningは
+    表示されない。"""
+    data_dir = tmp_path / "data"
+    monkeypatch.setattr(ingest, "DATA_DIR", data_dir)
+    monkeypatch.setattr(ingest, "resolve_upload_dest", lambda filename, taken_paths=None: None)
+
+    at = _run_app()
+    at.file_uploader[0].set_value(("evil.txt", b"content", "text/plain"))
+    at = at.run()
+
+    assert at.exception == []
+    assert len(at.error) == 1
+    assert "不正なファイル名のためスキップしました: evil.txt" in at.error[0].value
+    assert at.warning == []

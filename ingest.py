@@ -68,11 +68,41 @@ def safe_upload_dest(filename: str) -> Path | None:
     ディレクトリ部分（`../` 等）を除いた素のファイル名のみを使い、
     resolve() 後に DATA_DIR 配下から外れていないかを最終チェックする。
     DATA_DIR の外を指す場合（パストラバーサルの疑いがある場合）は None を返す。
+    同名ファイルが既に存在するかどうかはチェックしない（呼び出し元が
+    resolve_upload_dest() で別途重複を扱う）。
     """
     dest = (DATA_DIR / Path(filename).name).resolve()
     if dest.parent != DATA_DIR.resolve():
         return None
     return dest
+
+
+def resolve_upload_dest(filename: str, taken_paths: set[Path] | None = None) -> Path | None:
+    """アップロードされたファイル名から、上書きを避けた実際の書き込み先パスを求める。
+
+    safe_upload_dest() が返すパスに既にファイルが存在する場合（＝同名ファイルの
+    アップロード）、または同一アップロードバッチ内で既に使用済みのパスの場合
+    （taken_paths、同じバッチ内の同名ファイル対策）は、無警告での上書きを避けるため
+    "name (2).ext" のように連番サフィックスを付けた空いているパスを返す。
+    呼び出し元は、戻り値のファイル名が元のファイル名と異なっていた場合に
+    ユーザーへ警告を表示することを想定している。
+    パストラバーサルの疑いがある場合は safe_upload_dest() と同様に None を返す。
+    """
+    dest = safe_upload_dest(filename)
+    if dest is None:
+        return None
+
+    taken = taken_paths if taken_paths is not None else set()
+    if dest not in taken and not dest.exists():
+        return dest
+
+    stem, suffix = dest.stem, dest.suffix
+    counter = 2
+    candidate = dest.with_name(f"{stem} ({counter}){suffix}")
+    while candidate in taken or candidate.exists():
+        counter += 1
+        candidate = dest.with_name(f"{stem} ({counter}){suffix}")
+    return candidate
 
 
 def _load_manifest() -> dict:
