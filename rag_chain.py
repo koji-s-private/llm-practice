@@ -180,13 +180,10 @@ def build_agent(thread_id: str = GLOBAL_THREAD_ID):
         # スコアはChromaのL2距離（小さいほど類似）。埋め込みは正規化済み（get_embeddings参照）なので
         # 0〜2の範囲に収まる。ここではRECALL_DISTANCE_THRESHOLD未満を「候補」として粗く間引くだけで、
         # 最終判定は _grade_relevance に任せる。
-        # is_fallback=Trueの会話ログ（一般知識フォールバックで回答したもの）は、
-        # 根拠のない回答が以降の検索結果として再ヒットし、あたかもドキュメントの裏付けが
-        # あるかのように扱われてしまう（ハルシネーションの自己増幅）ことを防ぐため除外する。
         candidates = vector_store.similarity_search_with_score(
             query,
             k=CANDIDATE_K,
-            filter={"$and": [{"thread_id": {"$in": allowed_thread_ids}}, {"is_fallback": False}]},
+            filter={"thread_id": {"$in": allowed_thread_ids}},
         )
         narrowed = [doc for doc, score in candidates if score < RECALL_DISTANCE_THRESHOLD]
 

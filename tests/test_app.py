@@ -32,7 +32,7 @@ app.py はモジュールトップレベルで `from ingest import ... sync_data
 from pathlib import Path
 
 import pytest
-from langchain_core.messages import AIMessage, ToolMessage
+from langchain_core.messages import AIMessage
 from streamlit.testing.v1 import AppTest
 
 import ingest
@@ -55,23 +55,6 @@ class _FakeAgent:
         if self.exc is not None:
             raise self.exc
         return {"messages": payload["messages"] + [AIMessage(content=self.answer)]}
-
-
-class _FakeAgentWithSources:
-    """ToolMessageのartifactとして参照元ドキュメントを返すフェイクエージェント。
-
-    app.py は ToolMessage.artifact から sources を組み立てて、それが空か否かで
-    save_conversation の is_fallback 引数を決めるため、そのソース有り無しを
-    テストごとに切り替えられるようにする。
-    """
-
-    def __init__(self, answer="テスト回答です", artifact=None):
-        self.answer = answer
-        self.artifact = artifact if artifact is not None else []
-
-    def invoke(self, payload):
-        tool_message = ToolMessage(content="検索結果", artifact=self.artifact, tool_call_id="call-1")
-        return {"messages": payload["messages"] + [tool_message, AIMessage(content=self.answer)]}
 
 
 def _ok_sync(verbose=False):
@@ -396,53 +379,6 @@ def test_post_chat_saves_conversation_without_immediate_resync(monkeypatch):
     messages = at.session_state["messages"]
     assert len(messages) == 2
     assert messages[1].content == "回答"
-
-
-class _FakeSourceDoc:
-    """save_conversationのis_fallback判定テスト用の、参照元ドキュメントのフェイク。"""
-
-    def __init__(self, page_content="参照元の内容です", metadata=None):
-        self.page_content = page_content
-        self.metadata = metadata or {"source": "doc.txt"}
-
-
-def test_post_chat_saves_conversation_with_is_fallback_true_when_no_sources(monkeypatch):
-    """正常系: retrieve_contextが関連文書を1件も見つけられず（sourcesが空）
-    一般知識で回答した場合、save_conversationはis_fallback=Trueで呼ばれる。"""
-    fake_agent = _FakeAgentWithSources(answer="一般知識による回答", artifact=[])
-    monkeypatch.setattr(rag_chain, "build_agent", lambda thread_id=None: fake_agent)
-
-    save_calls = []
-    monkeypatch.setattr(memory, "save_conversation", lambda *a, **k: save_calls.append((a, k)))
-
-    at = _run_app()
-    at.chat_input[0].set_value("質問です").run()
-
-    assert at.exception == []
-    assert len(save_calls) == 1
-    args, kwargs = save_calls[0]
-    # is_fallbackはキーワード引数として渡される想定だが、位置引数で渡された場合も考慮する
-    is_fallback = kwargs.get("is_fallback", args[3] if len(args) > 3 else None)
-    assert is_fallback is True
-
-
-def test_post_chat_saves_conversation_with_is_fallback_false_when_sources_present(monkeypatch):
-    """正常系: retrieve_contextが関連文書を見つけた（sourcesが非空）場合、
-    save_conversationはis_fallback=Falseで呼ばれる。"""
-    fake_agent = _FakeAgentWithSources(answer="文書に基づく回答", artifact=[_FakeSourceDoc()])
-    monkeypatch.setattr(rag_chain, "build_agent", lambda thread_id=None: fake_agent)
-
-    save_calls = []
-    monkeypatch.setattr(memory, "save_conversation", lambda *a, **k: save_calls.append((a, k)))
-
-    at = _run_app()
-    at.chat_input[0].set_value("質問です").run()
-
-    assert at.exception == []
-    assert len(save_calls) == 1
-    args, kwargs = save_calls[0]
-    is_fallback = kwargs.get("is_fallback", args[3] if len(args) > 3 else None)
-    assert is_fallback is False
 
 
 def test_post_chat_signature_change_triggers_sync_on_next_run(monkeypatch):

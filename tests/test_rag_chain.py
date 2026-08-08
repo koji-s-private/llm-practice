@@ -171,23 +171,8 @@ def test_retrieve_context_restricts_search_to_global_and_own_thread(monkeypatch)
 
     retrieve_context.func("質問")
 
-    # filterは $and で thread_id 条件と is_fallback 条件を組み合わせた構造になっている
-    and_conditions = store.last_call["filter"]["$and"]
-    thread_condition = next(c for c in and_conditions if "thread_id" in c)
-    allowed_ids = set(thread_condition["thread_id"]["$in"])
+    allowed_ids = set(store.last_call["filter"]["thread_id"]["$in"])
     assert allowed_ids == {rag_chain.GLOBAL_THREAD_ID, "thread-1"}
-
-
-def test_retrieve_context_excludes_fallback_conversations_from_search_filter(monkeypatch):
-    """一般知識フォールバック回答として保存された会話ログ（is_fallback=True）を
-    検索対象から除外するフィルタ条件が含まれていることを確認する。"""
-    retrieve_context, store = _build_agent_with_store(monkeypatch, results=[])
-
-    retrieve_context.func("質問")
-
-    and_conditions = store.last_call["filter"]["$and"]
-    fallback_condition = next(c for c in and_conditions if "is_fallback" in c)
-    assert fallback_condition == {"is_fallback": False}
 
 
 # --- get_vectorstore のdocstring（Issue #81: CVE-2026-45829に関するセキュリティ注記） ---
