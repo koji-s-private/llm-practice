@@ -233,6 +233,72 @@ def test_chat_invoke_failure_shows_api_message_when_provider_is_cloud(monkeypatc
     assert at.session_state["messages"] == []
 
 
+def test_chat_invoke_failure_shows_model_not_found_message_when_provider_is_ollama(monkeypatch):
+    """異常系: プロバイダがOllamaでも、例外メッセージに"model"と"not found"が
+    含まれる場合はサーバー未起動ではなくモデル未pullを案内する文言に出し分ける。
+
+    setup._ollama_model_pulled() による起動時チェックをすり抜けたケースの保険。"""
+    import setup
+
+    monkeypatch.setattr(setup, "CURRENT_PROVIDER", "ollama")
+    fake_agent = _FakeAgent(exc=RuntimeError("model 'llama3.1' not found, try pulling it first"))
+    monkeypatch.setattr(rag_chain, "build_agent", lambda thread_id=None: fake_agent)
+
+    at = _run_app()
+    at.chat_input[0].set_value("質問です").run()
+
+    assert at.exception == []
+    assert len(at.error) == 1
+    assert "Ollamaサーバーに接続できません" not in at.error[0].value
+    assert "見つかりません" in at.error[0].value
+    assert "ollama pull" in at.error[0].value
+    assert at.session_state["messages"] == []
+
+
+def test_chat_invoke_failure_model_not_found_detection_is_case_insensitive(monkeypatch):
+    """境界値: "Model"/"NOT FOUND"のように大文字小文字が混在していても、
+    小文字化して判定しているため同じくモデル未pull案内文言になる。"""
+    import setup
+
+    monkeypatch.setattr(setup, "CURRENT_PROVIDER", "ollama")
+    fake_agent = _FakeAgent(exc=RuntimeError("Model 'llama3.1' NOT FOUND"))
+    monkeypatch.setattr(rag_chain, "build_agent", lambda thread_id=None: fake_agent)
+
+    at = _run_app()
+    at.chat_input[0].set_value("質問です").run()
+
+    assert at.exception == []
+    assert len(at.error) == 1
+    assert "見つかりません" in at.error[0].value
+    assert at.session_state["messages"] == []
+
+
+@pytest.mark.parametrize(
+    "exc_message",
+    [
+        "model is overloaded, try again later",  # "model"はあるが"not found"が無い
+        "endpoint not found (404)",  # "not found"はあるが"model"が無い
+    ],
+)
+def test_chat_invoke_failure_requires_both_keywords_for_model_not_found_message(monkeypatch, exc_message):
+    """境界値: "model"と"not found"の両方が揃わない場合は、モデル未pull文言ではなく
+    従来通りの汎用Ollama接続失敗文言のままになる（誤検出防止の回帰確認）。"""
+    import setup
+
+    monkeypatch.setattr(setup, "CURRENT_PROVIDER", "ollama")
+    fake_agent = _FakeAgent(exc=RuntimeError(exc_message))
+    monkeypatch.setattr(rag_chain, "build_agent", lambda thread_id=None: fake_agent)
+
+    at = _run_app()
+    at.chat_input[0].set_value("質問です").run()
+
+    assert at.exception == []
+    assert len(at.error) == 1
+    assert "Ollamaサーバーに接続できません" in at.error[0].value
+    assert "見つかりません" not in at.error[0].value
+    assert at.session_state["messages"] == []
+
+
 def test_chat_invoke_failure_shows_generic_fallback_when_provider_is_none(monkeypatch):
     """境界値: CURRENT_PROVIDER が未設定（None、想定外の状態）の場合、
     Ollama決め打ちの文言にもAPI決め打ちの文言にもならず、汎用的なフォールバック文言が

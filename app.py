@@ -146,7 +146,17 @@ def _format_invoke_error_message(e: Exception) -> str:
     誘導してしまう。setup.CURRENT_PROVIDER を参照し、実際の使用プロバイダに即した文言にする。
     """
     if setup.CURRENT_PROVIDER == "ollama":
-        cause = "Ollamaサーバーに接続できません。起動しているか確認してください。"
+        message = str(e).lower()
+        if "model" in message and "not found" in message:
+            # 起動時チェック（setup._ollama_model_pulled()）をすり抜けたケースや、
+            # 起動後に別プロセスでモデルが削除された場合の保険。
+            cause = (
+                f"モデル '{setup.OLLAMA_MODEL}' が見つかりません。"
+                f"'ollama pull {setup.OLLAMA_MODEL}' を実行するか、"
+                "OLLAMA_MODEL の設定を見直してください。"
+            )
+        else:
+            cause = "Ollamaサーバーに接続できません。起動しているか確認してください。"
     elif setup.CURRENT_PROVIDER in ("anthropic", "openai"):
         cause = "APIへの接続に失敗しました。APIキーやネットワーク接続、レート制限などをご確認ください。"
     else:
