@@ -87,3 +87,12 @@ def test_ruff_config_excludes_tutorial_scripts_and_selects_expected_rules():
 def test_ruff_is_listed_in_requirements():
     requirements_text = (REPO_ROOT / "requirements.txt").read_text(encoding="utf-8")
     assert "ruff" in requirements_text.split()
+
+
+def test_pyyaml_is_listed_in_requirements():
+    # PyYAMLはtest_ci_config.py/test_ci_failure_guard_config.pyの`import yaml`に必須だが、
+    # 他パッケージの推移的依存に頼らず明示的にバージョン固定されていることを検証する。
+    requirements_text = (REPO_ROOT / "requirements.txt").read_text(encoding="utf-8")
+    pyyaml_lines = [line for line in requirements_text.splitlines() if line.strip().upper().startswith("PYYAML")]
+    assert len(pyyaml_lines) == 1, f"PyYAMLの記載は1行のみであること: {pyyaml_lines}"
+    assert "==" in pyyaml_lines[0], "PyYAMLはバージョン固定(==)で記載されていること"
