@@ -29,7 +29,6 @@ import argparse
 import json
 import logging
 import os
-import re
 from pathlib import Path
 
 from langchain_community.document_loaders import PyMuPDFLoader, TextLoader
@@ -61,9 +60,6 @@ LOADERS = {
 # 1ページあたりの抽出文字数がこれ未満の場合、「うまくテキスト抽出できていない
 # （図解・スキャンPDFの疑いがある）」とみなしDoclingでの再解析を試みる。
 MIN_CHARS_PER_PAGE_FOR_FAST_PATH = 40
-
-# memory.save_conversation() が会話ログのMarkdownに書き込むメタデータ行を検出する正規表現。
-FALLBACK_METADATA_PATTERN = re.compile(r"^-\s*一般知識フォールバック:\s*true\s*$", re.MULTILINE)
 
 
 def safe_upload_dest(filename: str) -> Path | None:
@@ -205,16 +201,6 @@ def _thread_id_for(rel_path: str) -> str:
     return GLOBAL_THREAD_ID
 
 
-def _is_fallback_conversation(docs: list) -> bool:
-    """分割前の生ドキュメントの本文から、一般知識フォールバック回答の会話ログかどうかを判定する。
-
-    memory.save_conversation() が書き込む「- 一般知識フォールバック: true」という
-    メタデータ行を正規表現で検出する。通常のドキュメント・アップロードファイルなど
-    該当行が無いものは False になる。
-    """
-    return any(FALLBACK_METADATA_PATTERN.search(doc.page_content) for doc in docs)
-
-
 def data_dir_signature() -> tuple[int, float]:
     """data/ の変更有無を、内容を読まずにstat()だけで軽量に判定するためのシグネチャを返す。
 
@@ -284,14 +270,8 @@ def sync_data_dir(verbose: bool = True) -> dict:
         # 会話ログはそのスレッドのみ、それ以外（通常ドキュメント・アップロード）は
         # 全スレッド共通で検索できるよう、チャンクにthread_idをメタデータとして付与する。
         thread_id = _thread_id_for(name)
-        # 一般知識フォールバック回答の会話ログは、根拠のないままベクトルDBに再学習されると
-        # 以降の検索結果として再ヒットし、あたかもドキュメントの裏付けがあるかのように
-        # 扱われてしまう。全チャンクに一貫してis_fallbackキーを持たせることで、
-        # rag_chain.retrieve_context側のメタデータフィルタが確実に効くようにする。
-        is_fallback = _is_fallback_conversation(docs)
         for chunk in chunks:
             chunk.metadata["thread_id"] = thread_id
-            chunk.metadata["is_fallback"] = is_fallback
 
         # 新チャンクの追加を先に行い、成功してから旧チャンクを削除する（delete→addの逆順）。
         # delete→addの順だと、削除成功後にadd_documents()が失敗した場合、旧チャンクは

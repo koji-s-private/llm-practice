@@ -32,14 +32,8 @@ def _slugify_snippet(text: str, length: int = 20) -> str:
     return snippet or "conversation"
 
 
-def save_conversation(question: str, answer: str, thread_id: str, is_fallback: bool = False) -> Path:
+def save_conversation(question: str, answer: str, thread_id: str) -> Path:
     """1回分の質問・回答を Markdown ファイルとして data/conversations/<thread_id>/ に保存する。
-
-    is_fallback: ドキュメントに根拠が見つからず一般知識で回答した場合は True を渡す。
-    Markdown本文にメタデータ行として書き込んでおき、ingest.sync_data_dir() が
-    チャンクのメタデータ(is_fallback)に反映する。これにより、根拠のない一般知識の
-    回答が以降の検索結果として再ヒットし、あたかもドキュメントの裏付けが
-    あるかのように扱われてしまうことを防ぐ（rag_chain.retrieve_context側で除外する）。
 
     戻り値: 保存したファイルのパス。
     呼び出し側で ingest.sync_data_dir() を呼べば、そのままベクトルDBに反映される
@@ -53,10 +47,7 @@ def save_conversation(question: str, answer: str, thread_id: str, is_fallback: b
     path = thread_dir / filename
 
     content = (
-        f"# 会話ログ\n\n"
-        f"- 日時: {now.strftime('%Y-%m-%d %H:%M:%S')}\n"
-        f"- 一般知識フォールバック: {'true' if is_fallback else 'false'}\n\n"
-        f"## 質問\n\n{question}\n\n## 回答\n\n{answer}\n"
+        f"# 会話ログ\n\n- 日時: {now.strftime('%Y-%m-%d %H:%M:%S')}\n\n## 質問\n\n{question}\n\n## 回答\n\n{answer}\n"
     )
     path.write_text(content, encoding="utf-8")
     return path

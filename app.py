@@ -315,7 +315,5 @@ if user_input:
         # 次回このスクリプトが再実行されたタイミング（次の会話・ボタン操作・リロード等）で、
         # トップレベルの軽量シグネチャチェックがファイル数の増加を検知し、自動的に同期される
         # （チャット1往復ごとに毎回フル同期する実装より軽量）。
-        # sourcesが空＝retrieve_contextが関連文書を1件も見つけられず一般知識で回答した
-        # ケースなので、is_fallbackとして記録し、以降の検索対象から除外できるようにする。
         if st.session_state.auto_save_memory:
-            save_conversation(user_input, answer, st.session_state.thread_id, is_fallback=not sources)
+            save_conversation(user_input, answer, st.session_state.thread_id)
