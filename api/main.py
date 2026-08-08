@@ -1,9 +1,8 @@
 """
 ローカルドキュメントに質問できるRAGチャットアプリ「Doclore」のバックエンドAPI（FastAPI）。
 
-Issue #88（フロントエンド移行 Step1: API層の切り出し）で、既存のPythonロジック
-（`ingest.py` / `rag_chain.py` / `memory.py`）を一切変更せず、そのまま呼び出す
-ラッパーとして追加した。既存のStreamlit版（`app.py`）はフォールバックとして
+既存のPythonロジック（`ingest.py` / `rag_chain.py` / `memory.py`）を一切変更せず、
+そのまま呼び出すラッパーとして構成している。既存のStreamlit版（`app.py`）はフォールバックとして
 そのまま残しており、どちらからでも同じ `data/` / `chroma_db/` を参照する
 （本APIとStreamlit版を同時に起動しても差し支えない）。
 
@@ -38,7 +37,7 @@ from rag_chain import build_agent
 
 app = FastAPI(
     title="Doclore API",
-    description="ローカルRAGチャットアプリ「Doclore」のバックエンドAPI（Issue #88）",
+    description="ローカルRAGチャットアプリ「Doclore」のバックエンドAPI",
 )
 
 # Step2以降でVite開発サーバ（デフォルトはlocalhost:5173）から本APIを叩けるようにするための
