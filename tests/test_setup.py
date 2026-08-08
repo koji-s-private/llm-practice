@@ -263,6 +263,24 @@ def test_ollama_model_pulled_true_when_response_is_not_valid_json(monkeypatch):
     assert setup._ollama_model_pulled() is True
 
 
+def test_ollama_model_pulled_true_when_response_is_json_array(monkeypatch):
+    """レスポンスが妥当なJSONでも最上位がオブジェクトでない（配列）場合は
+    スキーマ不一致として安全側（Trueのまま）に倒す（`.get()`呼び出しでの
+    AttributeError送出を防ぐ）。"""
+    monkeypatch.setattr(setup, "OLLAMA_MODEL", "llama3.1")
+    _patch_tags_response(monkeypatch, ["llama3.1:latest"])
+
+    assert setup._ollama_model_pulled() is True
+
+
+def test_ollama_model_pulled_true_when_response_is_json_string(monkeypatch):
+    """レスポンスが妥当なJSONでも最上位がオブジェクトでない（文字列）場合も同様に安全側。"""
+    monkeypatch.setattr(setup, "OLLAMA_MODEL", "llama3.1")
+    _patch_tags_response(monkeypatch, "unexpected-string-response")
+
+    assert setup._ollama_model_pulled() is True
+
+
 def test_build_model_falls_back_to_anthropic_when_ollama_model_not_pulled(monkeypatch, capsys):
     """サーバーは起動しているがモデル未pullの場合、Ollamaを候補から除外しフォールバックする。"""
     monkeypatch.setattr(setup, "_ollama_available", lambda: True)

@@ -67,6 +67,11 @@ def _ollama_model_pulled() -> bool:
     except (OSError, urllib.error.URLError, ValueError):
         return True
 
+    # 妥当なJSONでも最上位がオブジェクトでない場合（配列・文字列など）は
+    # スキーマ不一致として同様に判定不能扱いにする。
+    if not isinstance(data, dict):
+        return True
+
     names = {model.get("name", "") for model in data.get("models", [])}
     candidates = {OLLAMA_MODEL}
     if ":" not in OLLAMA_MODEL:
