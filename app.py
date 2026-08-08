@@ -103,16 +103,38 @@ def _sync_and_report(spinner_text: str) -> None:
             f"更新{len(result['updated'])} / 削除{len(result['removed'])}）",
             icon="✅",
         )
+    # 読み込みに失敗したファイル名一覧をセッションに保持しておく。data_dir_signatureは
+    # ファイルが存在する限り変化しないため、この情報がないと警告表示がこの1回の
+    # スクリプト実行でしか出ず、次にユーザーが操作した瞬間に消えてしまう。
+    st.session_state.failed_sync_files = result["failed"]
     if result["failed"]:
-        st.warning(
-            "以下のファイルは読み込みに失敗したためスキップしました"
-            "（破損・パスワード付き・不正なエンコーディング等の可能性があります）:\n"
-            + "\n".join(f"- {name}" for name in result["failed"])
-        )
+        # 失敗ファイルが残っている間はシグネチャを更新しない。これにより
+        # 「data/の内容自体は変化していない」場合でも、トップレベルの軽量チェックが
+        # 引き続き「未同期」と判定し、次回のスクリプト再実行時に自動的に再同期・
+        # 再試行される（対象ファイルが修正・削除されるまでリトライが続く）。
+        return
     # 同期成功後の最新シグネチャを保存しておく。これにより、この直後にトップレベルの
     # 軽量チェックが再実行されても「変更なし」と判定され、無駄な二重同期が走らない
     # （手動の再同期ボタン・アップロード時の呼び出しでも共通してこの関数を通るため）。
     st.session_state.data_dir_signature = data_dir_signature()
+
+
+def _show_failed_sync_files_warning() -> None:
+    """読み込みに失敗したファイルの警告を、同期が成功するまで毎回のスクリプト実行で表示し続ける。
+
+    st.warningはそのスクリプト実行の描画にしか残らないため、_sync_and_report()内で
+    一度呼ぶだけでは次の画面操作（別のチャット送信・ボタン押下等）で消えてしまう。
+    ここでセッションに保持した失敗ファイル一覧を毎回参照して描画することで、
+    ユーザーがファイルを修正・削除して同期が成功するまで警告が残り続けるようにする。
+    """
+    failed = st.session_state.get("failed_sync_files")
+    if not failed:
+        return
+    st.warning(
+        "以下のファイルは読み込みに失敗したため、DBへの反映がスキップされています"
+        "（破損・パスワード付き・不正なエンコーディング等の可能性があります）。"
+        "data/ から修正・削除すると自動的に再試行されます:\n" + "\n".join(f"- {name}" for name in failed)
+    )
 
 
 def _format_invoke_error_message(e: Exception) -> str:
@@ -152,6 +174,10 @@ if "thread_id" not in st.session_state:
 current_data_dir_signature = data_dir_signature()
 if st.session_state.get("data_dir_signature") != current_data_dir_signature:
     _sync_and_report("data/ をベクトルDBに同期中...")
+
+# 前回までの同期で読み込みに失敗したファイルが残っている場合、このスクリプト実行でも
+# 警告を表示し続ける（同期が呼ばれなかった場合でも、直前の失敗状態を毎回描画するため）。
+_show_failed_sync_files_warning()
 
 # エージェント自体はdata/の変更とは独立して一度だけ構築すればよい
 # （検索ツールはベクトルストアを都度クエリするため、同期結果は再構築なしで自動的に反映される）。

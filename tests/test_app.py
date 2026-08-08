@@ -625,3 +625,103 @@ def test_upload_invalid_filename_shows_error_without_warning(tmp_path, monkeypat
     assert len(at.error) == 1
     assert "不正なファイル名のためスキップしました: evil.txt" in at.error[0].value
     assert at.warning == []
+
+
+# --- 8. 読み込み失敗ファイルの警告永続化・自動リトライ（Issue #116） ---
+
+
+def test_failed_sync_files_warning_persists_and_retries_until_fixed(monkeypatch):
+    """異常系: 読み込みに失敗したファイルがdata/内に残っている間は、
+    data_dir_signature()（ファイル数+最新mtimeのみを見る軽量判定）が変化しなくても、
+    次回以降のスクリプト再実行のたびに自動でsync_data_dirが再試行され、
+    警告も消えずに表示され続ける。修正されて同期が成功すれば警告は消え、
+    以降の再実行では余計な同期が走らなくなる（元の状態に戻る）。"""
+    # data/自体は一切変化していない想定でシグネチャを固定する
+    sig_holder = {"value": (1, 100.0)}
+    monkeypatch.setattr(ingest, "data_dir_signature", lambda: sig_holder["value"])
+
+    call_count = {"n": 0}
+
+    def flaky_sync(verbose=False):
+        call_count["n"] += 1
+        if call_count["n"] <= 2:
+            return {"added": [], "updated": [], "removed": [], "failed": ["broken.pdf"]}
+        return {"added": ["broken.pdf"], "updated": [], "removed": [], "failed": []}
+
+    monkeypatch.setattr(ingest, "sync_data_dir", flaky_sync)
+
+    at = _run_app()
+    assert call_count["n"] == 1
+    assert len(at.warning) == 1
+    assert "broken.pdf" in at.warning[0].value
+
+    # シグネチャは変化していないが、失敗ファイルが残っているため自動的に再試行される
+    at = at.run()
+    assert call_count["n"] == 2
+    assert len(at.warning) == 1
+    assert "broken.pdf" in at.warning[0].value
+
+    # ファイルが修正され、今回は同期に成功したとする
+    at = at.run()
+    assert call_count["n"] == 3
+    assert at.warning == []
+
+    # 成功後はシグネチャが保存されるため、以降のrun()では余計な同期は走らない
+    at = at.run()
+    assert call_count["n"] == 3
+
+
+def test_sync_success_without_failed_files_updates_signature_and_no_warning(monkeypatch):
+    """正常系: 失敗ファイルが無い同期では、従来通りdata_dir_signatureがセッションに
+    保存され警告は表示されない。次回run()でシグネチャが変化していなければ、
+    余計な同期も走らない（Issue #116対応後もこの基本挙動が壊れていないことの確認）。"""
+    sig_holder = {"value": (1, 100.0)}
+    monkeypatch.setattr(ingest, "data_dir_signature", lambda: sig_holder["value"])
+
+    call_count = {"n": 0}
+
+    def counting_sync(verbose=False):
+        call_count["n"] += 1
+        return {"added": [], "updated": [], "removed": [], "failed": []}
+
+    monkeypatch.setattr(ingest, "sync_data_dir", counting_sync)
+
+    at = _run_app()
+
+    assert at.exception == []
+    assert at.warning == []
+    assert at.session_state["data_dir_signature"] == sig_holder["value"]
+    assert at.session_state["failed_sync_files"] == []
+
+    at = at.run()
+    assert call_count["n"] == 1  # シグネチャ更新済みのため2回目のrun()では同期されない
+    assert at.warning == []
+
+
+def test_failed_sync_files_keep_signature_unset_until_recovered(monkeypatch):
+    """異常系境界値: 失敗ファイルが残っている間はdata_dir_signatureがセッションに
+    保存されず、failed_sync_filesにも失敗ファイル名がそのまま保持され続ける。
+    ファイルが修正されて同期が成功すると、両方とも正常時の状態にクリアされる。"""
+    sig_holder = {"value": (5, 500.0)}
+    monkeypatch.setattr(ingest, "data_dir_signature", lambda: sig_holder["value"])
+
+    call_count = {"n": 0}
+
+    def flaky_sync(verbose=False):
+        call_count["n"] += 1
+        if call_count["n"] == 1:
+            return {"added": [], "updated": [], "removed": [], "failed": ["corrupt.pdf"]}
+        return {"added": [], "updated": [], "removed": [], "failed": []}
+
+    monkeypatch.setattr(ingest, "sync_data_dir", flaky_sync)
+
+    at = _run_app()
+    assert "data_dir_signature" not in at.session_state
+    assert at.session_state["failed_sync_files"] == ["corrupt.pdf"]
+
+    # シグネチャ未保存のため、data/自体が無変化でも次回run()で自動的に再試行される
+    at = at.run()
+    assert call_count["n"] == 2
+    assert at.session_state["data_dir_signature"] == sig_holder["value"]
+    assert at.session_state["failed_sync_files"] == []
+    assert at.warning == []
