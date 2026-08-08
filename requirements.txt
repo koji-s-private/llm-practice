@@ -33,6 +33,7 @@ python-dotenv==1.2.2
 
 # テスト用
 pytest==9.1.1
+PyYAML==6.0.3                    # CI設定ファイル(YAML)のパース用（tests/test_ci_config.py等）。他パッケージの推移的依存に頼らず明示化
 
 # lint・フォーマット用（CIでruff check / ruff format --checkを実行）
 ruff==0.16.1
