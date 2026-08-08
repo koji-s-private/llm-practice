@@ -9,6 +9,7 @@ import json
 import os
 
 import pytest
+from langchain_core.documents import Document
 
 import ingest
 
@@ -163,6 +164,239 @@ def test_pdf_load_failure_is_recorded_as_failed(fake_env, monkeypatch):
 
     assert result == {"added": [], "updated": [], "removed": [], "failed": ["broken.pdf"]}
     assert store.docs_by_id == {}
+
+
+def test_load_pdf_falls_back_to_docling_when_pymupdf_raises(monkeypatch, tmp_path):
+    # Issue #89: PyMuPDF自体が例外を送出した場合（暗号化PDF・破損PDF等）でも、
+    # Doclingが利用可能ならフォールバックして読み込めることを検証する
+    fake_pdf_path = tmp_path / "encrypted.pdf"
+    fake_pdf_path.write_bytes(b"not a real pdf")
+
+    class _FailingPyMuPDFLoader:
+        def __init__(self, path):
+            self.path = path
+
+        def load(self):
+            raise ValueError("暗号化されたPDFは読み込めません")
+
+    class _SucceedingDoclingLoader:
+        def __init__(self, file_path, export_type):
+            self.file_path = file_path
+
+        def load(self):
+            return [Document(page_content="Doclingで抽出した本文です。")]
+
+    monkeypatch.setattr(ingest, "DOCLING_AVAILABLE", True)
+    monkeypatch.setattr(ingest, "PyMuPDFLoader", _FailingPyMuPDFLoader)
+    monkeypatch.setattr(ingest, "DoclingLoader", _SucceedingDoclingLoader)
+
+    docs = ingest._load_pdf(fake_pdf_path, verbose=False)
+
+    assert len(docs) == 1
+    assert docs[0].page_content == "Doclingで抽出した本文です。"
+    assert docs[0].metadata["source"] == str(fake_pdf_path)
+
+
+def test_load_pdf_docling_fallback_on_pymupdf_error_respects_verbose_false(monkeypatch, tmp_path, capsys):
+    # PyMuPDF例外時のDoclingフォールバック経路でも、verbose=Falseが
+    # _load_pdf_with_docling() まで正しく伝播し、標準出力に何も出力されないことを検証する
+    # （sync_data_dir(verbose=False)を使う app.py / api/main.py の本番導線での退行防止）
+    fake_pdf_path = tmp_path / "encrypted.pdf"
+    fake_pdf_path.write_bytes(b"not a real pdf")
+
+    class _FailingPyMuPDFLoader:
+        def __init__(self, path):
+            self.path = path
+
+        def load(self):
+            raise ValueError("暗号化されたPDFは読み込めません")
+
+    class _SucceedingDoclingLoader:
+        def __init__(self, file_path, export_type):
+            self.file_path = file_path
+
+        def load(self):
+            return [Document(page_content="Doclingで抽出した本文です。")]
+
+    monkeypatch.setattr(ingest, "DOCLING_AVAILABLE", True)
+    monkeypatch.setattr(ingest, "PyMuPDFLoader", _FailingPyMuPDFLoader)
+    monkeypatch.setattr(ingest, "DoclingLoader", _SucceedingDoclingLoader)
+
+    ingest._load_pdf(fake_pdf_path, verbose=False)
+
+    assert capsys.readouterr().out == ""
+
+
+def test_load_pdf_raises_original_error_when_docling_also_fails(monkeypatch, tmp_path):
+    # PyMuPDFが失敗し、Doclingも失敗（または未インストール）した場合は
+    # 元の例外がそのまま伝播し、呼び出し元で "failed" として扱われリトライ対象になる
+    fake_pdf_path = tmp_path / "broken.pdf"
+    fake_pdf_path.write_bytes(b"not a real pdf")
+
+    class _FailingPyMuPDFLoader:
+        def __init__(self, path):
+            self.path = path
+
+        def load(self):
+            raise ValueError("破損したPDFです")
+
+    class _FailingDoclingLoader:
+        def __init__(self, file_path, export_type):
+            self.file_path = file_path
+
+        def load(self):
+            raise RuntimeError("Doclingでも読み込めません")
+
+    monkeypatch.setattr(ingest, "DOCLING_AVAILABLE", True)
+    monkeypatch.setattr(ingest, "PyMuPDFLoader", _FailingPyMuPDFLoader)
+    monkeypatch.setattr(ingest, "DoclingLoader", _FailingDoclingLoader)
+
+    with pytest.raises(ValueError, match="破損したPDFです"):
+        ingest._load_pdf(fake_pdf_path, verbose=False)
+
+
+def test_load_pdf_raises_original_error_when_docling_not_installed(monkeypatch, tmp_path):
+    # Issue #89: PyMuPDFが例外を送出し、かつDoclingが未インストール（DOCLING_AVAILABLE=False）の場合は
+    # Doclingへのフォールバックを試みることなく、元の例外がそのまま伝播すること
+    fake_pdf_path = tmp_path / "broken.pdf"
+    fake_pdf_path.write_bytes(b"not a real pdf")
+
+    class _FailingPyMuPDFLoader:
+        def __init__(self, path):
+            self.path = path
+
+        def load(self):
+            raise ValueError("暗号化されたPDFは読み込めません")
+
+    class _DoclingLoaderThatShouldNotBeCalled:
+        def __init__(self, file_path, export_type):
+            raise AssertionError("Docling未インストール時はDoclingLoaderが呼ばれてはならない")
+
+    monkeypatch.setattr(ingest, "DOCLING_AVAILABLE", False)
+    monkeypatch.setattr(ingest, "PyMuPDFLoader", _FailingPyMuPDFLoader)
+    monkeypatch.setattr(ingest, "DoclingLoader", _DoclingLoaderThatShouldNotBeCalled)
+
+    with pytest.raises(ValueError, match="暗号化されたPDFは読み込めません"):
+        ingest._load_pdf(fake_pdf_path, verbose=False)
+
+
+def test_load_pdf_falls_back_to_docling_when_pymupdf_text_is_too_sparse(monkeypatch, tmp_path):
+    # 既存の「文字数不足時のフォールバック」機能のリグレッション確認。
+    # PyMuPDFLoader自体は例外を送出しないが、抽出できた文字数が閾値未満（図解・スキャンPDFの疑い）の場合、
+    # Doclingの抽出結果の方が多ければそちらを採用する
+    fake_pdf_path = tmp_path / "scanned.pdf"
+    fake_pdf_path.write_bytes(b"not a real pdf")
+
+    class _SparsePyMuPDFLoader:
+        def __init__(self, path):
+            self.path = path
+
+        def load(self):
+            return [Document(page_content="図")]  # MIN_CHARS_PER_PAGE_FOR_FAST_PATH未満
+
+    class _SucceedingDoclingLoader:
+        def __init__(self, file_path, export_type):
+            self.file_path = file_path
+
+        def load(self):
+            return [Document(page_content="Doclingで抽出したより多くの本文です。" * 5)]
+
+    monkeypatch.setattr(ingest, "DOCLING_AVAILABLE", True)
+    monkeypatch.setattr(ingest, "PyMuPDFLoader", _SparsePyMuPDFLoader)
+    monkeypatch.setattr(ingest, "DoclingLoader", _SucceedingDoclingLoader)
+
+    docs = ingest._load_pdf(fake_pdf_path, verbose=False)
+
+    assert len(docs) == 1
+    assert docs[0].page_content.startswith("Doclingで抽出したより多くの本文です。")
+    assert docs[0].metadata["source"] == str(fake_pdf_path)
+
+
+def test_load_pdf_keeps_pymupdf_result_when_docling_extracts_fewer_chars(monkeypatch, tmp_path):
+    # 文字数不足でDoclingを試みても、抽出できた文字数がPyMuPDFの結果を上回らない場合は
+    # PyMuPDFの結果（fast_docs）をそのまま使う（既存挙動のリグレッション確認）
+    fake_pdf_path = tmp_path / "scanned.pdf"
+    fake_pdf_path.write_bytes(b"not a real pdf")
+
+    class _SparsePyMuPDFLoader:
+        def __init__(self, path):
+            self.path = path
+
+        def load(self):
+            return [Document(page_content="図")]
+
+    class _WorseDoclingLoader:
+        def __init__(self, file_path, export_type):
+            self.file_path = file_path
+
+        def load(self):
+            return [Document(page_content="")]
+
+    monkeypatch.setattr(ingest, "DOCLING_AVAILABLE", True)
+    monkeypatch.setattr(ingest, "PyMuPDFLoader", _SparsePyMuPDFLoader)
+    monkeypatch.setattr(ingest, "DoclingLoader", _WorseDoclingLoader)
+
+    docs = ingest._load_pdf(fake_pdf_path, verbose=False)
+
+    assert len(docs) == 1
+    assert docs[0].page_content == "図"
+
+
+def test_load_pdf_keeps_pymupdf_result_when_docling_fails_for_sparse_text(monkeypatch, tmp_path):
+    # 文字数不足でDoclingにフォールバックしたが、Docling自体が例外を送出した場合は
+    # （PyMuPDF自体は成功しているので）例外を伝播させず、PyMuPDFの結果を使う（既存挙動のリグレッション確認）
+    fake_pdf_path = tmp_path / "scanned.pdf"
+    fake_pdf_path.write_bytes(b"not a real pdf")
+
+    class _SparsePyMuPDFLoader:
+        def __init__(self, path):
+            self.path = path
+
+        def load(self):
+            return [Document(page_content="図")]
+
+    class _FailingDoclingLoader:
+        def __init__(self, file_path, export_type):
+            self.file_path = file_path
+
+        def load(self):
+            raise RuntimeError("Doclingでも読み込めません")
+
+    monkeypatch.setattr(ingest, "DOCLING_AVAILABLE", True)
+    monkeypatch.setattr(ingest, "PyMuPDFLoader", _SparsePyMuPDFLoader)
+    monkeypatch.setattr(ingest, "DoclingLoader", _FailingDoclingLoader)
+
+    docs = ingest._load_pdf(fake_pdf_path, verbose=False)
+
+    assert len(docs) == 1
+    assert docs[0].page_content == "図"
+
+
+def test_load_pdf_uses_pymupdf_directly_when_text_is_sufficient(monkeypatch, tmp_path):
+    # 抽出文字数が閾値以上であれば、Doclingには一切フォールバックせずPyMuPDFの結果をそのまま使う
+    # （既存挙動のリグレッション確認。DoclingLoaderが呼ばれないことも合わせて検証する）
+    fake_pdf_path = tmp_path / "normal.pdf"
+    fake_pdf_path.write_bytes(b"not a real pdf")
+
+    class _SufficientPyMuPDFLoader:
+        def __init__(self, path):
+            self.path = path
+
+        def load(self):
+            return [Document(page_content="十分な量のテキストです。" * 10)]
+
+    class _DoclingLoaderThatShouldNotBeCalled:
+        def __init__(self, file_path, export_type):
+            raise AssertionError("文字数が十分な場合はDoclingLoaderが呼ばれてはならない")
+
+    monkeypatch.setattr(ingest, "DOCLING_AVAILABLE", True)
+    monkeypatch.setattr(ingest, "PyMuPDFLoader", _SufficientPyMuPDFLoader)
+    monkeypatch.setattr(ingest, "DoclingLoader", _DoclingLoaderThatShouldNotBeCalled)
+
+    docs = ingest._load_pdf(fake_pdf_path, verbose=False)
+
+    assert len(docs) == 1
+    assert docs[0].page_content == "十分な量のテキストです。" * 10
 
 
 def test_failed_file_is_not_recorded_in_manifest_and_retried_next_sync(fake_env, monkeypatch):
