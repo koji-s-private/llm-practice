@@ -594,6 +594,97 @@ def test_legacy_flat_conversation_file_falls_back_to_global_thread_id(fake_env):
     assert thread_ids == {ingest.GLOBAL_THREAD_ID}
 
 
+# --- _is_fallback_conversation() / is_fallbackメタデータ（Issue #9） ---
+
+
+class _FakeRawDoc:
+    """分割前の生ドキュメントのフェイク（page_contentのみ使う）。"""
+
+    def __init__(self, page_content):
+        self.page_content = page_content
+
+
+def test_is_fallback_conversation_true_when_metadata_line_present():
+    docs = [
+        _FakeRawDoc(
+            "# 会話ログ\n\n- 日時: 2026-01-01 00:00:00\n- 一般知識フォールバック: true\n\n"
+            "## 質問\n\n質問です\n\n## 回答\n\n回答です\n"
+        )
+    ]
+    assert ingest._is_fallback_conversation(docs) is True
+
+
+def test_is_fallback_conversation_false_when_metadata_line_says_false():
+    docs = [
+        _FakeRawDoc(
+            "# 会話ログ\n\n- 日時: 2026-01-01 00:00:00\n- 一般知識フォールバック: false\n\n"
+            "## 質問\n\n質問です\n\n## 回答\n\n回答です\n"
+        )
+    ]
+    assert ingest._is_fallback_conversation(docs) is False
+
+
+def test_is_fallback_conversation_false_for_normal_document_without_metadata_line():
+    docs = [_FakeRawDoc("これは通常のドキュメントです。会話ログのメタデータ行を含みません。")]
+    assert ingest._is_fallback_conversation(docs) is False
+
+
+def test_is_fallback_conversation_false_for_empty_doc_list():
+    # 境界値: 空リストの場合はany()がFalseを返すため False
+    assert ingest._is_fallback_conversation([]) is False
+
+
+def test_is_fallback_conversation_true_if_any_doc_in_list_matches():
+    # 複数ページ（PDF等）にまたがるドキュメントで、1ページでもメタデータ行があればTrue
+    docs = [
+        _FakeRawDoc("通常の内容"),
+        _FakeRawDoc("- 一般知識フォールバック: true"),
+    ]
+    assert ingest._is_fallback_conversation(docs) is True
+
+
+def test_sync_data_dir_tags_normal_document_as_not_fallback(fake_env):
+    data_dir, store = fake_env
+    _write(data_dir, "doc.txt", "通常のドキュメント内容です。" * 5)
+
+    ingest.sync_data_dir(verbose=False)
+
+    is_fallback_values = {doc.metadata["is_fallback"] for doc in store.docs_by_id.values()}
+    assert is_fallback_values == {False}
+
+
+def test_sync_data_dir_tags_fallback_conversation_log_chunks_as_fallback(fake_env):
+    data_dir, store = fake_env
+    content = (
+        "# 会話ログ\n\n"
+        "- 日時: 2026-01-01 00:00:00\n"
+        "- 一般知識フォールバック: true\n\n"
+        "## 質問\n\n一般知識で答えた質問です。\n\n## 回答\n\n一般知識による回答です。\n"
+    )
+    _write(data_dir, "conversations/thread-x/log.md", content)
+
+    ingest.sync_data_dir(verbose=False)
+
+    is_fallback_values = {doc.metadata["is_fallback"] for doc in store.docs_by_id.values()}
+    assert is_fallback_values == {True}
+
+
+def test_sync_data_dir_tags_non_fallback_conversation_log_chunks_as_not_fallback(fake_env):
+    data_dir, store = fake_env
+    content = (
+        "# 会話ログ\n\n"
+        "- 日時: 2026-01-01 00:00:00\n"
+        "- 一般知識フォールバック: false\n\n"
+        "## 質問\n\n文書に根拠のある質問です。\n\n## 回答\n\n文書に基づく回答です。\n"
+    )
+    _write(data_dir, "conversations/thread-y/log.md", content)
+
+    ingest.sync_data_dir(verbose=False)
+
+    is_fallback_values = {doc.metadata["is_fallback"] for doc in store.docs_by_id.values()}
+    assert is_fallback_values == {False}
+
+
 @pytest.mark.parametrize(
     ("filename", "expected_name"),
     [
