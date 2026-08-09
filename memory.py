@@ -19,6 +19,10 @@ from pathlib import Path
 
 CONVERSATIONS_DIR = Path(__file__).parent / "data" / "conversations"
 
+# 会話ログMarkdownから質問・回答本文を取り出すためのパターン（save_conversationの書式に対応）。
+_QUESTION_PATTERN = re.compile(r"## 質問\n\n(.*?)\n\n## 回答", re.DOTALL)
+_ANSWER_PATTERN = re.compile(r"## 回答\n\n(.*)", re.DOTALL)
+
 
 def new_thread_id() -> str:
     """新しい会話スレッドのIDを生成する（「新しい会話」ボタンや初回アクセス時に使用）。"""
@@ -60,6 +64,80 @@ def save_conversation(question: str, answer: str, thread_id: str, is_fallback: b
     )
     path.write_text(content, encoding="utf-8")
     return path
+
+
+def _extract_question(content: str) -> str:
+    match = _QUESTION_PATTERN.search(content)
+    return match.group(1).strip() if match else ""
+
+
+def _extract_answer(content: str) -> str:
+    match = _ANSWER_PATTERN.search(content)
+    return match.group(1).strip() if match else ""
+
+
+def _parse_created_at(path: Path) -> datetime:
+    """ファイル名の先頭（save_conversationが付与するタイムスタンプ）から作成日時を復元する。
+
+    命名規則から外れたファイル（手動で置かれた等）が万一あってもクラッシュしないよう、
+    パースに失敗した場合はファイルの更新日時にフォールバックする。
+    """
+    try:
+        return datetime.strptime(path.name[:15], "%Y%m%d_%H%M%S")
+    except ValueError:
+        return datetime.fromtimestamp(path.stat().st_mtime)
+
+
+def list_threads() -> list[dict]:
+    """data/conversations/ 配下の会話スレッド一覧を、作成日時が新しい順に返す。
+
+    サイドバーでの過去スレッド選択UIに使う。各要素は以下のキーを持つ:
+    - thread_id: スレッドID
+    - created_at: 最初の会話ログのタイムスタンプ（datetime）
+    - first_question: 最初の質問文（ラベル表示用の要約に使う）
+    - count: そのスレッドに保存されている会話ログ件数
+
+    会話ログが1件も無い（空の）スレッドフォルダは一覧に含めない。
+    """
+    if not CONVERSATIONS_DIR.exists():
+        return []
+
+    threads = []
+    for thread_dir in CONVERSATIONS_DIR.iterdir():
+        if not thread_dir.is_dir():
+            continue
+        files = sorted(thread_dir.glob("*.md"))
+        if not files:
+            continue
+        first_file = files[0]
+        threads.append(
+            {
+                "thread_id": thread_dir.name,
+                "created_at": _parse_created_at(first_file),
+                "first_question": _extract_question(first_file.read_text(encoding="utf-8")),
+                "count": len(files),
+            }
+        )
+
+    threads.sort(key=lambda t: t["created_at"], reverse=True)
+    return threads
+
+
+def load_conversation(thread_id: str) -> list[dict]:
+    """指定スレッドの会話ログを時系列順（古い→新しい）に読み込んで返す。
+
+    過去スレッドを再開する際、チャット画面に会話履歴を再現するために使う。
+    各要素は {"question": str, "answer": str} の形式。
+    """
+    thread_dir = CONVERSATIONS_DIR / thread_id
+    if not thread_dir.exists():
+        return []
+
+    conversations = []
+    for f in sorted(thread_dir.glob("*.md")):
+        content = f.read_text(encoding="utf-8")
+        conversations.append({"question": _extract_question(content), "answer": _extract_answer(content)})
+    return conversations
 
 
 def conversation_count(thread_id: str | None = None) -> int:
