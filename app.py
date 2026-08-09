@@ -140,7 +140,7 @@ def _show_failed_sync_files_warning() -> None:
 
 
 def _format_invoke_error_message(e: Exception) -> str:
-    """agent.invoke()失敗時のエラーメッセージを、実際に使用中のプロバイダに応じて出し分ける。
+    """agent.invoke()/agent.stream()失敗時のエラーメッセージを、実際に使用中のプロバイダに応じて出し分ける。
 
     setup.py の _build_model() はOllama→Anthropic→OpenAIの順にフォールバックするため、
     Claude/OpenAIで動作しているセッションでは「Ollamaサーバーに接続できません」という
@@ -328,29 +328,74 @@ if user_input:
         st.markdown(user_input)
 
     answer = None
+    sources: list = []
     with st.chat_message("assistant"):
         try:
-            with st.spinner("検索して回答を考え中..."):
-                result = st.session_state.agent.invoke(
-                    {"messages": st.session_state.messages + [HumanMessage(content=user_input)]}
-                )
-                new_messages = result["messages"]
-                answer = new_messages[-1].content
-                st.markdown(answer)
+            # 検索中であることを示すプレースホルダー。最初の回答トークンが届いた時点で消す
+            # （ツール呼び出し中は回答本文のトークンが生成されないため、その間の待機を可視化する）。
+            status_placeholder = st.empty()
+            status_placeholder.markdown("🔍 検索して回答を考え中...")
+            # st.write_stream() が内部的に生成するプレースホルダーは呼び出し元から
+            # 参照できず、ストリーム途中で例外が起きた場合に描画済みの部分テキストを
+            # クリアできない。自前でプレースホルダーを持つことで、except節から
+            # 明示的にクリアできるようにする。
+            answer_placeholder = st.empty()
 
-                # ツール呼び出しで取得した参照元ドキュメントを表示
-                sources = []
-                for m in new_messages:
-                    if isinstance(m, ToolMessage) and getattr(m, "artifact", None):
-                        sources.extend(m.artifact)
+            def _stream_answer():
+                """agentのストリーミング出力を逐次yieldしつつ、参照元ドキュメントをsourcesへ蓄積する。
 
-                if sources:
-                    with st.expander("参照した箇所を見る"):
-                        for i, doc in enumerate(sources, start=1):
-                            label = _format_source_label(doc.metadata)
-                            st.markdown(f"**[{i}] {label}**")
-                            st.text(_format_snippet(doc.page_content))
+                stream_mode="messages" は (メッセージチャンク, メタデータ) のタプルを順に返す。
+                ToolMessage（検索ツールの実行結果）のcontentはツールの生の検索結果テキストであり、
+                回答本文として表示すべきではないため除外し、artifact（取得ドキュメント）だけを
+                sourcesに蓄積する。回答本文（AIMessageChunk）のテキストのみをyieldする。
+
+                AIMessageChunk.content はプロバイダによって型が異なる（OpenAIは常にstr、
+                Anthropicはtoolsをbindしている場合 [{"type": "text", "text": "..."}] のような
+                content blocksのlistで返る）。BaseMessage.text プロパティはstr/listいずれの形式でも
+                text系ブロックのみを結合した文字列を返してくれるため、素朴なisinstance(content, str)判定
+                ではなくこちらを使い、プロバイダによらず本文を取りこぼさないようにする。
+                """
+                first_token = True
+                for chunk, _metadata in st.session_state.agent.stream(
+                    {"messages": st.session_state.messages + [HumanMessage(content=user_input)]},
+                    stream_mode="messages",
+                ):
+                    if isinstance(chunk, ToolMessage):
+                        if getattr(chunk, "artifact", None):
+                            sources.extend(chunk.artifact)
+                        continue
+                    text = getattr(chunk, "text", "")
+                    if text:
+                        if first_token:
+                            status_placeholder.empty()
+                            first_token = False
+                        yield text
+
+            # st.write_stream()ではなく手動で蓄積・描画する。理由は上記の
+            # answer_placeholderのコメントの通り、例外発生時に部分描画を
+            # クリアできるようにするため。
+            accumulated_answer = ""
+            for text in _stream_answer():
+                accumulated_answer += text
+                answer_placeholder.markdown(accumulated_answer)
+            answer = accumulated_answer
+            # 回答トークンが1つも届かなかった場合（ツール呼び出しのみで終わった等）に備え、
+            # プレースホルダーが残っていれば消す。
+            status_placeholder.empty()
+
+            # ツール呼び出しで取得した参照元ドキュメントを表示
+            if sources:
+                with st.expander("参照した箇所を見る"):
+                    for i, doc in enumerate(sources, start=1):
+                        label = _format_source_label(doc.metadata)
+                        st.markdown(f"**[{i}] {label}**")
+                        st.text(_format_snippet(doc.page_content))
         except Exception as e:
+            status_placeholder.empty()
+            # ストリーム途中（一部チャンクをyield済み）で例外が発生した場合に、
+            # 描画済みの部分的な回答テキストを画面に残さずクリアする。
+            answer_placeholder.empty()
+            answer = None
             st.error(_format_invoke_error_message(e))
 
     if answer is not None:

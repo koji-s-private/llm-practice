@@ -33,7 +33,7 @@ app.py はモジュールトップレベルで `from ingest import ... sync_data
 from pathlib import Path
 
 import pytest
-from langchain_core.messages import AIMessage, ToolMessage
+from langchain_core.messages import AIMessage, AIMessageChunk, ToolMessage
 from streamlit.testing.v1 import AppTest
 
 import ingest
@@ -44,18 +44,41 @@ APP_PATH = str(Path(__file__).resolve().parent.parent / "app.py")
 
 
 class _FakeAgent:
-    """rag_chain.build_agent() の代わりに使うフェイクエージェント。"""
+    """rag_chain.build_agent() の代わりに使うフェイクエージェント。
 
-    def __init__(self, answer="テスト回答です", exc=None):
+    app.py は agent.stream(..., stream_mode="messages") で (チャンク, メタデータ) の
+    タプルを逐次受け取るため、.stream() をメインで実装する。.invoke() は
+    互換性のため残しているが、現在のapp.pyからは呼ばれない。
+    """
+
+    def __init__(self, answer="テスト回答です", exc=None, chunks=None):
         self.answer = answer
         self.exc = exc
+        # 回答を複数チャンクに分割してyieldしたい場合はchunksを明示的に渡す。
+        # 未指定の場合、例外系テスト（exc指定あり）では部分的な回答チャンクを一切出さずに
+        # 直ちに失敗させ（従来のinvoke()失敗時と同じ「何も表示されないまま失敗する」挙動を再現）、
+        # 正常系テストではanswer全体を1チャンクとして返す。
+        if chunks is not None:
+            self.chunks = chunks
+        elif exc is not None:
+            self.chunks = []
+        else:
+            self.chunks = [answer]
         self.invoke_calls = []
+        self.stream_calls = []
 
     def invoke(self, payload):
         self.invoke_calls.append(payload)
         if self.exc is not None:
             raise self.exc
         return {"messages": payload["messages"] + [AIMessage(content=self.answer)]}
+
+    def stream(self, payload, stream_mode="messages"):
+        self.stream_calls.append(payload)
+        for piece in self.chunks:
+            yield AIMessageChunk(content=piece), {}
+        if self.exc is not None:
+            raise self.exc
 
 
 class _FakeAgentWithSources:
@@ -73,6 +96,14 @@ class _FakeAgentWithSources:
     def invoke(self, payload):
         tool_message = ToolMessage(content="検索結果", artifact=self.artifact, tool_call_id="call-1")
         return {"messages": payload["messages"] + [tool_message, AIMessage(content=self.answer)]}
+
+    def stream(self, payload, stream_mode="messages"):
+        # ツール実行結果（ToolMessage）を先にyieldし、その後に回答本文チャンクをyieldする。
+        # app.pyはToolMessageからartifactをsourcesへ蓄積し、AIMessageChunkのcontentのみを
+        # st.write_streamで逐次描画する。
+        tool_message = ToolMessage(content="検索結果", artifact=self.artifact, tool_call_id="call-1")
+        yield tool_message, {}
+        yield AIMessageChunk(content=self.answer), {}
 
 
 def _ok_sync(verbose=False):
@@ -205,7 +236,7 @@ def test_chat_success_appends_history_and_shows_answer(monkeypatch):
 
     assert at.exception == []
     assert at.error == []
-    assert len(fake_agent.invoke_calls) == 1
+    assert len(fake_agent.stream_calls) == 1
     messages = at.session_state["messages"]
     assert len(messages) == 2
     assert messages[0].content == "質問です"
@@ -365,6 +396,112 @@ def test_chat_invoke_failure_skips_auto_knowledge_save(monkeypatch):
 
     assert save_calls == []
     assert sync_calls["n"] == 1  # invoke失敗のためsave_conversationが呼ばれず、同期も増えない
+
+
+# --- 2b. ストリーミング表示（agent.stream()化）固有の挙動 ---
+
+
+def test_chat_streaming_chunks_are_concatenated_into_history(monkeypatch):
+    """正常系: agent.stream()が回答を複数チャンクに分けて返しても、
+    st.write_streamで正しく連結された1つの回答として会話履歴に保存される。"""
+    fake_agent = _FakeAgent(chunks=["これ", "が", "分割された回答です"])
+    monkeypatch.setattr(rag_chain, "build_agent", lambda thread_id=None: fake_agent)
+
+    at = _run_app()
+    at.chat_input[0].set_value("質問です").run()
+
+    assert at.exception == []
+    assert at.error == []
+    assert len(fake_agent.stream_calls) == 1
+    messages = at.session_state["messages"]
+    assert len(messages) == 2
+    assert messages[1].content == "これが分割された回答です"
+
+
+def test_chat_streaming_clears_searching_placeholder_after_first_token(monkeypatch):
+    """正常系: 最初の回答トークンが届いた時点で「🔍 検索して回答を考え中...」の
+    プレースホルダーが消え、最終的な画面には残らない。"""
+    fake_agent = _FakeAgent(answer="回答")
+    monkeypatch.setattr(rag_chain, "build_agent", lambda thread_id=None: fake_agent)
+
+    at = _run_app()
+    at.chat_input[0].set_value("質問です").run()
+
+    assert at.exception == []
+    assert not any("検索して回答を考え中" in m.value for m in at.markdown)
+
+
+def test_chat_streaming_anthropic_content_blocks_are_extracted_as_text(monkeypatch):
+    """異常系回帰: Anthropicバックエンド利用時、tools bind中のChatAnthropicは
+    AIMessageChunk.content を素の文字列ではなく [{"type": "text", "text": "..."}] のような
+    content blocksのlistで返す。素朴な isinstance(content, str) 判定だとこの形式を
+    一度も拾えず本文が空になってしまうため、AIMessageChunk.text プロパティ経由で
+    text系ブロックを正しく結合できることを確認する。"""
+    fake_agent = _FakeAgent(
+        chunks=[
+            [{"type": "text", "text": "これは"}],
+            [{"type": "text", "text": "Anthropic形式の回答です"}],
+        ]
+    )
+    monkeypatch.setattr(rag_chain, "build_agent", lambda thread_id=None: fake_agent)
+
+    at = _run_app()
+    at.chat_input[0].set_value("質問です").run()
+
+    assert at.exception == []
+    assert at.error == []
+    messages = at.session_state["messages"]
+    assert len(messages) == 2
+    assert messages[1].content == "これはAnthropic形式の回答です"
+
+
+def test_chat_streaming_exception_clears_partial_answer_from_screen(monkeypatch):
+    """異常系: 一部の回答チャンクを既に描画した後に例外が送出された場合、
+    途中まで描画された回答テキストが画面（markdown要素）に残らず、
+    st.errorのみが表示される。"""
+    fake_agent = _FakeAgent(chunks=["途中まで表示された回答"], exc=RuntimeError("stream broken"))
+    monkeypatch.setattr(rag_chain, "build_agent", lambda thread_id=None: fake_agent)
+
+    at = _run_app()
+    at.chat_input[0].set_value("質問です").run()
+
+    assert at.exception == []
+    assert len(at.error) == 1
+    assert not any("途中まで表示された回答" in m.value for m in at.markdown)
+
+
+def test_chat_streaming_tool_message_artifact_becomes_sources_expander(monkeypatch):
+    """正常系: ストリーミング中に届いたToolMessageのartifactが、参照元ドキュメントの
+    expanderとして正しく表示される（一括invokeからstreamに変わっても
+    参照元表示のロジックが壊れていないことの回帰確認）。"""
+    fake_agent = _FakeAgentWithSources(answer="文書に基づく回答", artifact=[_FakeSourceDoc()])
+    monkeypatch.setattr(rag_chain, "build_agent", lambda thread_id=None: fake_agent)
+
+    at = _run_app()
+    at.chat_input[0].set_value("質問です").run()
+
+    assert at.exception == []
+    expanders = [e for e in at.expander if "参照した箇所を見る" in e.label]
+    assert len(expanders) == 1
+
+
+def test_chat_streaming_exception_after_partial_chunks_skips_history_and_save(monkeypatch):
+    """異常系: 一部の回答チャンクを既にyieldした後に例外が送出された場合でも、
+    部分的な回答が会話履歴に残らず、save_conversationも呼ばれない
+    （answer=Noneのまま後続処理がスキップされる従来仕様の回帰確認）。"""
+    fake_agent = _FakeAgent(chunks=["途中まで", "の回答"], exc=RuntimeError("stream broken"))
+    monkeypatch.setattr(rag_chain, "build_agent", lambda thread_id=None: fake_agent)
+
+    save_calls = []
+    monkeypatch.setattr(memory, "save_conversation", lambda *a, **k: save_calls.append(a))
+
+    at = _run_app()
+    at.chat_input[0].set_value("質問です").run()
+
+    assert at.exception == []
+    assert len(at.error) == 1
+    assert at.session_state["messages"] == []
+    assert save_calls == []
 
 
 # --- 3. 会話ログ保存後の挙動（同一turn内での即時sync_data_dir呼び出しを廃止） ---
