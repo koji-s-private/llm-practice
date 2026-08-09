@@ -14,6 +14,8 @@ data/ フォルダの変更は、ページの操作（リロード・チャッ�
 「このスレッド」の次回以降の質問（別セッション・別タブでも同じスレッドを開けば）の
 回答材料として使われます。サイドバーの「🆕 新しい会話を始める」を押すと新しいスレッドIDが
 発行され、以前の会話ログは検索対象から外れる（＝無関係な過去の会話が回答に混ざらない）ようになります。
+サイドバーの「💬 過去の会話」から過去のスレッドを選んで再開することもでき、
+選択したスレッドの会話履歴がチャット画面に復元されます。
 
 保存先はすべてこのプロジェクト内のローカルディスク（data/ と chroma_db/）のみで、
 このアプリ自身が外部・クラウドへ追加送信することはありません。
@@ -26,7 +28,7 @@ from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 
 import setup
 from ingest import DATA_DIR, data_dir_signature, resolve_upload_dest, sync_data_dir
-from memory import conversation_count, new_thread_id, save_conversation
+from memory import conversation_count, list_threads, load_conversation, new_thread_id, save_conversation
 from rag_chain import GLOBAL_THREAD_ID, build_agent
 
 # 配色・フォントは .streamlit/config.toml のカスタムテーマで設定している。
@@ -169,6 +171,29 @@ def _start_new_chat() -> None:
     st.session_state.thread_id = new_thread_id()
     st.session_state.messages = []
     st.session_state.agent = build_agent(st.session_state.thread_id)
+    # スレッド選択のselectboxが古いスレッドの選択状態を保持したままだと、次の再実行時に
+    # 「選択値 != 新しいthread_id」と誤判定されて選択スレッドへ引き戻されてしまうためリセットする。
+    st.session_state.pop("thread_selector", None)
+
+
+def _format_thread_label(thread: dict) -> str:
+    """過去スレッド選択UI用に、作成日時と最初の質問の要約を組み合わせたラベルを作る。"""
+    timestamp = thread["created_at"].strftime("%Y-%m-%d %H:%M")
+    snippet = _format_snippet(thread["first_question"], limit=24) if thread["first_question"] else "(質問内容なし)"
+    return f"{timestamp}｜{snippet}（{thread['count']}件）"
+
+
+def _switch_thread(thread_id: str) -> None:
+    """選択された過去スレッドに切り替え、そのスレッドの会話履歴をチャット画面に復元する。"""
+    st.session_state.thread_id = thread_id
+    messages = []
+    for turn in load_conversation(thread_id):
+        if turn["question"]:
+            messages.append(HumanMessage(content=turn["question"]))
+        if turn["answer"]:
+            messages.append(AIMessage(content=turn["answer"]))
+    st.session_state.messages = messages
+    st.session_state.agent = build_agent(thread_id)
 
 
 if "thread_id" not in st.session_state:
@@ -205,6 +230,28 @@ with st.sidebar:
     if st.button("🆕 新しい会話を始める", use_container_width=True):
         _start_new_chat()
         st.rerun()
+
+    st.divider()
+    st.subheader("💬 過去の会話")
+    past_threads = list_threads()
+    if not past_threads:
+        st.caption("まだ保存された会話スレッドはありません。")
+    else:
+        thread_labels = {t["thread_id"]: _format_thread_label(t) for t in past_threads}
+        selected_thread_id = st.selectbox(
+            "過去のスレッドを選んで再開",
+            options=list(thread_labels.keys()),
+            format_func=lambda tid: thread_labels[tid],
+            index=None,
+            placeholder="スレッドを選択...",
+            key="thread_selector",
+            label_visibility="collapsed",
+        )
+        # 選択値が現在表示中のスレッドと異なる場合のみ切り替える。同じ場合はスキップし、
+        # 選択操作以外の理由での再実行（他のウィジェット操作等）で毎回再構築されないようにする。
+        if selected_thread_id and selected_thread_id != st.session_state.thread_id:
+            _switch_thread(selected_thread_id)
+            st.rerun()
 
     st.divider()
     # 「会話ID」という生のID文字列を主語にした表示ではなく、「今の会話を記憶に残すか」

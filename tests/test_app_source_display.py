@@ -1,6 +1,6 @@
-"""app.py の参照元表示整形ロジック（Issue #4）のテスト。
+"""app.py の参照元表示整形ロジック（Issue #4）・過去スレッドラベル整形（Issue #10）のテスト。
 
-`_format_snippet` / `_format_source_label` はどちらも Streamlit の機能（st.*）を
+`_format_snippet` / `_format_source_label` / `_format_thread_label` はいずれも Streamlit の機能（st.*）を
 一切使わない純粋関数のため、`tests/test_app.py` のような `AppTest` 経由の
 UIレベル検証ではなく、関数を直接呼び出す通常のユニットテストとして検証する。
 
@@ -18,6 +18,7 @@ UIレベル検証ではなく、関数を直接呼び出す通常のユニット
 
 import importlib
 import sys
+from datetime import datetime
 
 import pytest
 from langchain_core.messages import AIMessage
@@ -236,3 +237,42 @@ def test_format_source_label_unknown_source_with_page(app_module):
     """異常系境界値: sourceが不明でもpageがあれば、そのまま「（p.N）」が付与される。"""
     label = app_module._format_source_label({"page": 0})
     assert label == "unknown（p.1）"
+
+
+# --- 3. _format_thread_label ---
+
+
+def test_format_thread_label_formats_timestamp_question_and_count(app_module):
+    """正常系: 「YYYY-MM-DD HH:MM｜質問の要約（N件）」の形式でラベルを組み立てる。"""
+    thread = {
+        "thread_id": "abc123",
+        "created_at": datetime(2024, 3, 15, 9, 5, 0),
+        "first_question": "短い質問",
+        "count": 4,
+    }
+    label = app_module._format_thread_label(thread)
+    assert label == "2024-03-15 09:05｜短い質問（4件）"
+
+
+def test_format_thread_label_uses_placeholder_when_first_question_empty(app_module):
+    """境界値: first_questionが空文字列の場合は「(質問内容なし)」というプレースホルダーになる。"""
+    thread = {
+        "thread_id": "abc123",
+        "created_at": datetime(2024, 3, 15, 9, 5, 0),
+        "first_question": "",
+        "count": 0,
+    }
+    label = app_module._format_thread_label(thread)
+    assert label == "2024-03-15 09:05｜(質問内容なし)（0件）"
+
+
+def test_format_thread_label_truncates_long_question_to_24_chars(app_module):
+    """境界値: 質問文は_format_snippet(limit=24)で要約され、24文字を超える分は"..."になる。"""
+    thread = {
+        "thread_id": "abc123",
+        "created_at": datetime(2024, 3, 15, 9, 5, 0),
+        "first_question": "あ" * 30,
+        "count": 1,
+    }
+    label = app_module._format_thread_label(thread)
+    assert label == "2024-03-15 09:05｜" + "あ" * 24 + "...（1件）"

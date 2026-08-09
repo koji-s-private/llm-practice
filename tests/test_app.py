@@ -12,7 +12,8 @@ app.py が直接 import している以下のシンボルを monkeypatch で軽�
   意図的に起こしたいテストではmonkeypatchで差し替える）
 - `rag_chain.build_agent`（フェイクエージェントを返す。`.invoke()` の成功/失敗を
   テストごとに切り替える）
-- `memory.new_thread_id` / `memory.conversation_count` / `memory.save_conversation`
+- `memory.new_thread_id` / `memory.conversation_count` / `memory.save_conversation` /
+  `memory.list_threads` / `memory.load_conversation`
 
 app.py はモジュールトップレベルで `from ingest import ... sync_data_dir` のように
 シンボルをインポートしているため、`AppTest.run()` がスクリプトを実行する
@@ -90,6 +91,8 @@ def _patch_light_dependencies(monkeypatch):
     monkeypatch.setattr(memory, "new_thread_id", lambda: "thread-test")
     monkeypatch.setattr(memory, "conversation_count", lambda thread_id: 0)
     monkeypatch.setattr(memory, "save_conversation", lambda *a, **k: None)
+    monkeypatch.setattr(memory, "list_threads", lambda: [])
+    monkeypatch.setattr(memory, "load_conversation", lambda thread_id: [])
 
 
 def _run_app() -> AppTest:
@@ -654,11 +657,12 @@ def test_doclore_branding_title_and_tagline_are_displayed():
 def test_sidebar_document_management_heading_has_folder_icon():
     """境界値: サイドバーの「ドキュメント管理」見出しに📂アイコンが付与され、
     かつ既存の見出しテキスト自体は変わっていない（絵文字の付け忘れ・文言の
-    意図しない変更の両方を検知できるようにする）。"""
+    意図しない変更の両方を検知できるようにする）。「💬 過去の会話」見出し（Issue #10）が
+    追加された後も、サイドバー内の見出しの並び順・両方の文言が保たれていることを確認する。"""
     at = _run_app()
 
     headings = [s.value for s in at.sidebar.subheader]
-    assert headings == ["📂 ドキュメント管理"]
+    assert headings == ["💬 過去の会話", "📂 ドキュメント管理"]
 
 
 def test_chat_input_placeholder_uses_renewed_wording():
@@ -855,3 +859,190 @@ def test_failed_sync_files_keep_signature_unset_until_recovered(monkeypatch):
     assert at.session_state["data_dir_signature"] == sig_holder["value"]
     assert at.session_state["failed_sync_files"] == []
     assert at.warning == []
+
+
+# --- 9. サイドバーの過去スレッド選択・再開機能（Issue #10） ---
+
+
+def test_past_threads_empty_state_shows_caption_and_no_selectbox():
+    """正常系: 過去スレッドが0件の場合、案内キャプションのみが表示され、selectboxは描画されない
+    （デフォルトフィクスチャで memory.list_threads は [] を返す）。"""
+    at = _run_app()
+
+    assert at.exception == []
+    assert any("まだ保存された会話スレッドはありません。" in c.value for c in at.sidebar.caption)
+    assert at.sidebar.selectbox == []
+
+
+def test_past_threads_selectbox_shows_formatted_labels_when_threads_exist(monkeypatch):
+    """正常系: 過去スレッドが存在する場合、案内キャプションの代わりにselectboxが表示され、
+    各選択肢は「日時｜質問の要約（件数）」の形式でラベル付けされる。"""
+    from datetime import datetime
+
+    monkeypatch.setattr(
+        memory,
+        "list_threads",
+        lambda: [
+            {
+                "thread_id": "thread-a",
+                "created_at": datetime(2024, 1, 1, 9, 0),
+                "first_question": "質問A",
+                "count": 2,
+            },
+            {
+                "thread_id": "thread-b",
+                "created_at": datetime(2024, 1, 2, 9, 0),
+                "first_question": "質問B",
+                "count": 1,
+            },
+        ],
+    )
+
+    at = _run_app()
+
+    assert at.exception == []
+    assert not any("まだ保存された会話スレッドはありません。" in c.value for c in at.sidebar.caption)
+    assert len(at.sidebar.selectbox) == 1
+    assert at.sidebar.selectbox[0].options == [
+        "2024-01-01 09:00｜質問A（2件）",
+        "2024-01-02 09:00｜質問B（1件）",
+    ]
+
+
+def test_selecting_past_thread_restores_history_and_rebuilds_agent(monkeypatch):
+    """正常系: 過去スレッドをselectboxで選ぶと、そのスレッドIDに切り替わり、
+    load_conversationの内容がチャット履歴として復元され、エージェントも
+    選択したスレッドIDで再構築される。"""
+    from datetime import datetime
+
+    monkeypatch.setattr(
+        memory,
+        "list_threads",
+        lambda: [
+            {
+                "thread_id": "thread-past",
+                "created_at": datetime(2024, 1, 1, 9, 0),
+                "first_question": "過去の質問",
+                "count": 1,
+            }
+        ],
+    )
+    monkeypatch.setattr(
+        memory,
+        "load_conversation",
+        lambda thread_id: [{"question": "過去の質問", "answer": "過去の回答"}] if thread_id == "thread-past" else [],
+    )
+
+    built_thread_ids = []
+
+    def fake_build_agent(thread_id=None):
+        built_thread_ids.append(thread_id)
+        return _FakeAgent()
+
+    monkeypatch.setattr(rag_chain, "build_agent", fake_build_agent)
+
+    at = _run_app()
+    assert at.session_state["thread_id"] == "thread-test"  # memory.new_thread_idフェイクの初期値
+
+    at = at.sidebar.selectbox[0].select("thread-past").run()
+
+    assert at.exception == []
+    assert at.session_state["thread_id"] == "thread-past"
+    messages = at.session_state["messages"]
+    assert len(messages) == 2
+    assert messages[0].content == "過去の質問"
+    assert messages[1].content == "過去の回答"
+    assert built_thread_ids[-1] == "thread-past"
+
+
+def test_selecting_currently_active_thread_again_does_not_rebuild_agent(monkeypatch):
+    """境界値: 選択値が既に表示中のスレッドと同じ場合はスキップされ、
+    エージェントの再構築（build_agent呼び出し）は発生しない
+    （選択操作以外の理由での再実行のたびに毎回再構築されないようにするための分岐）。"""
+    from datetime import datetime
+
+    monkeypatch.setattr(
+        memory,
+        "list_threads",
+        lambda: [
+            {
+                "thread_id": "thread-past",
+                "created_at": datetime(2024, 1, 1, 9, 0),
+                "first_question": "過去の質問",
+                "count": 1,
+            }
+        ],
+    )
+    monkeypatch.setattr(
+        memory,
+        "load_conversation",
+        lambda thread_id: [{"question": "過去の質問", "answer": "過去の回答"}] if thread_id == "thread-past" else [],
+    )
+
+    built_thread_ids = []
+
+    def fake_build_agent(thread_id=None):
+        built_thread_ids.append(thread_id)
+        return _FakeAgent()
+
+    monkeypatch.setattr(rag_chain, "build_agent", fake_build_agent)
+
+    at = _run_app()
+    at = at.sidebar.selectbox[0].select("thread-past").run()
+    assert built_thread_ids == ["thread-test", "thread-past"]
+
+    # 選択状態はそのままの状態で、他の理由（ボタン押下無し）で再実行しても
+    # 追加のbuild_agent呼び出しは発生しない
+    at = at.run()
+
+    assert at.exception == []
+    assert built_thread_ids == ["thread-test", "thread-past"]
+    assert at.session_state["thread_id"] == "thread-past"
+
+
+def test_start_new_chat_resets_thread_selector_and_does_not_pull_back_to_old_thread(monkeypatch):
+    """異常系境界値（回帰防止）: 過去スレッドへ切り替えた後に「🆕 新しい会話を始める」を押すと、
+    新しいスレッドIDが発行され会話履歴も空になる。selectboxのウィジェット状態
+    （thread_selector）がリセットされずに残っていると、次回実行時に「選択値(過去スレッド) !=
+    新しいthread_id」と誤判定されて過去スレッドへ引き戻されてしまうバグの回帰を防ぐ。"""
+    from datetime import datetime
+
+    monkeypatch.setattr(
+        memory,
+        "list_threads",
+        lambda: [
+            {
+                "thread_id": "thread-past",
+                "created_at": datetime(2024, 1, 1, 9, 0),
+                "first_question": "過去の質問",
+                "count": 1,
+            }
+        ],
+    )
+    monkeypatch.setattr(
+        memory,
+        "load_conversation",
+        lambda thread_id: [{"question": "過去の質問", "answer": "過去の回答"}] if thread_id == "thread-past" else [],
+    )
+
+    id_counter = {"n": 0}
+
+    def fake_new_thread_id():
+        id_counter["n"] += 1
+        return f"new-thread-{id_counter['n']}"
+
+    monkeypatch.setattr(memory, "new_thread_id", fake_new_thread_id)
+    monkeypatch.setattr(rag_chain, "build_agent", lambda thread_id=None: _FakeAgent())
+
+    at = _run_app()
+    at = at.sidebar.selectbox[0].select("thread-past").run()
+    assert at.session_state["thread_id"] == "thread-past"
+
+    new_chat_button = next(b for b in at.sidebar.button if "新しい会話" in b.label)
+    at = new_chat_button.click().run()
+
+    assert at.exception == []
+    # new-thread-1は起動時のセッション初期化（_run_app内の初回run）で消費されているため、
+    # 「新しい会話を始める」クリックで発行されるのは2件目のID。
+    assert at.session_state["thread_id"] == "new-thread-2"
+    assert at.session_state["messages"] == []
