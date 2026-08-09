@@ -268,7 +268,7 @@ def test_get_vectorstore_docstring_documents_known_chromadb_cve():
     assert "persist_directory" in docstring
 
 
-# --- get_embeddings / get_vectorstore のlru_cacheキャッシュ（Issue #15） ---
+# --- get_embeddings / get_vectorstore のlru_cacheキャッシュ ---
 
 
 class _FakeEmbeddings:
