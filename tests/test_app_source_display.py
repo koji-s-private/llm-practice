@@ -1,4 +1,4 @@
-"""app.py の参照元表示整形ロジック（Issue #4）・過去スレッドラベル整形（Issue #10）のテスト。
+"""app.py の参照元表示整形ロジック・過去スレッドラベル整形のテスト。
 
 `_format_snippet` / `_format_source_label` / `_format_thread_label` はいずれも Streamlit の機能（st.*）を
 一切使わない純粋関数のため、`tests/test_app.py` のような `AppTest` 経由の
