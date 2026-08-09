@@ -431,6 +431,45 @@ def test_chat_streaming_clears_searching_placeholder_after_first_token(monkeypat
     assert not any("検索して回答を考え中" in m.value for m in at.markdown)
 
 
+def test_chat_streaming_anthropic_content_blocks_are_extracted_as_text(monkeypatch):
+    """異常系回帰: Anthropicバックエンド利用時、tools bind中のChatAnthropicは
+    AIMessageChunk.content を素の文字列ではなく [{"type": "text", "text": "..."}] のような
+    content blocksのlistで返す。素朴な isinstance(content, str) 判定だとこの形式を
+    一度も拾えず本文が空になってしまうため、AIMessageChunk.text プロパティ経由で
+    text系ブロックを正しく結合できることを確認する。"""
+    fake_agent = _FakeAgent(
+        chunks=[
+            [{"type": "text", "text": "これは"}],
+            [{"type": "text", "text": "Anthropic形式の回答です"}],
+        ]
+    )
+    monkeypatch.setattr(rag_chain, "build_agent", lambda thread_id=None: fake_agent)
+
+    at = _run_app()
+    at.chat_input[0].set_value("質問です").run()
+
+    assert at.exception == []
+    assert at.error == []
+    messages = at.session_state["messages"]
+    assert len(messages) == 2
+    assert messages[1].content == "これはAnthropic形式の回答です"
+
+
+def test_chat_streaming_exception_clears_partial_answer_from_screen(monkeypatch):
+    """異常系: 一部の回答チャンクを既に描画した後に例外が送出された場合、
+    途中まで描画された回答テキストが画面（markdown要素）に残らず、
+    st.errorのみが表示される。"""
+    fake_agent = _FakeAgent(chunks=["途中まで表示された回答"], exc=RuntimeError("stream broken"))
+    monkeypatch.setattr(rag_chain, "build_agent", lambda thread_id=None: fake_agent)
+
+    at = _run_app()
+    at.chat_input[0].set_value("質問です").run()
+
+    assert at.exception == []
+    assert len(at.error) == 1
+    assert not any("途中まで表示された回答" in m.value for m in at.markdown)
+
+
 def test_chat_streaming_tool_message_artifact_becomes_sources_expander(monkeypatch):
     """正常系: ストリーミング中に届いたToolMessageのartifactが、参照元ドキュメントの
     expanderとして正しく表示される（一括invokeからstreamに変わっても
