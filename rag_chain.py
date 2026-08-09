@@ -21,6 +21,7 @@ LangChain 1.x（2026年時点の公式ドキュメント: docs.langchain.com/oss
 """
 
 import re
+from functools import lru_cache
 from pathlib import Path
 
 from langchain.agents import create_agent
@@ -84,16 +85,28 @@ SYSTEM_PROMPT = (
 GLOBAL_THREAD_ID = "global"
 
 
+@lru_cache(maxsize=1)
 def get_embeddings() -> HuggingFaceEmbeddings:
-    """ローカル埋め込みモデルを返す（APIキー不要、初回はモデルを自動ダウンロード）。"""
+    """ローカル埋め込みモデルを返す（APIキー不要、初回はモデルを自動ダウンロード）。
+
+    HuggingFaceEmbeddingsの初期化はモデルのロードを伴い軽くないため、
+    lru_cacheでプロセス内に1つだけ保持し、呼び出しのたびの再ロードを防ぐ
+    （Streamlitに依存しないモジュールレベルのキャッシュ。CLIやテストからの
+    利用でも同様に効く）。
+    """
     return HuggingFaceEmbeddings(
         model_name=EMBEDDING_MODEL_NAME,
         encode_kwargs={"normalize_embeddings": True},
     )
 
 
+@lru_cache(maxsize=1)
 def get_vectorstore() -> Chroma:
     """ローカル永続化されたChromaベクトルストアを返す（ingest.py と共通で使用）。
+
+    get_embeddings()と同様にlru_cacheでプロセス内に1つだけ保持する。Chromaの
+    永続化先（PERSIST_DIR）・コレクション名（COLLECTION_NAME）は固定のため、
+    インスタンスを使い回しても読み書きの一貫性に問題はない。
 
     セキュリティ上の注意:
     本実装はChromaDBをローカル永続化モード（persist_directory）のみで使用しており、

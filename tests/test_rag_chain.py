@@ -266,3 +266,70 @@ def test_get_vectorstore_docstring_documents_known_chromadb_cve():
     assert docstring is not None
     assert "CVE-2026-45829" in docstring
     assert "persist_directory" in docstring
+
+
+# --- get_embeddings / get_vectorstore のlru_cacheキャッシュ（Issue #15） ---
+
+
+class _FakeEmbeddings:
+    """HuggingFaceEmbeddingsの代わりに使うダミー。インスタンス生成回数を数えられるようにする。"""
+
+    instances = 0
+
+    def __init__(self, **kwargs):
+        _FakeEmbeddings.instances += 1
+        self.kwargs = kwargs
+
+
+class _FakeChromaStore:
+    """Chromaの代わりに使うダミー。インスタンス生成回数を数えられるようにする。"""
+
+    instances = 0
+
+    def __init__(self, **kwargs):
+        _FakeChromaStore.instances += 1
+        self.kwargs = kwargs
+
+
+def test_get_embeddings_returns_same_instance_across_calls(monkeypatch):
+    """get_embeddings() を2回呼び出しても同一インスタンス（is比較）を返すことを確認する。
+
+    lru_cache(maxsize=1)により、重いHuggingFaceEmbeddingsの初期化が
+    呼び出しのたびに再実行されないことのリグレッションテスト。
+    """
+    _FakeEmbeddings.instances = 0
+    monkeypatch.setattr(rag_chain, "HuggingFaceEmbeddings", _FakeEmbeddings)
+    rag_chain.get_embeddings.cache_clear()
+    try:
+        first = rag_chain.get_embeddings()
+        second = rag_chain.get_embeddings()
+
+        assert first is second
+        assert _FakeEmbeddings.instances == 1
+    finally:
+        rag_chain.get_embeddings.cache_clear()
+
+
+def test_get_vectorstore_returns_same_instance_across_calls(monkeypatch):
+    """get_vectorstore() を2回呼び出しても同一インスタンス（is比較）を返すことを確認する。
+
+    lru_cache(maxsize=1)により、Chromaの初期化（内部で呼ばれるget_embeddings()を含む）が
+    呼び出しのたびに再実行されないことのリグレッションテスト。
+    """
+    _FakeEmbeddings.instances = 0
+    _FakeChromaStore.instances = 0
+    monkeypatch.setattr(rag_chain, "HuggingFaceEmbeddings", _FakeEmbeddings)
+    monkeypatch.setattr(rag_chain, "Chroma", _FakeChromaStore)
+    rag_chain.get_embeddings.cache_clear()
+    rag_chain.get_vectorstore.cache_clear()
+    try:
+        first = rag_chain.get_vectorstore()
+        second = rag_chain.get_vectorstore()
+
+        assert first is second
+        assert _FakeChromaStore.instances == 1
+        # get_vectorstore内部で使うget_embeddings()自体もキャッシュされている
+        assert _FakeEmbeddings.instances == 1
+    finally:
+        rag_chain.get_vectorstore.cache_clear()
+        rag_chain.get_embeddings.cache_clear()
