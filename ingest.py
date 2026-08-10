@@ -9,6 +9,10 @@ data/ 配下のドキュメント（.pdf / .txt / .md）を Chroma ベクトルD
 ベクトルDBからも自動的に削除する（DBとdata/フォルダの内容がズレないようにするため）。
 判定には chroma_db/manifest.json にファイル名・更新日時・サイズ・チャンクIDを記録している。
 
+sync_data_dir()は複数タブ（複数Streamlitセッション）や複数プロセスから同時に呼ばれても
+安全なよう、chroma_db/sync.lock を使ったファイルロックで処理全体を排他制御している
+（詳細は sync_data_dir() のdocstring参照）。
+
 data/ 直下だけでなく、data/conversations/<thread_id>/ のようなサブフォルダも再帰的に走査する
 （app.py のファイルアップロード機能・会話自動保存機能で使用）。会話ログはそのスレッドIDを
 チャンクのメタデータ(thread_id)として付与し、rag_chain.build_agent(thread_id) が
@@ -32,6 +36,7 @@ import os
 import re
 from pathlib import Path
 
+from filelock import FileLock, Timeout
 from langchain_community.document_loaders import PyMuPDFLoader, TextLoader
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 
@@ -50,6 +55,16 @@ logger = logging.getLogger(__name__)
 DATA_DIR = Path(__file__).parent / "data"
 CONVERSATIONS_DIRNAME = "conversations"
 MANIFEST_PATH = PERSIST_DIR / "manifest.json"
+
+# 同一プロセス内の複数Streamlitセッション（複数タブ）や複数プロセス（app.py/api/main.py の
+# 併用など）からsync_data_dir()が同時に呼ばれた場合の排他制御用ロックファイル。
+# manifest.json読み込み→ベクトルDB更新→manifest.json書き込みの一連の処理を
+# 単一の実行者だけが行うようにし、read-modify-writeの競合（lost update・
+# 同一チャンクの重複登録）を防ぐ。
+SYNC_LOCK_PATH = PERSIST_DIR / "sync.lock"
+# ロック取得を待つ最大秒数。通常の同期処理は数秒〜十数秒で終わるため、
+# それより十分長い待ち時間を設けつつ、無限待機は避ける。
+SYNC_LOCK_TIMEOUT_SECONDS = 60
 
 # 拡張子ごとのローダー対応表（PDFは実際には_load_pdf()で2段構成の判定を行う）
 LOADERS = {
@@ -242,9 +257,31 @@ def sync_data_dir(verbose: bool = True) -> dict:
     変更がなければ全て空リストになる（＝差分がなければ何もしない）。
     読み込み・分割に失敗したファイルは "failed" に積まれ、manifestには記録されない
     （＝次回同期時に再度リトライされる）。他のファイルの同期は継続される。
+
+    同一プロセス内の複数Streamlitセッション（複数タブ）や複数プロセスから同時に
+    呼ばれても安全なよう、manifest.json読み込み〜ベクトルDB更新〜manifest.json書き込みの
+    一連の処理全体をファイルロック（SYNC_LOCK_PATH）で排他制御する。先に実行している
+    処理が終わるまで後発の呼び出しはブロックされ、順番に処理される。
+    SYNC_LOCK_TIMEOUT_SECONDS以内にロックを獲得できなかった場合は
+    `filelock.Timeout` をそのまま送出する（呼び出し元のapp.py/api/main.py側で
+    他の例外と同様にエラーとして扱われる）。
     """
     DATA_DIR.mkdir(parents=True, exist_ok=True)
+    PERSIST_DIR.mkdir(parents=True, exist_ok=True)
 
+    try:
+        with FileLock(str(SYNC_LOCK_PATH), timeout=SYNC_LOCK_TIMEOUT_SECONDS):
+            return _sync_data_dir_locked(verbose=verbose)
+    except Timeout:
+        logger.warning(
+            "%s のロック取得がタイムアウトしました（他のセッションが同期中の可能性があります）。",
+            SYNC_LOCK_PATH,
+        )
+        raise
+
+
+def _sync_data_dir_locked(verbose: bool) -> dict:
+    """sync_data_dir()の本体（呼び出し元がファイルロックを取得済みであることが前提）。"""
     vector_store = get_vectorstore()
     manifest = _load_manifest()
     splitter = RecursiveCharacterTextSplitter(chunk_size=1000, chunk_overlap=200)

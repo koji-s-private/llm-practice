@@ -214,6 +214,7 @@ HTTP API層を提供する。
 | `langchain-huggingface` | Hugging Face製の埋め込みモデルをLangChain経由で使うための連携パッケージ | `rag_chain.py`の`get_embeddings()`（`HuggingFaceEmbeddings`） |
 | `sentence-transformers` | 埋め込みモデル（`sentence-transformers/all-mpnet-base-v2`）を実際にロード・推論するエンジン（`langchain-huggingface`の内部で使用） | `rag_chain.py`の`get_embeddings()`が指定するモデルの実行エンジン |
 | `langchain-text-splitters` | 長いドキュメントを検索・埋め込みに適したチャンク（断片）に分割するツール | `ingest.py`の`sync_data_dir()`（`RecursiveCharacterTextSplitter`でチャンク分割） |
+| [filelock](https://py-filelock.readthedocs.io/) | クロスプラットフォーム対応のファイルロックライブラリ | `ingest.py`の`sync_data_dir()`。複数タブ（複数Streamlitセッション）や複数プロセスから同時に呼ばれても、manifest.json読み込み〜ベクトルDB更新〜書き込みを1つずつ排他的に実行するために使用（`chroma_db/sync.lock`） |
 
 ### ドキュメント読み込み
 
