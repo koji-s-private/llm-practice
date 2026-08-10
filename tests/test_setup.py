@@ -1,4 +1,4 @@
-"""setup.py の _build_model() のテスト（Issue #22: 非対話環境でのgetpass()無限ブロック対策）。
+"""setup.py の _build_model() のテスト（非対話環境でのgetpass()無限ブロック対策）。
 
 `sys.stdin.isatty()` の戻り値を monkeypatch で制御し、実際に標準入力を
 待ち受けさせる（テストがハングする）ことがないようにする。
@@ -153,7 +153,7 @@ def test_setup_module_still_imports_getpass_module_directly():
     assert setup.getpass is getpass
 
 
-# --- CURRENT_PROVIDER（Issue #52: app.pyのエラーメッセージ出し分け用）の更新確認 ---
+# --- CURRENT_PROVIDER（app.pyのエラーメッセージ出し分け用）の更新確認 ---
 
 
 def test_build_model_sets_current_provider_ollama(monkeypatch):
@@ -318,6 +318,81 @@ def test_ollama_model_pulled_false_when_only_different_tag_present(monkeypatch):
     _patch_tags_response(monkeypatch, {"models": [{"name": "llama3.1:latest"}]})
 
     assert setup._ollama_model_pulled() is False
+
+
+# --- OLLAMA_NUM_CTX（Ollama利用時のコンテキスト長を明示指定し、会話が長引いた際の
+# 暗黙の切り捨てを防ぐ） ---
+
+
+def test_ollama_num_ctx_default_is_a_positive_int():
+    """デフォルト値（未設定時）はOllama公式デフォルト(2048)より大きい妥当な正の整数。"""
+    assert isinstance(setup.OLLAMA_NUM_CTX, int)
+    assert setup.OLLAMA_NUM_CTX > 2048
+
+
+def test_build_model_ollama_passes_num_ctx_to_init_chat_model(monkeypatch):
+    """Ollama利用時は init_chat_model に num_ctx=OLLAMA_NUM_CTX を明示的に渡す。"""
+    monkeypatch.setattr(setup, "_ollama_available", lambda: True)
+    calls = []
+
+    def _fake_init_chat_model(*args, **kwargs):
+        calls.append((args, kwargs))
+        return object()
+
+    monkeypatch.setattr(setup, "init_chat_model", _fake_init_chat_model)
+
+    setup._build_model()
+
+    assert len(calls) == 1
+    args, kwargs = calls[0]
+    assert args[0] == setup.OLLAMA_MODEL
+    assert kwargs["model_provider"] == "ollama"
+    assert kwargs["num_ctx"] == setup.OLLAMA_NUM_CTX
+
+
+def test_build_model_anthropic_does_not_pass_num_ctx(monkeypatch):
+    """境界確認: Ollama未使用（Anthropicにフォールバック）の場合、num_ctxはOllama固有の
+    パラメータのため init_chat_model には一切渡さない（Anthropic側が未知のkwargsとして
+    拒否しないことの回帰防止）。"""
+    monkeypatch.setattr(setup, "_ollama_available", lambda: False)
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "test-dummy-key")
+    calls = []
+
+    def _fake_init_chat_model(*args, **kwargs):
+        calls.append((args, kwargs))
+        return object()
+
+    monkeypatch.setattr(setup, "init_chat_model", _fake_init_chat_model)
+
+    setup._build_model()
+
+    assert len(calls) == 1
+    args, kwargs = calls[0]
+    assert args[0] == "claude-sonnet-5"
+    assert kwargs["model_provider"] == "anthropic"
+    assert "num_ctx" not in kwargs
+
+
+def test_build_model_openai_does_not_pass_num_ctx(monkeypatch):
+    """境界確認: OpenAIフォールバック時もnum_ctxを渡さない。"""
+    monkeypatch.setattr(setup, "_ollama_available", lambda: False)
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    monkeypatch.setenv("OPENAI_API_KEY", "already-set-key")
+    calls = []
+
+    def _fake_init_chat_model(*args, **kwargs):
+        calls.append((args, kwargs))
+        return object()
+
+    monkeypatch.setattr(setup, "init_chat_model", _fake_init_chat_model)
+
+    setup._build_model()
+
+    assert len(calls) == 1
+    args, kwargs = calls[0]
+    assert args[0] == "gpt-5-chat-latest"
+    assert kwargs["model_provider"] == "openai"
+    assert "num_ctx" not in kwargs
 
 
 def test_build_model_falls_back_through_to_runtime_error_when_ollama_model_not_pulled_and_no_keys(

@@ -24,7 +24,7 @@ data/ フォルダの変更は、ページの操作（リロード・チャッ�
 from pathlib import Path
 
 import streamlit as st
-from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
+from langchain_core.messages import AIMessage, HumanMessage, ToolMessage, trim_messages
 
 import setup
 from ingest import (
@@ -47,6 +47,32 @@ st.set_page_config(
 st.title("📖 Doclore")
 st.markdown("##### あなたの資料から、迷わず答えへ。")
 st.caption("data/ フォルダにファイルを置くと自動でDBに反映され、AIエージェントが検索しながら回答します。")
+
+
+# エージェントに送信する会話履歴のトークン予算（概算）。会話が長引くほど1ターンあたりの
+# 送信トークン量が増え続け、setup.OLLAMA_NUM_CTXで明示したコンテキスト長を超えると
+# 古い履歴やretrieve_contextの検索結果が暗黙的に切り捨てられてしまう。ここでは
+# システムプロンプト・検索結果・生成分の余白を残すため、履歴側の予算は控えめに設定する。
+MAX_HISTORY_TOKENS = 3000
+
+
+def _windowed_history(messages: list) -> list:
+    """会話履歴をトークン予算内に収まるようウィンドウイングする（直近優先）。
+
+    画面表示用の st.session_state.messages はそのまま保持しつつ、LLMへの送信直前だけ
+    直近のやりとりに絞り込む。start_on="human" により、絞り込んだ結果の先頭が必ず
+    HumanMessageになるようにする（エージェントが要求する会話構造を壊さないため）。
+    正確なトークン数ではなく高速な概算カウント（count_tokens_approximately）を使う。
+    """
+    if not messages:
+        return messages
+    return trim_messages(
+        messages,
+        max_tokens=MAX_HISTORY_TOKENS,
+        token_counter="approximate",
+        strategy="last",
+        start_on="human",
+    )
 
 
 def _format_snippet(text: str, limit: int = 300) -> str:
@@ -404,7 +430,7 @@ if user_input:
                 """
                 first_token = True
                 for chunk, _metadata in st.session_state.agent.stream(
-                    {"messages": st.session_state.messages + [HumanMessage(content=user_input)]},
+                    {"messages": _windowed_history(st.session_state.messages) + [HumanMessage(content=user_input)]},
                     stream_mode="messages",
                 ):
                     if isinstance(chunk, ToolMessage):

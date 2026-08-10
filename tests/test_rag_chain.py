@@ -102,7 +102,7 @@ def test_grade_relevance_ignores_out_of_range_indices(monkeypatch):
 
 
 def test_grade_relevance_ignores_numbers_in_freeform_explanation_lines(monkeypatch):
-    """Issue #53のリグレッションテスト。
+    """リグレッションテスト。
 
     LLMが1行目の「回答:」形式は守りつつ、2行目以降に自由文の説明を付け足した場合、
     その説明文中に含まれる無関係な数字（例: 年号の2024）まで拾ってしまわないことを確認する。
@@ -116,7 +116,7 @@ def test_grade_relevance_ignores_numbers_in_freeform_explanation_lines(monkeypat
 
 
 def test_grade_relevance_falls_back_to_empty_when_answer_prefix_missing(monkeypatch):
-    """Issue #53のリグレッションテスト。
+    """リグレッションテスト。
 
     LLMが「回答:」形式のプレフィックス行を一切出力せず、完全に自由文（例:
     「文書1と文書3が関連しています。」）で回答した場合、誤って文書を採用せず
@@ -131,7 +131,7 @@ def test_grade_relevance_falls_back_to_empty_when_answer_prefix_missing(monkeypa
 
 
 def test_grade_relevance_parses_fullwidth_colon_answer_prefix(monkeypatch):
-    """Issue #53のリグレッションテスト。全角コロン「：」を使った「回答：1,3」形式でも
+    """リグレッションテスト。全角コロン「：」を使った「回答：1,3」形式でも
     半角コロンの場合と同様に正しくパースできることを確認する。
     """
     docs = [_FakeDocument("a"), _FakeDocument("b"), _FakeDocument("c")]
@@ -253,7 +253,7 @@ def test_retrieve_context_includes_docs_without_is_fallback_key(monkeypatch):
     assert doc_fallback_true not in artifact
 
 
-# --- get_vectorstore のdocstring（Issue #81: CVE-2026-45829に関するセキュリティ注記） ---
+# --- get_vectorstore のdocstring（CVE-2026-45829に関するセキュリティ注記） ---
 
 
 def test_get_vectorstore_docstring_documents_known_chromadb_cve():

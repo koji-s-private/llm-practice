@@ -33,7 +33,7 @@ app.py はモジュールトップレベルで `from ingest import ... sync_data
 from pathlib import Path
 
 import pytest
-from langchain_core.messages import AIMessage, AIMessageChunk, ToolMessage
+from langchain_core.messages import AIMessage, AIMessageChunk, HumanMessage, ToolMessage
 from streamlit.testing.v1 import AppTest
 
 import ingest
@@ -221,6 +221,91 @@ def test_resync_button_failure_shows_error(monkeypatch):
     assert len(at.error) == 1
     assert "ドキュメントの同期に失敗しました" in at.error[0].value
     assert "resync fail" in at.error[0].value
+
+
+# --- 1b. 会話履歴のウィンドウイング（長い会話でのコンテキスト長超過対策） ---
+
+
+def test_windowed_history_keeps_all_messages_when_under_budget():
+    """正常系: トークン予算内に収まる短い会話では、間引かれずそのまま返る。"""
+    import app
+
+    messages = [HumanMessage(content="短い質問"), AIMessage(content="短い回答")]
+
+    assert app._windowed_history(messages) == messages
+
+
+def test_windowed_history_returns_empty_list_as_is():
+    """境界値: 会話履歴が空の場合はそのまま空リストを返す（trim_messages呼び出し自体を省略）。"""
+    import app
+
+    assert app._windowed_history([]) == []
+
+
+def test_windowed_history_drops_oldest_messages_when_over_budget():
+    """異常系: トークン予算を超える長い会話では、
+    古いメッセージが間引かれ、先頭が必ずHumanMessageになる。"""
+    import app
+
+    long_text = "あ" * 2000  # 概算で500トークン程度
+    messages = []
+    for i in range(8):
+        messages.append(HumanMessage(content=f"質問{i}: {long_text}"))
+        messages.append(AIMessage(content=f"回答{i}: {long_text}"))
+
+    windowed = app._windowed_history(messages)
+
+    assert len(windowed) < len(messages)
+    assert isinstance(windowed[0], HumanMessage)
+    # 最も古いやりとり（質問0）は予算超過のため間引かれている
+    assert not any("質問0" in m.content for m in windowed)
+    # 直近のやりとり（最後の質問）は残っている
+    assert any(f"質問{7}" in m.content for m in windowed)
+
+
+def test_windowed_history_does_not_mutate_input_list():
+    """境界値（回帰防止）: 予算超過で間引きが発生しても、呼び出し元が渡した元のリスト
+    （画面表示用のst.session_state.messagesを想定）自体は一切変更されない。"""
+    import app
+
+    long_text = "あ" * 2000
+    messages = []
+    for i in range(8):
+        messages.append(HumanMessage(content=f"質問{i}: {long_text}"))
+        messages.append(AIMessage(content=f"回答{i}: {long_text}"))
+    original_len = len(messages)
+    original_first_content = messages[0].content
+
+    windowed = app._windowed_history(messages)
+
+    assert len(messages) == original_len
+    assert messages[0].content == original_first_content
+    assert windowed is not messages
+
+
+def test_chat_streaming_sends_windowed_history_to_agent(monkeypatch):
+    """正常系: 会話が長くなり既定のトークン予算(MAX_HISTORY_TOKENS)を超えると、
+    agent.stream()に渡すメッセージ一覧が実際に間引かれ、画面表示用の
+    st.session_state.messagesはフルの履歴を保持し続ける（送信分のみが絞り込まれる）。"""
+    fake_agent = _FakeAgent(answer="短い回答")
+    monkeypatch.setattr(rag_chain, "build_agent", lambda thread_id=None: fake_agent)
+
+    at = _run_app()
+    # 概算で1メッセージあたり数百トークンになる長さの質問を複数ターン送り、
+    # 既定予算(3000トークン)を確実に超えさせる。
+    long_question = "あ" * 2000
+    turn_count = 8
+    for i in range(turn_count):
+        at = at.chat_input[0].set_value(f"質問{i}: {long_question}").run()
+
+    assert at.exception == []
+    # 画面表示用の履歴はすべてのやりとりを保持している
+    assert len(at.session_state["messages"]) == turn_count * 2
+    # しかし直前のagent.stream()呼び出しに渡されたメッセージは間引かれ、
+    # 最も古いやりとり（質問0）は含まれない
+    last_call_messages = fake_agent.stream_calls[-1]["messages"]
+    assert len(last_call_messages) < turn_count * 2 + 1  # 全履歴+今回の質問 より少ない
+    assert not any("質問0" in getattr(m, "content", "") for m in last_call_messages)
 
 
 # --- 2. チャット処理中の agent.invoke() 呼び出し ---
@@ -794,7 +879,7 @@ def test_doclore_branding_title_and_tagline_are_displayed():
 def test_sidebar_document_management_heading_has_folder_icon():
     """境界値: サイドバーの「ドキュメント管理」見出しに📂アイコンが付与され、
     かつ既存の見出しテキスト自体は変わっていない（絵文字の付け忘れ・文言の
-    意図しない変更の両方を検知できるようにする）。「💬 過去の会話」見出し（Issue #10）が
+    意図しない変更の両方を検知できるようにする）。「💬 過去の会話」見出しが
     追加された後も、サイドバー内の見出しの並び順・両方の文言が保たれていることを確認する。"""
     at = _run_app()
 
@@ -998,7 +1083,7 @@ def test_failed_sync_files_keep_signature_unset_until_recovered(monkeypatch):
     assert at.warning == []
 
 
-# --- 9. サイドバーの過去スレッド選択・再開機能（Issue #10） ---
+# --- 9. サイドバーの過去スレッド選択・再開機能 ---
 
 
 def test_past_threads_empty_state_shows_caption_and_no_selectbox():

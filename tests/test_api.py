@@ -1,4 +1,4 @@
-"""api/main.py（Issue #88のFastAPIバックエンド）のエンドポイントのテスト。
+"""api/main.py（FastAPIバックエンド）のエンドポイントのテスト。
 
 `fastapi.testclient.TestClient` を使い、実際にOllama/LLM/Chromaを呼び出さず、
 `api.main` がモジュールトップレベルで import している以下のシンボルを monkeypatch で

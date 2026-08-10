@@ -1,4 +1,4 @@
-"""Issue #5: CI導入（GitHub Actions）に関する設定ファイルの静的検証テスト。
+"""CI導入（GitHub Actions）に関する設定ファイルの静的検証テスト。
 
 実際にGitHub Actions上でワークフローを走らせることはできないため、ここでは
 `.github/workflows/ci.yml` と `pyproject.toml` の `[tool.ruff]` 設定を

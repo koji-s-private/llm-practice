@@ -1,4 +1,4 @@
-"""Issue #72: プロダクト感のあるUI/UXへのリニューアルに関する静的検証テスト。
+"""プロダクト感のあるUI/UXへのリニューアルに関する静的検証テスト。
 
 `.streamlit/config.toml`（Streamlitのカスタムテーマ）と、`app.py` 内の
 `st.set_page_config(...)` 呼び出しの引数（page_title/page_icon/layout）は、

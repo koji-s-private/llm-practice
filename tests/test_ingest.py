@@ -111,7 +111,7 @@ def test_removed_file_is_deleted_from_store_and_manifest(fake_env):
 class _FailingLoader:
     """load() で必ず例外を送出するダミーローダー（LOADERSの差し替え用）。
 
-    Issue #18: 1ファイルの読み込み失敗が他のファイルの同期まで止めてしまわないことを
+    1ファイルの読み込み失敗が他のファイルの同期まで止めてしまわないことを
     検証するためのテストダブル。
     """
 
@@ -167,7 +167,7 @@ def test_pdf_load_failure_is_recorded_as_failed(fake_env, monkeypatch):
 
 
 def test_load_pdf_falls_back_to_docling_when_pymupdf_raises(monkeypatch, tmp_path):
-    # Issue #89: PyMuPDF自体が例外を送出した場合（暗号化PDF・破損PDF等）でも、
+    # PyMuPDF自体が例外を送出した場合（暗号化PDF・破損PDF等）でも、
     # Doclingが利用可能ならフォールバックして読み込めることを検証する
     fake_pdf_path = tmp_path / "encrypted.pdf"
     fake_pdf_path.write_bytes(b"not a real pdf")
@@ -256,7 +256,7 @@ def test_load_pdf_raises_original_error_when_docling_also_fails(monkeypatch, tmp
 
 
 def test_load_pdf_raises_original_error_when_docling_not_installed(monkeypatch, tmp_path):
-    # Issue #89: PyMuPDFが例外を送出し、かつDoclingが未インストール（DOCLING_AVAILABLE=False）の場合は
+    # PyMuPDFが例外を送出し、かつDoclingが未インストール（DOCLING_AVAILABLE=False）の場合は
     # Doclingへのフォールバックを試みることなく、元の例外がそのまま伝播すること
     fake_pdf_path = tmp_path / "broken.pdf"
     fake_pdf_path.write_bytes(b"not a real pdf")
@@ -461,7 +461,7 @@ def test_previously_synced_file_that_now_fails_keeps_old_chunks(fake_env, monkey
 
 
 def test_add_documents_failure_on_update_keeps_old_chunks_and_records_failed(fake_env, monkeypatch):
-    # Issue #82: 更新時にadd_documents()が失敗しても、旧チャンクを消さず
+    # 更新時にadd_documents()が失敗しても、旧チャンクを消さず
     # result["failed"]に積んで次回リトライされるようにする（データが消える事故の防止）
     data_dir, store = fake_env
     path = _write(data_dir, "a.txt", "最初は正常なテキストです。" * 5)
@@ -815,7 +815,7 @@ def test_resolve_upload_dest_skips_to_next_free_number_when_lower_numbers_taken(
     assert not dest.exists()
 
 
-# --- data_dir_signature(): 内容を読まないstat()ベースの軽量変更検知（Issue #70） ---
+# --- data_dir_signature(): 内容を読まないstat()ベースの軽量変更検知 ---
 
 
 def test_data_dir_signature_is_zero_when_no_target_files(fake_env):
