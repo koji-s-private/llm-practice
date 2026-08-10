@@ -1,4 +1,4 @@
-"""ingest.py の list_indexed_files() / delete_indexed_file() のテスト（Issue #16）。
+"""ingest.py の list_indexed_files() / delete_indexed_file() のテスト。
 
 サイドバーのインデックス済みファイル一覧・削除機能のバックエンドロジックを、
 実際のベクトルDB・埋め込みモデルを使わずに検証する。

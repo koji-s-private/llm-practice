@@ -214,10 +214,15 @@ def _render_indexed_file_list() -> None:
             st.warning(f"「{name}」を削除します。この操作は取り消せません。よろしいですか？")
             col_confirm, col_cancel = st.columns(2)
             if col_confirm.button("削除する", key=f"confirm_delete_{name}", type="primary"):
-                delete_indexed_file(name)
+                deleted = delete_indexed_file(name)
                 st.session_state.pop(pending_key, None)
-                _sync_and_report(f"{name} を削除中...")
-                st.rerun()
+                if deleted:
+                    _sync_and_report(f"{name} を削除中...")
+                    st.rerun()
+                else:
+                    # 削除失敗（対象ファイルが既に無い等）はUIの状態を変える必要が無いため、
+                    # rerunせずこのスクリプト実行内でst.errorをそのまま表示する。
+                    st.error(f"「{name}」の削除に失敗しました（既に削除されている可能性があります）。")
             if col_cancel.button("キャンセル", key=f"cancel_delete_{name}"):
                 st.session_state.pop(pending_key, None)
                 st.rerun()
