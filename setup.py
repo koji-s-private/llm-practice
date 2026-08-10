@@ -34,6 +34,12 @@ OLLAMA_HOST = os.environ.get("OLLAMA_HOST", "localhost")
 OLLAMA_PORT = int(os.environ.get("OLLAMA_PORT", "11434"))
 OLLAMA_MODEL = os.environ.get("OLLAMA_MODEL", "llama3.1")
 
+# Ollamaはnum_ctx未指定だと多くのモデルで2048程度という小さいコンテキスト長がデフォルトになり、
+# 会話が数往復続くだけで古い履歴や検索結果（retrieve_context）が暗黙的に切り捨てられてしまう。
+# ここで明示的に大きめの値を指定する。8192は一般的なローカルPC（8GB〜のメモリ）でも
+# 現実的に動かせる範囲で、Ollama公式のデフォルト(2048)より十分な余裕を持たせた値。
+OLLAMA_NUM_CTX = int(os.environ.get("OLLAMA_NUM_CTX", "8192"))
+
 # 現在実際に使用しているプロバイダ名（"ollama" / "anthropic" / "openai"）。
 # _build_model() 実行時に確定させ、app.py 側から参照してエラーメッセージの出し分けに使う。
 CURRENT_PROVIDER: str | None = None
@@ -89,9 +95,9 @@ def _build_model():
 
     if _ollama_available():
         if _ollama_model_pulled():
-            print(f"[setup] Ollama を検出: {OLLAMA_MODEL}（ローカル・無料）を使用します。")
+            print(f"[setup] Ollama を検出: {OLLAMA_MODEL}（ローカル・無料、num_ctx={OLLAMA_NUM_CTX}）を使用します。")
             CURRENT_PROVIDER = "ollama"
-            return init_chat_model(OLLAMA_MODEL, model_provider="ollama")
+            return init_chat_model(OLLAMA_MODEL, model_provider="ollama", num_ctx=OLLAMA_NUM_CTX)
         print(
             f"[setup] Ollama は起動していますが、モデル '{OLLAMA_MODEL}' が見つかりません"
             "（pull未実施の可能性）。"

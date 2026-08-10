@@ -320,6 +320,36 @@ def test_ollama_model_pulled_false_when_only_different_tag_present(monkeypatch):
     assert setup._ollama_model_pulled() is False
 
 
+# --- OLLAMA_NUM_CTX（Ollama利用時のコンテキスト長を明示指定し、会話が長引いた際の
+# 暗黙の切り捨てを防ぐ） ---
+
+
+def test_ollama_num_ctx_default_is_a_positive_int():
+    """デフォルト値（未設定時）はOllama公式デフォルト(2048)より大きい妥当な正の整数。"""
+    assert isinstance(setup.OLLAMA_NUM_CTX, int)
+    assert setup.OLLAMA_NUM_CTX > 2048
+
+
+def test_build_model_ollama_passes_num_ctx_to_init_chat_model(monkeypatch):
+    """Ollama利用時は init_chat_model に num_ctx=OLLAMA_NUM_CTX を明示的に渡す。"""
+    monkeypatch.setattr(setup, "_ollama_available", lambda: True)
+    calls = []
+
+    def _fake_init_chat_model(*args, **kwargs):
+        calls.append((args, kwargs))
+        return object()
+
+    monkeypatch.setattr(setup, "init_chat_model", _fake_init_chat_model)
+
+    setup._build_model()
+
+    assert len(calls) == 1
+    args, kwargs = calls[0]
+    assert args[0] == setup.OLLAMA_MODEL
+    assert kwargs["model_provider"] == "ollama"
+    assert kwargs["num_ctx"] == setup.OLLAMA_NUM_CTX
+
+
 def test_build_model_falls_back_through_to_runtime_error_when_ollama_model_not_pulled_and_no_keys(
     monkeypatch,
 ):
