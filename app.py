@@ -27,7 +27,14 @@ import streamlit as st
 from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 
 import setup
-from ingest import DATA_DIR, data_dir_signature, resolve_upload_dest, sync_data_dir
+from ingest import (
+    DATA_DIR,
+    data_dir_signature,
+    delete_indexed_file,
+    list_indexed_files,
+    resolve_upload_dest,
+    sync_data_dir,
+)
 from memory import conversation_count, list_threads, load_conversation, new_thread_id, save_conversation
 from rag_chain import GLOBAL_THREAD_ID, build_agent
 
@@ -183,6 +190,39 @@ def _format_thread_label(thread: dict) -> str:
     return f"{timestamp}｜{snippet}（{thread['count']}件）"
 
 
+def _render_indexed_file_list() -> None:
+    """インデックス済みファイルの一覧を表示し、各ファイルの削除ボタンから個別削除できるようにする。
+
+    誤操作でファイルを消してしまわないよう、削除は「削除ボタン→確認ボタン」の2段階にする。
+    確認待ちの状態はセッションに保持し、削除完了・キャンセルのいずれかで解除する。
+    """
+    indexed_files = list_indexed_files()
+    if not indexed_files:
+        st.caption("インデックス済みのファイルはまだありません。")
+        return
+
+    st.caption(f"インデックス済みファイル: {len(indexed_files)}件")
+    for file_info in indexed_files:
+        name = file_info["name"]
+        pending_key = f"pending_delete_{name}"
+        col_label, col_button = st.columns([5, 1])
+        col_label.markdown(f"📄 {name}　`{file_info['chunk_count']}チャンク`")
+        if col_button.button("🗑️", key=f"delete_button_{name}", help=f"{name} を削除"):
+            st.session_state[pending_key] = True
+
+        if st.session_state.get(pending_key):
+            st.warning(f"「{name}」を削除します。この操作は取り消せません。よろしいですか？")
+            col_confirm, col_cancel = st.columns(2)
+            if col_confirm.button("削除する", key=f"confirm_delete_{name}", type="primary"):
+                delete_indexed_file(name)
+                st.session_state.pop(pending_key, None)
+                _sync_and_report(f"{name} を削除中...")
+                st.rerun()
+            if col_cancel.button("キャンセル", key=f"cancel_delete_{name}"):
+                st.session_state.pop(pending_key, None)
+                st.rerun()
+
+
 def _switch_thread(thread_id: str) -> None:
     """選択された過去スレッドに切り替え、そのスレッドの会話履歴をチャット画面に復元する。"""
     st.session_state.thread_id = thread_id
@@ -277,6 +317,8 @@ with st.sidebar:
         "data/ フォルダの変更はページの操作（リロード・会話など）のたびに自動で検知され、"
         "裏側で自動的にDBへ反映されます。"
     )
+    _render_indexed_file_list()
+
     # 自動検知はファイル数+最新mtimeによる近似的な判定のため、理論上は「同じmtime・
     # 同じサイズのまま中身だけ入れ替わる」ような極めて稀なケースを取りこぼす可能性がある。
     # 即時性・確実性が必要な場合のフォールバック手段として、目立たない場所に残しておく。
