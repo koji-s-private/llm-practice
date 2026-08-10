@@ -9,6 +9,7 @@ import json
 import os
 
 import pytest
+from filelock import FileLock, Timeout
 from langchain_core.documents import Document
 
 import ingest
@@ -42,6 +43,7 @@ def fake_env(tmp_path, monkeypatch):
     monkeypatch.setattr(ingest, "DATA_DIR", data_dir)
     monkeypatch.setattr(ingest, "PERSIST_DIR", persist_dir)
     monkeypatch.setattr(ingest, "MANIFEST_PATH", persist_dir / "manifest.json")
+    monkeypatch.setattr(ingest, "SYNC_LOCK_PATH", persist_dir / "sync.lock")
 
     store = _FakeVectorStore()
     monkeypatch.setattr(ingest, "get_vectorstore", lambda: store)
@@ -893,3 +895,44 @@ def test_data_dir_signature_reflects_mtime_update_on_content_change(fake_env):
     assert after[0] == before[0] == 1
     assert after[1] != before[1]
     assert after == (1, 1_700_000_500.0)
+
+
+# --- ロックによる排他制御（複数タブ・複数セッションからの同時実行対策） ---
+
+
+def test_sync_data_dir_raises_timeout_when_lock_already_held(fake_env, monkeypatch):
+    # 他のセッション（プロセス）がロックを保持中の場合、待機時間内に取得できなければ
+    # filelock.Timeout を送出し、DBの整合性を壊すような同時書き込みを行わない。
+    data_dir, _store = fake_env
+    _write(data_dir, "a.txt", "十分な長さのテキストです。" * 5)
+    monkeypatch.setattr(ingest, "SYNC_LOCK_TIMEOUT_SECONDS", 0.1)
+
+    other_session_lock = FileLock(str(ingest.SYNC_LOCK_PATH))
+    other_session_lock.acquire()
+    try:
+        with pytest.raises(Timeout):
+            ingest.sync_data_dir(verbose=False)
+    finally:
+        other_session_lock.release()
+
+    # ロック解放後は通常どおり同期できる（manifestが更新されていない状態のまま）
+    result = ingest.sync_data_dir(verbose=False)
+    assert result["added"] == ["a.txt"]
+
+
+def test_sync_data_dir_releases_lock_after_success(fake_env):
+    # 同期完了後はロックが解放され、後続の呼び出しがブロックされずに実行できる
+    # （2回連続で問題なく完了することで、ロックが残留していないことを確認する）。
+    data_dir, _store = fake_env
+    _write(data_dir, "a.txt", "十分な長さのテキストです。" * 5)
+
+    result_1 = ingest.sync_data_dir(verbose=False)
+    assert result_1["added"] == ["a.txt"]
+
+    result_2 = ingest.sync_data_dir(verbose=False)
+    assert result_2 == {"added": [], "updated": [], "removed": [], "failed": []}
+
+    # ロックはブロッキングせずすぐ取得できるはず
+    lock = FileLock(str(ingest.SYNC_LOCK_PATH), timeout=1)
+    with lock:
+        pass
