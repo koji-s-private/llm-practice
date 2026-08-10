@@ -73,7 +73,7 @@ def test_pick_issue_skips_genuinely_in_progress_issue():
 
 
 def test_pick_issue_self_heals_stuck_in_progress_issue_with_no_pr_or_comments():
-    """issue #14の実際の障害(In Progressのまま放置・PR無し・コメント無し)を再現するケース。"""
+    """実際の障害(In Progressのまま放置・PR無し・コメント無し)を再現するケース。"""
     now_issues = [{"number": 14, "body": ""}, {"number": 18, "body": ""}]
     project_items = {14: {"status": "In Progress", "id": "ITEM_14"}}
     selected, heals = pick_issue(

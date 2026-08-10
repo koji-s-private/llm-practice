@@ -1,4 +1,4 @@
-"""Issue #96: CI失敗時に自動対応するworkflowに関する設定ファイルの静的検証テスト。
+"""CI失敗時に自動対応するworkflowに関する設定ファイルの静的検証テスト。
 
 実際にGitHub Actions上でワークフローを走らせることはできないため、ここでは
 `.github/workflows/ci-failure-guard.yml` をYAMLとして読み込み、意図した内容

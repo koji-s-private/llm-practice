@@ -1,4 +1,4 @@
-"""setup.py の _build_model() のテスト（Issue #22: 非対話環境でのgetpass()無限ブロック対策）。
+"""setup.py の _build_model() のテスト（非対話環境でのgetpass()無限ブロック対策）。
 
 `sys.stdin.isatty()` の戻り値を monkeypatch で制御し、実際に標準入力を
 待ち受けさせる（テストがハングする）ことがないようにする。
@@ -153,7 +153,7 @@ def test_setup_module_still_imports_getpass_module_directly():
     assert setup.getpass is getpass
 
 
-# --- CURRENT_PROVIDER（Issue #52: app.pyのエラーメッセージ出し分け用）の更新確認 ---
+# --- CURRENT_PROVIDER（app.pyのエラーメッセージ出し分け用）の更新確認 ---
 
 
 def test_build_model_sets_current_provider_ollama(monkeypatch):

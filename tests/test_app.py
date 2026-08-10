@@ -879,7 +879,7 @@ def test_doclore_branding_title_and_tagline_are_displayed():
 def test_sidebar_document_management_heading_has_folder_icon():
     """境界値: サイドバーの「ドキュメント管理」見出しに📂アイコンが付与され、
     かつ既存の見出しテキスト自体は変わっていない（絵文字の付け忘れ・文言の
-    意図しない変更の両方を検知できるようにする）。「💬 過去の会話」見出し（Issue #10）が
+    意図しない変更の両方を検知できるようにする）。「💬 過去の会話」見出しが
     追加された後も、サイドバー内の見出しの並び順・両方の文言が保たれていることを確認する。"""
     at = _run_app()
 
@@ -1083,7 +1083,7 @@ def test_failed_sync_files_keep_signature_unset_until_recovered(monkeypatch):
     assert at.warning == []
 
 
-# --- 9. サイドバーの過去スレッド選択・再開機能（Issue #10） ---
+# --- 9. サイドバーの過去スレッド選択・再開機能 ---
 
 
 def test_past_threads_empty_state_shows_caption_and_no_selectbox():

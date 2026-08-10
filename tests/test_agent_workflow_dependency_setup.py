@@ -1,4 +1,4 @@
-"""Issue #38: AIチームエージェント向けワークフローの依存パッケージ事前インストールに関する
+"""AIチームエージェント向けワークフローの依存パッケージ事前インストールに関する
 設定ファイルの静的検証テスト。
 
 `ai-team.yml` / `pr-conflict-guard.yml` / `ci-failure-guard.yml` は、coder/qa-engineer

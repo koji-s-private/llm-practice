@@ -1,6 +1,6 @@
 """ingest.py の manifest.json 読み書き（_load_manifest / _save_manifest）のテスト。
 
-Issue #13: manifest.json への書き込みを一時ファイル経由のアトミックな置き換え
+manifest.json への書き込みを一時ファイル経由のアトミックな置き換え
 （os.replace）に変更し、壊れたJSONを読み込んだ場合も例外を送出せず空辞書に
 フォールバックするようにした変更を検証する。
 """
