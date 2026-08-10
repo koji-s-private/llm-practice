@@ -1183,3 +1183,143 @@ def test_start_new_chat_resets_thread_selector_and_does_not_pull_back_to_old_thr
     # 「新しい会話を始める」クリックで発行されるのは2件目のID。
     assert at.session_state["thread_id"] == "new-thread-2"
     assert at.session_state["messages"] == []
+
+
+# --- 10. サイドバーのインデックス済みファイル一覧・削除機能 ---
+
+
+def test_indexed_file_list_shows_empty_caption_when_no_files(monkeypatch):
+    """正常系境界値: インデックス済みファイルが0件の場合、案内キャプションのみが表示され、
+    削除ボタン等は一切描画されない。"""
+    monkeypatch.setattr(ingest, "list_indexed_files", lambda: [])
+
+    at = _run_app()
+
+    assert at.exception == []
+    assert any("インデックス済みのファイルはまだありません。" in c.value for c in at.sidebar.caption)
+    assert [b for b in at.sidebar.button if (b.help or "").endswith("を削除")] == []
+
+
+def test_indexed_file_list_shows_files_with_chunk_counts(monkeypatch):
+    """正常系: インデックス済みファイルが存在する場合、件数キャプションと
+    各ファイルのファイル名・チャンク数が表示される。"""
+    monkeypatch.setattr(
+        ingest,
+        "list_indexed_files",
+        lambda: [
+            {"name": "a.pdf", "chunk_count": 3},
+            {"name": "b.txt", "chunk_count": 1},
+        ],
+    )
+
+    at = _run_app()
+
+    assert at.exception == []
+    assert any("インデックス済みファイル: 2件" in c.value for c in at.sidebar.caption)
+    markdown_values = [m.value for m in at.sidebar.markdown]
+    assert any("a.pdf" in v and "3チャンク" in v for v in markdown_values)
+    assert any("b.txt" in v and "1チャンク" in v for v in markdown_values)
+    delete_buttons = [b for b in at.sidebar.button if b.help == "a.pdf を削除"]
+    assert len(delete_buttons) == 1
+
+
+def test_delete_button_click_shows_confirmation_prompt(monkeypatch):
+    """正常系: 削除ボタン(🗑️)を押すと、即座には削除されず確認メッセージと
+    「削除する」「キャンセル」ボタンが表示される（2段階確認の1段階目）。"""
+    monkeypatch.setattr(ingest, "list_indexed_files", lambda: [{"name": "report.txt", "chunk_count": 2}])
+    delete_calls = []
+    monkeypatch.setattr(ingest, "delete_indexed_file", lambda name: delete_calls.append(name) or True)
+
+    at = _run_app()
+    delete_button = next(b for b in at.sidebar.button if b.key == "delete_button_report.txt")
+    at = delete_button.click().run()
+
+    assert at.exception == []
+    assert len(at.sidebar.warning) == 1
+    assert "report.txt" in at.sidebar.warning[0].value
+    assert any(b.key == "confirm_delete_report.txt" for b in at.sidebar.button)
+    assert any(b.key == "cancel_delete_report.txt" for b in at.sidebar.button)
+    # まだ削除は実行されていない
+    assert delete_calls == []
+
+
+def test_confirm_delete_calls_delete_indexed_file_and_resyncs(monkeypatch):
+    """正常系: 確認プロンプトで「削除する」を押すと delete_indexed_file() が実行され、
+    続けて再同期（_sync_and_report経由のsync_data_dir呼び出し）が行われる。
+    削除完了後は確認プロンプト自体も消える。"""
+    monkeypatch.setattr(ingest, "list_indexed_files", lambda: [{"name": "report.txt", "chunk_count": 2}])
+    delete_calls = []
+    monkeypatch.setattr(ingest, "delete_indexed_file", lambda name: delete_calls.append(name) or True)
+
+    sync_calls = {"n": 0}
+
+    def counting_sync(verbose=False):
+        sync_calls["n"] += 1
+        return {"added": [], "updated": [], "removed": [], "failed": []}
+
+    monkeypatch.setattr(ingest, "sync_data_dir", counting_sync)
+
+    at = _run_app()
+    assert sync_calls["n"] == 1  # 起動時の1回
+
+    delete_button = next(b for b in at.sidebar.button if b.key == "delete_button_report.txt")
+    at = delete_button.click().run()
+
+    confirm_button = next(b for b in at.sidebar.button if b.key == "confirm_delete_report.txt")
+    at = confirm_button.click().run()
+
+    assert at.exception == []
+    assert delete_calls == ["report.txt"]
+    assert sync_calls["n"] == 2  # 削除確定後に再同期が呼ばれる
+    assert "pending_delete_report.txt" not in at.session_state
+    assert at.sidebar.warning == []
+
+
+def test_confirm_delete_shows_error_when_delete_indexed_file_fails(monkeypatch):
+    """異常系: delete_indexed_file() がFalseを返した場合（対象ファイルが既に無い等）、
+    再同期は行わずst.errorでユーザーに失敗を通知する。"""
+    monkeypatch.setattr(ingest, "list_indexed_files", lambda: [{"name": "report.txt", "chunk_count": 2}])
+    monkeypatch.setattr(ingest, "delete_indexed_file", lambda name: False)
+
+    sync_calls = {"n": 0}
+
+    def counting_sync(verbose=False):
+        sync_calls["n"] += 1
+        return {"added": [], "updated": [], "removed": [], "failed": []}
+
+    monkeypatch.setattr(ingest, "sync_data_dir", counting_sync)
+
+    at = _run_app()
+    assert sync_calls["n"] == 1  # 起動時の1回
+
+    delete_button = next(b for b in at.sidebar.button if b.key == "delete_button_report.txt")
+    at = delete_button.click().run()
+
+    confirm_button = next(b for b in at.sidebar.button if b.key == "confirm_delete_report.txt")
+    at = confirm_button.click().run()
+
+    assert at.exception == []
+    assert sync_calls["n"] == 1  # 削除失敗時は再同期しない
+    assert "pending_delete_report.txt" not in at.session_state
+    assert "report.txt" in at.sidebar.error[0].value
+
+
+def test_cancel_delete_does_not_call_delete_indexed_file(monkeypatch):
+    """正常系: 確認プロンプトで「キャンセル」を押すと削除は実行されず、
+    確認プロンプト自体も消える。"""
+    monkeypatch.setattr(ingest, "list_indexed_files", lambda: [{"name": "report.txt", "chunk_count": 2}])
+    delete_calls = []
+    monkeypatch.setattr(ingest, "delete_indexed_file", lambda name: delete_calls.append(name) or True)
+
+    at = _run_app()
+    delete_button = next(b for b in at.sidebar.button if b.key == "delete_button_report.txt")
+    at = delete_button.click().run()
+    assert len(at.sidebar.warning) == 1
+
+    cancel_button = next(b for b in at.sidebar.button if b.key == "cancel_delete_report.txt")
+    at = cancel_button.click().run()
+
+    assert at.exception == []
+    assert delete_calls == []
+    assert "pending_delete_report.txt" not in at.session_state
+    assert at.sidebar.warning == []

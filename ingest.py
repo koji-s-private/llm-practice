@@ -337,6 +337,39 @@ def sync_data_dir(verbose: bool = True) -> dict:
     return result
 
 
+def list_indexed_files() -> list[dict]:
+    """サイドバーの一覧表示用に、インデックス済みファイルの情報をmanifestから取得する。
+
+    会話ログ（data/conversations/配下）はユーザーがアップロード・削除で管理する対象ではないため
+    除外し、data/直下のドキュメントのみを返す。戻り値はファイル名昇順のリストで、各要素は
+    {"name": ファイル名, "chunk_count": チャンク数} の辞書。
+    """
+    manifest = _load_manifest()
+    return [
+        {"name": name, "chunk_count": len(entry.get("chunk_ids", []))}
+        for name, entry in sorted(manifest.items())
+        if Path(name).parts[0] != CONVERSATIONS_DIRNAME
+    ]
+
+
+def delete_indexed_file(name: str) -> bool:
+    """インデックス済みファイルをdata/から削除する。
+
+    ここではmanifest・ベクトルDBの更新は行わない。呼び出し元がこの後sync_data_dir()を
+    呼ぶことで、data/にファイルが存在しなくなったことが検知され、DB・manifestから
+    自動的に除外される（sync_data_dir()の既存の削除検知ロジックをそのまま利用する）。
+    パストラバーサル対策としてsafe_upload_dest()と同じ経路でパスを解決する
+    （list_indexed_files()が返すファイルはconversations/配下を除いた
+    data/直下のファイルのみのため、これで十分安全に解決できる）。
+    対象ファイルが存在しない場合は何もせずFalseを返す。
+    """
+    path = safe_upload_dest(name)
+    if path is None or not path.exists():
+        return False
+    path.unlink()
+    return True
+
+
 def _dir_size_mb(path: Path) -> float:
     if not path.exists():
         return 0.0
