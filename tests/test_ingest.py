@@ -7,6 +7,8 @@
 
 import json
 import os
+import threading
+import time
 
 import pytest
 from filelock import FileLock, Timeout
@@ -936,3 +938,78 @@ def test_sync_data_dir_releases_lock_after_success(fake_env):
     lock = FileLock(str(ingest.SYNC_LOCK_PATH), timeout=1)
     with lock:
         pass
+
+
+def test_sync_data_dir_releases_lock_when_processing_raises(fake_env, monkeypatch):
+    # 同期処理の途中（ロック取得後）で予期しない例外が発生しても、ロックが
+    # 保持されたままにならない（デッドロック状態を残さない）ことを確認する。
+    data_dir, _store = fake_env
+    _write(data_dir, "a.txt", "十分な長さのテキストです。" * 5)
+
+    def boom(verbose):
+        raise RuntimeError("同期処理中の想定外エラー")
+
+    monkeypatch.setattr(ingest, "_sync_data_dir_locked", boom)
+
+    with pytest.raises(RuntimeError, match="同期処理中の想定外エラー"):
+        ingest.sync_data_dir(verbose=False)
+
+    # 例外発生後もロックはすぐに取得できる（残留していない）
+    lock = FileLock(str(ingest.SYNC_LOCK_PATH), timeout=1)
+    with lock:
+        pass
+
+
+def test_sync_data_dir_serializes_concurrent_thread_calls(fake_env, monkeypatch):
+    # 複数スレッドから同時にsync_data_dir()を呼んでも、実際の同期処理
+    # （ロック区間）が重複して実行されないこと（＝排他が機能していること）を、
+    # 実際にスレッドを起動して検証する。
+    data_dir, _store = fake_env
+    _write(data_dir, "a.txt", "スレッド経由で同期されるファイルAです。" * 3)
+    _write(data_dir, "b.txt", "スレッド経由で同期されるファイルBです。" * 3)
+
+    original_locked = ingest._sync_data_dir_locked
+    counter_lock = threading.Lock()
+    active_count = 0
+    max_active = 0
+
+    def slow_locked(verbose):
+        nonlocal active_count, max_active
+        with counter_lock:
+            active_count += 1
+            max_active = max(max_active, active_count)
+        try:
+            time.sleep(0.05)
+            return original_locked(verbose=verbose)
+        finally:
+            with counter_lock:
+                active_count -= 1
+
+    monkeypatch.setattr(ingest, "_sync_data_dir_locked", slow_locked)
+
+    results = []
+    errors = []
+    results_lock = threading.Lock()
+
+    def worker():
+        try:
+            result = ingest.sync_data_dir(verbose=False)
+            with results_lock:
+                results.append(result)
+        except Exception as exc:  # pragma: no cover - 失敗時にテストで検知させる
+            with results_lock:
+                errors.append(exc)
+
+    threads = [threading.Thread(target=worker) for _ in range(4)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+
+    assert errors == []
+    assert len(results) == 4
+    # 同時に処理区間へ入ったスレッドは常に1つだけ（排他が機能している）
+    assert max_active == 1
+    # data/ の2ファイルが同期されるのは（4回呼ばれても）合計で1回分だけ
+    total_added = sum(len(r["added"]) for r in results)
+    assert total_added == 2
