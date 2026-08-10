@@ -263,6 +263,26 @@ def test_windowed_history_drops_oldest_messages_when_over_budget():
     assert any(f"質問{7}" in m.content for m in windowed)
 
 
+def test_windowed_history_does_not_mutate_input_list():
+    """境界値（回帰防止）: 予算超過で間引きが発生しても、呼び出し元が渡した元のリスト
+    （画面表示用のst.session_state.messagesを想定）自体は一切変更されない。"""
+    import app
+
+    long_text = "あ" * 2000
+    messages = []
+    for i in range(8):
+        messages.append(HumanMessage(content=f"質問{i}: {long_text}"))
+        messages.append(AIMessage(content=f"回答{i}: {long_text}"))
+    original_len = len(messages)
+    original_first_content = messages[0].content
+
+    windowed = app._windowed_history(messages)
+
+    assert len(messages) == original_len
+    assert messages[0].content == original_first_content
+    assert windowed is not messages
+
+
 def test_chat_streaming_sends_windowed_history_to_agent(monkeypatch):
     """正常系（Issue #17）: 会話が長くなり既定のトークン予算(MAX_HISTORY_TOKENS)を超えると、
     agent.stream()に渡すメッセージ一覧が実際に間引かれ、画面表示用の

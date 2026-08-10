@@ -350,6 +350,51 @@ def test_build_model_ollama_passes_num_ctx_to_init_chat_model(monkeypatch):
     assert kwargs["num_ctx"] == setup.OLLAMA_NUM_CTX
 
 
+def test_build_model_anthropic_does_not_pass_num_ctx(monkeypatch):
+    """境界確認: Ollama未使用（Anthropicにフォールバック）の場合、num_ctxはOllama固有の
+    パラメータのため init_chat_model には一切渡さない（Anthropic側が未知のkwargsとして
+    拒否しないことの回帰防止）。"""
+    monkeypatch.setattr(setup, "_ollama_available", lambda: False)
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "test-dummy-key")
+    calls = []
+
+    def _fake_init_chat_model(*args, **kwargs):
+        calls.append((args, kwargs))
+        return object()
+
+    monkeypatch.setattr(setup, "init_chat_model", _fake_init_chat_model)
+
+    setup._build_model()
+
+    assert len(calls) == 1
+    args, kwargs = calls[0]
+    assert args[0] == "claude-sonnet-5"
+    assert kwargs["model_provider"] == "anthropic"
+    assert "num_ctx" not in kwargs
+
+
+def test_build_model_openai_does_not_pass_num_ctx(monkeypatch):
+    """境界確認: OpenAIフォールバック時もnum_ctxを渡さない。"""
+    monkeypatch.setattr(setup, "_ollama_available", lambda: False)
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    monkeypatch.setenv("OPENAI_API_KEY", "already-set-key")
+    calls = []
+
+    def _fake_init_chat_model(*args, **kwargs):
+        calls.append((args, kwargs))
+        return object()
+
+    monkeypatch.setattr(setup, "init_chat_model", _fake_init_chat_model)
+
+    setup._build_model()
+
+    assert len(calls) == 1
+    args, kwargs = calls[0]
+    assert args[0] == "gpt-5-chat-latest"
+    assert kwargs["model_provider"] == "openai"
+    assert "num_ctx" not in kwargs
+
+
 def test_build_model_falls_back_through_to_runtime_error_when_ollama_model_not_pulled_and_no_keys(
     monkeypatch,
 ):
