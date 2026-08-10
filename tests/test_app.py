@@ -243,7 +243,7 @@ def test_windowed_history_returns_empty_list_as_is():
 
 
 def test_windowed_history_drops_oldest_messages_when_over_budget():
-    """異常系（Issue #17回帰防止）: トークン予算を超える長い会話では、
+    """異常系: トークン予算を超える長い会話では、
     古いメッセージが間引かれ、先頭が必ずHumanMessageになる。"""
     import app
 
@@ -284,7 +284,7 @@ def test_windowed_history_does_not_mutate_input_list():
 
 
 def test_chat_streaming_sends_windowed_history_to_agent(monkeypatch):
-    """正常系（Issue #17）: 会話が長くなり既定のトークン予算(MAX_HISTORY_TOKENS)を超えると、
+    """正常系: 会話が長くなり既定のトークン予算(MAX_HISTORY_TOKENS)を超えると、
     agent.stream()に渡すメッセージ一覧が実際に間引かれ、画面表示用の
     st.session_state.messagesはフルの履歴を保持し続ける（送信分のみが絞り込まれる）。"""
     fake_agent = _FakeAgent(answer="短い回答")
