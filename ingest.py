@@ -136,6 +136,14 @@ def _load_manifest() -> dict:
             MANIFEST_PATH,
         )
         return {}
+    except FileNotFoundError:
+        # exists()での確認直後にファイルが削除された場合（TOCTOU）に備える。
+        logger.warning(
+            "%s の読み込み中にファイルが見つかりませんでした。"
+            "空のマニフェストとして扱い、全ファイルを再取り込みします。",
+            MANIFEST_PATH,
+        )
+        return {}
 
 
 def _save_manifest(manifest: dict) -> None:

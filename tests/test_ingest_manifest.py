@@ -80,6 +80,25 @@ def test_load_manifest_falls_back_to_empty_dict_on_corrupt_json(fake_manifest_en
     assert any(str(manifest_path) in record.getMessage() for record in caplog.records)
 
 
+def test_load_manifest_falls_back_to_empty_dict_on_toctou_file_not_found(fake_manifest_env, monkeypatch, caplog):
+    # exists()チェック直後に別プロセスがファイルを削除した状況（TOCTOU）を
+    # read_text()がFileNotFoundErrorを送出することで再現する。
+    persist_dir, manifest_path = fake_manifest_env
+    persist_dir.mkdir(parents=True, exist_ok=True)
+    manifest_path.write_text("{}", encoding="utf-8")
+
+    def _raise_file_not_found(self, encoding=None):
+        raise FileNotFoundError(manifest_path)
+
+    monkeypatch.setattr(type(manifest_path), "read_text", _raise_file_not_found)
+
+    with caplog.at_level("WARNING"):
+        result = ingest._load_manifest()
+
+    assert result == {}
+    assert any(str(manifest_path) in record.getMessage() for record in caplog.records)
+
+
 def test_load_manifest_after_save_manifest_overwrite_of_corrupt_file(
     fake_manifest_env,
 ):
