@@ -10,6 +10,10 @@
   最小限のフェイクモジュールを sys.modules に登録する（未使用のプレースホルダ）。
 - `setup.py` は起動時にモデルを自動選択するが、`ANTHROPIC_API_KEY` 等が未設定だと
   `getpass.getpass()` で対話入力を要求してテストがハングするため、ダミー値を設定する。
+  実行環境によっては該当の環境変数が「未設定」ではなく空文字列で事前設定されている
+  場合があり、`os.environ.setdefault()` は空文字列に対しては上書きしない
+  （「未設定」の場合のみ有効なため）ため、空文字列も上書き対象にする
+  `_setdefault_even_if_empty()` を使う。
 - `langchain.chat_models.init_chat_model` と `langchain.agents.create_agent` は
   実際のLLM呼び出し・エージェント構築を避けるためフェイクに差し替える。
 """
@@ -18,10 +22,23 @@ import os
 import sys
 import types
 
-os.environ.setdefault("DISABLE_OLLAMA", "true")
-os.environ.setdefault("ANTHROPIC_API_KEY", "test-dummy-key")
-os.environ.setdefault("LANGSMITH_API_KEY", "test-dummy-key")
-os.environ.setdefault("LANGSMITH_PROJECT", "test")
+
+def _setdefault_even_if_empty(name: str, default: str) -> None:
+    """環境変数が未設定、または空文字列の場合にダミー値で上書きする。
+
+    `os.environ.setdefault()` は環境変数が「未設定」の場合のみ値をセットするため、
+    実行環境側で空文字列（例: `ANTHROPIC_API_KEY=""`）が事前設定されていると
+    上書きされず、`setup.py` の `getpass.getpass()` に処理が進んでテストが
+    ハングしうる。これを避けるため空文字列も上書き対象にする。
+    """
+    if not os.environ.get(name):
+        os.environ[name] = default
+
+
+_setdefault_even_if_empty("DISABLE_OLLAMA", "true")
+_setdefault_even_if_empty("ANTHROPIC_API_KEY", "test-dummy-key")
+_setdefault_even_if_empty("LANGSMITH_API_KEY", "test-dummy-key")
+_setdefault_even_if_empty("LANGSMITH_PROJECT", "test")
 
 
 def _install_stub_module(name: str, **attrs) -> types.ModuleType:
