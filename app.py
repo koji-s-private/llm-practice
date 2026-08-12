@@ -200,10 +200,24 @@ def _format_invoke_error_message(e: Exception) -> str:
     return f"回答の生成に失敗しました。{cause}（詳細: {e}）"
 
 
+def _build_agent_safely(thread_id: str):
+    """build_agent()を例外から保護する共通ヘルパー。
+
+    現状のbuild_agent()はネットワーク呼び出しを伴わないため失敗しにくいが、
+    将来モデルの疎通確認などが追加された場合に備え、失敗してもアプリ全体を
+    クラッシュさせずエラー表示に留める。失敗時はNoneを返す。
+    """
+    try:
+        return build_agent(thread_id)
+    except Exception as e:
+        st.error(f"RAGエージェントの初期化に失敗しました。時間をおいて再度お試しください。（詳細: {e}）")
+        return None
+
+
 def _start_new_chat() -> None:
     st.session_state.thread_id = new_thread_id()
     st.session_state.messages = []
-    st.session_state.agent = build_agent(st.session_state.thread_id)
+    st.session_state.agent = _build_agent_safely(st.session_state.thread_id)
     # スレッド選択のselectboxが古いスレッドの選択状態を保持したままだと、次の再実行時に
     # 「選択値 != 新しいthread_id」と誤判定されて選択スレッドへ引き戻されてしまうためリセットする。
     st.session_state.pop("thread_selector", None)
@@ -264,7 +278,7 @@ def _switch_thread(thread_id: str) -> None:
         if turn["answer"]:
             messages.append(AIMessage(content=turn["answer"]))
     st.session_state.messages = messages
-    st.session_state.agent = build_agent(thread_id)
+    st.session_state.agent = _build_agent_safely(thread_id)
 
 
 if "thread_id" not in st.session_state:
@@ -289,7 +303,7 @@ _show_failed_sync_files_warning()
 # （検索ツールはベクトルストアを都度クエリするため、同期結果は再構築なしで自動的に反映される）。
 if "agent" not in st.session_state:
     with st.spinner("RAGエージェントを準備中..."):
-        st.session_state.agent = build_agent(st.session_state.thread_id)
+        st.session_state.agent = _build_agent_safely(st.session_state.thread_id)
 
 if "messages" not in st.session_state:
     st.session_state.messages = []  # 表示・履歴用（HumanMessage / AIMessage）
@@ -403,6 +417,11 @@ if user_input:
     answer = None
     sources: list = []
     with st.chat_message("assistant"):
+        if st.session_state.agent is None:
+            st.error(
+                "RAGエージェントが利用できないため、回答を生成できません。ページを再読み込みして再度お試しください。"
+            )
+            st.stop()
         try:
             # 検索中であることを示すプレースホルダー。最初の回答トークンが届いた時点で消す
             # （ツール呼び出し中は回答本文のトークンが生成されないため、その間の待機を可視化する）。
