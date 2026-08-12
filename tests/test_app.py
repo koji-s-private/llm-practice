@@ -1480,12 +1480,11 @@ def test_start_new_chat_build_agent_failure_sets_agent_none(monkeypatch):
     クラッシュせずst.session_state.agentはNoneになる（後続のチャット送信時の
     agent Noneガードによってクラッシュが防がれる、というセーフティネットの本体を検証する）。
 
-    _start_new_chat() 内の st.error() 呼び出しは、直後に呼ばれる st.rerun() で
-    その場のスクリプト実行が即座に打ち切られるため、rerun後の最終的な描画結果
-    （AppTest.run()が返す木）には残らない（st.rerun()は新しいスクリプト実行を
-    開始し、ボタンクリックは再発火しないため_start_new_chat()自体も再実行されず、
-    そのst.error()の delta は上書きされないままクリアされる、というStreamlitの
-    一般的な挙動。at.errorが空であることも含めてこの実際の挙動を回帰確認用に固定する）。
+    _start_new_chat() 内の st.error() 呼び出し後、st.session_state.agentがNoneの
+    場合はst.rerun()を呼ばない（呼び出し側のガード条件による）ため、その場の
+    スクリプト実行がそのまま最後まで進み、st.error()の描画がAppTest.run()が返す
+    最終的な木にも残る。at.errorにエラーメッセージが実際に残っていることも
+    含めてこの実際の挙動を回帰確認用に固定する。
     """
     at = _run_app()
     assert at.session_state["agent"] is not None
@@ -1500,12 +1499,21 @@ def test_start_new_chat_build_agent_failure_sets_agent_none(monkeypatch):
 
     assert at.exception == []
     assert at.session_state["agent"] is None
+    assert len(at.error) == 1
+    assert "RAGエージェントの初期化に失敗しました" in at.error[0].value
+    assert "new chat agent boom" in at.error[0].value
 
 
 def test_switch_thread_build_agent_failure_sets_agent_none(monkeypatch):
     """異常系: 過去スレッドへの切り替え時にbuild_agent()が失敗しても、
     st.errorのみが表示されクラッシュせず、st.session_state.agentはNoneになる
-    （会話履歴の復元自体は先に完了しているため、messagesは維持される）。"""
+    （会話履歴の復元自体は先に完了しているため、messagesは維持される）。
+
+    _switch_thread() 内の st.error() 呼び出し後、st.session_state.agentがNoneの
+    場合はst.rerun()を呼ばないため、_start_new_chat()の場合と同様にst.error()の
+    描画が最終的な木にも残る（詳細は同ファイル内の
+    test_start_new_chat_build_agent_failure_sets_agent_none のdocstring参照）。
+    """
     from datetime import datetime
 
     monkeypatch.setattr(
@@ -1536,10 +1544,11 @@ def test_switch_thread_build_agent_failure_sets_agent_none(monkeypatch):
     at = at.sidebar.selectbox[0].select("thread-past").run()
 
     assert at.exception == []
-    # _switch_thread()内のst.error()も直後のst.rerun()で打ち切られ最終的な木には残らない
-    # （_start_new_chat()と同様の実際の挙動。詳細は同テストのdocstring参照）。
     assert at.session_state["thread_id"] == "thread-past"
     assert at.session_state["agent"] is None
+    assert len(at.error) == 1
+    assert "RAGエージェントの初期化に失敗しました" in at.error[0].value
+    assert "switch thread agent boom" in at.error[0].value
     # 履歴の復元自体は agent 構築より前に完了しているため維持される
     messages = at.session_state["messages"]
     assert len(messages) == 2
