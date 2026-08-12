@@ -1408,3 +1408,196 @@ def test_cancel_delete_does_not_call_delete_indexed_file(monkeypatch):
     assert delete_calls == []
     assert "pending_delete_report.txt" not in at.session_state
     assert at.sidebar.warning == []
+
+
+# --- 11. build_agent()呼び出しのtry/except保護（_build_agent_safely） ---
+#
+# app.py はbuild_agent()を直接呼ばず、_build_agent_safely()経由で呼び出す
+# （起動時・「新しい会話を始める」・過去スレッド切り替えの3箇所）。build_agent()が
+# 例外を送出しても st.error 表示のみでアプリ全体をクラッシュさせず、
+# st.session_state.agent は None のまま後続処理へ進む。
+# さらに agent が None のままチャット送信された場合も、AttributeErrorで
+# クラッシュせずst.error表示＋st.stop()で処理を打ち切る。
+
+
+def test_build_agent_safely_returns_agent_on_success(monkeypatch):
+    """正常系: build_agent()が成功すればそのまま返り値（エージェント）を返し、
+    st.errorは呼ばれない。
+
+    `_build_agent_safely` はモジュールトップレベルの `from rag_chain import build_agent`
+    によりapp名前空間に束縛された`build_agent`を参照するため、`rag_chain.build_agent`では
+    なく`app.build_agent`を直接monkeypatchする。
+    """
+    import app
+
+    fake_agent = _FakeAgent()
+    monkeypatch.setattr(app, "build_agent", lambda thread_id: fake_agent)
+
+    result = app._build_agent_safely("thread-x")
+
+    assert result is fake_agent
+
+
+def test_build_agent_safely_returns_none_and_does_not_raise_on_failure(monkeypatch):
+    """異常系: build_agent()が例外を送出した場合、_build_agent_safely()は例外を
+    そのまま送出せずNoneを返す（st.error呼び出しの有無はAppTest経由のテストで確認する）。"""
+    import app
+
+    def failing_build_agent(thread_id):
+        raise RuntimeError("boom")
+
+    monkeypatch.setattr(app, "build_agent", failing_build_agent)
+
+    result = app._build_agent_safely("thread-x")
+
+    assert result is None
+
+
+def test_startup_build_agent_failure_shows_error_and_agent_is_none(monkeypatch):
+    """異常系: 起動時のbuild_agent()呼び出しが例外を送出しても、
+    st.errorのみが表示されクラッシュせず、st.session_state.agentはNoneのまま
+    後続処理（メッセージ初期化等）が継続される。"""
+
+    def failing_build_agent(thread_id=None):
+        raise RuntimeError("agent build boom")
+
+    monkeypatch.setattr(rag_chain, "build_agent", failing_build_agent)
+
+    at = _run_app()
+
+    assert at.exception == []
+    assert len(at.error) == 1
+    assert "RAGエージェントの初期化に失敗しました" in at.error[0].value
+    assert "agent build boom" in at.error[0].value
+    assert "agent" in at.session_state
+    assert at.session_state["agent"] is None
+    # agent構築が失敗しても、その後段のmessages初期化などは通常通り継続される
+    assert at.session_state["messages"] == []
+
+
+def test_start_new_chat_build_agent_failure_sets_agent_none(monkeypatch):
+    """異常系: 「🆕 新しい会話を始める」押下時にbuild_agent()が失敗しても、
+    クラッシュせずst.session_state.agentはNoneになる（後続のチャット送信時の
+    agent Noneガードによってクラッシュが防がれる、というセーフティネットの本体を検証する）。
+
+    _start_new_chat() 内の st.error() 呼び出し後、st.session_state.agentがNoneの
+    場合はst.rerun()を呼ばない（呼び出し側のガード条件による）ため、その場の
+    スクリプト実行がそのまま最後まで進み、st.error()の描画がAppTest.run()が返す
+    最終的な木にも残る。at.errorにエラーメッセージが実際に残っていることも
+    含めてこの実際の挙動を回帰確認用に固定する。
+    """
+    at = _run_app()
+    assert at.session_state["agent"] is not None
+
+    def failing_build_agent(thread_id=None):
+        raise RuntimeError("new chat agent boom")
+
+    monkeypatch.setattr(rag_chain, "build_agent", failing_build_agent)
+
+    new_chat_button = next(b for b in at.sidebar.button if "新しい会話" in b.label)
+    at = new_chat_button.click().run()
+
+    assert at.exception == []
+    assert at.session_state["agent"] is None
+    assert len(at.error) == 1
+    assert "RAGエージェントの初期化に失敗しました" in at.error[0].value
+    assert "new chat agent boom" in at.error[0].value
+
+
+def test_switch_thread_build_agent_failure_sets_agent_none(monkeypatch):
+    """異常系: 過去スレッドへの切り替え時にbuild_agent()が失敗しても、
+    st.errorのみが表示されクラッシュせず、st.session_state.agentはNoneになる
+    （会話履歴の復元自体は先に完了しているため、messagesは維持される）。
+
+    _switch_thread() 内の st.error() 呼び出し後、st.session_state.agentがNoneの
+    場合はst.rerun()を呼ばないため、_start_new_chat()の場合と同様にst.error()の
+    描画が最終的な木にも残る（詳細は同ファイル内の
+    test_start_new_chat_build_agent_failure_sets_agent_none のdocstring参照）。
+    """
+    from datetime import datetime
+
+    monkeypatch.setattr(
+        memory,
+        "list_threads",
+        lambda: [
+            {
+                "thread_id": "thread-past",
+                "created_at": datetime(2024, 1, 1, 9, 0),
+                "first_question": "過去の質問",
+                "count": 1,
+            }
+        ],
+    )
+    monkeypatch.setattr(
+        memory,
+        "load_conversation",
+        lambda thread_id: [{"question": "過去の質問", "answer": "過去の回答"}] if thread_id == "thread-past" else [],
+    )
+
+    at = _run_app()
+
+    def failing_build_agent(thread_id=None):
+        raise RuntimeError("switch thread agent boom")
+
+    monkeypatch.setattr(rag_chain, "build_agent", failing_build_agent)
+
+    at = at.sidebar.selectbox[0].select("thread-past").run()
+
+    assert at.exception == []
+    assert at.session_state["thread_id"] == "thread-past"
+    assert at.session_state["agent"] is None
+    assert len(at.error) == 1
+    assert "RAGエージェントの初期化に失敗しました" in at.error[0].value
+    assert "switch thread agent boom" in at.error[0].value
+    # 履歴の復元自体は agent 構築より前に完了しているため維持される
+    messages = at.session_state["messages"]
+    assert len(messages) == 2
+    assert messages[0].content == "過去の質問"
+
+
+def test_chat_with_none_agent_shows_error_and_stops_without_crash(monkeypatch):
+    """異常系: build_agent()の失敗によりst.session_state.agentがNoneのまま
+    チャットが送信された場合、agent.stream()を呼びに行かずAttributeErrorで
+    クラッシュすることもなく、st.errorを表示してst.stop()で処理を打ち切る
+    （会話履歴への追加やsave_conversationも行われない）。"""
+
+    def failing_build_agent(thread_id=None):
+        raise RuntimeError("boom")
+
+    monkeypatch.setattr(rag_chain, "build_agent", failing_build_agent)
+
+    save_calls = []
+    monkeypatch.setattr(memory, "save_conversation", lambda *a, **k: save_calls.append(a))
+
+    at = _run_app()
+    assert at.session_state["agent"] is None
+
+    at = at.chat_input[0].set_value("質問です").run()
+
+    assert at.exception == []
+    # 起動時のRAGエージェント初期化失敗によるst.errorは、agentが既にsession_stateに
+    # 存在する（Noneのまま）ため次のrun()では再構築処理自体を通らず表示されない。
+    # このrun()で新たに表示されるのはチャット処理冒頭のagent Noneガードによる
+    # st.errorのみ（st.stop()の直前に呼ばれ、その後st.rerun()は発生しないため最終的な
+    # 木にそのまま残る）。
+    assert len(at.error) == 1
+    assert "RAGエージェントが利用できないため、回答を生成できません" in at.error[0].value
+    assert at.session_state["messages"] == []
+    assert save_calls == []
+
+
+def test_chat_with_none_agent_after_recovery_still_shows_error_for_that_turn(monkeypatch):
+    """境界値: 一度build_agent()が成功しエージェントが構築された状態から、
+    何らかの理由でst.session_state.agentが明示的にNoneへ書き換わっていた場合でも
+    （防御的ガードそのものの検証。実運用ではbuild_agent失敗時のみ発生する想定）、
+    チャット処理はクラッシュせずガードで打ち切られる。"""
+    at = _run_app()
+    assert at.session_state["agent"] is not None
+
+    at.session_state["agent"] = None
+    at = at.chat_input[0].set_value("質問です").run()
+
+    assert at.exception == []
+    assert len(at.error) == 1
+    assert "RAGエージェントが利用できないため、回答を生成できません" in at.error[0].value
+    assert at.session_state["messages"] == []
