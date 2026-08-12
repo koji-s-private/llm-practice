@@ -314,7 +314,11 @@ if "auto_save_memory" not in st.session_state:
 with st.sidebar:
     if st.button("🆕 新しい会話を始める", use_container_width=True):
         _start_new_chat()
-        st.rerun()
+        # st.rerun()はその場でスクリプト実行を打ち切るため、直前のst.error()の描画内容も
+        # 次の描画で失われてしまう。エージェント構築に失敗した場合はrerunせず、この回の
+        # 実行内でエラーメッセージがそのまま表示され続けるようにする。
+        if st.session_state.agent is not None:
+            st.rerun()
 
     st.divider()
     st.subheader("💬 過去の会話")
@@ -336,7 +340,10 @@ with st.sidebar:
         # 選択操作以外の理由での再実行（他のウィジェット操作等）で毎回再構築されないようにする。
         if selected_thread_id and selected_thread_id != st.session_state.thread_id:
             _switch_thread(selected_thread_id)
-            st.rerun()
+            # 新しい会話を始める場合と同様、エージェント構築に失敗した場合はrerunせず
+            # st.error()の描画をこの回の実行内に残す。
+            if st.session_state.agent is not None:
+                st.rerun()
 
     st.divider()
     # 「会話ID」という生のID文字列を主語にした表示ではなく、「今の会話を記憶に残すか」
