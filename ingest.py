@@ -266,6 +266,12 @@ def sync_data_dir(verbose: bool = True) -> dict:
     読み込み・分割に失敗したファイルは "failed" に積まれ、manifestには記録されない
     （＝次回同期時に再度リトライされる）。他のファイルの同期は継続される。
 
+    manifestの保存はファイル1件ごとに行う（全件処理後にまとめて保存はしない）。
+    ベクトルDBへの追加・削除が完了するたびに都度manifestを保存することで、
+    途中でプロセスが中断（クラッシュ・強制終了など）してもmanifestには
+    「実際にDBへ反映済みのファイル」だけが記録された状態を保ち、次回同期時に
+    同じ内容のチャンクが重複登録されるのを防ぐ。
+
     同一プロセス内の複数Streamlitセッション（複数タブ）や複数プロセスから同時に
     呼ばれても安全なよう、manifest.json読み込み〜ベクトルDB更新〜manifest.json書き込みの
     一連の処理全体をファイルロック（SYNC_LOCK_PATH）で排他制御する。先に実行している
@@ -363,6 +369,12 @@ def _sync_data_dir_locked(verbose: bool) -> dict:
             action = "更新" if entry else "追加"
             print(f"{action}: {name}（{len(chunks)}チャンク）")
 
+        # ファイル1件ごとにmanifestを保存する。全件処理後にまとめて保存する設計だと、
+        # add_documents()でDBへの追加が完了した後・保存前にプロセスが中断した場合、
+        # DBには反映済みなのにmanifestには記録されない状態になり、次回同期時に
+        # 同じ内容のチャンクが重複登録されてしまう。都度保存すればその不整合を防げる。
+        _save_manifest(manifest)
+
     # data/ から削除されたファイルをDBからも削除
     for name in list(manifest.keys()):
         if name not in current_files:
@@ -373,7 +385,11 @@ def _sync_data_dir_locked(verbose: bool) -> dict:
             result["removed"].append(name)
             if verbose:
                 print(f"削除: {name}")
+            # 追加・更新時と同様、削除もDB反映とmanifest保存を1件ごとに一致させる。
+            _save_manifest(manifest)
 
+    # 全ファイルが失敗し1件も追加・更新・削除が無かった場合でも、manifest.jsonが
+    # 存在しない状態のまま終わらないよう最後に保存しておく（内容は変わらないため冪等）。
     _save_manifest(manifest)
 
     if verbose and not any(result.values()):
