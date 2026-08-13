@@ -6,6 +6,7 @@
 """
 
 import json
+import logging
 import os
 import threading
 import time
@@ -1013,3 +1014,238 @@ def test_sync_data_dir_serializes_concurrent_thread_calls(fake_env, monkeypatch)
     # data/ の2ファイルが同期されるのは（4回呼ばれても）合計で1回分だけ
     total_added = sum(len(r["added"]) for r in results)
     assert total_added == 2
+
+
+# --- ログ出力の一本化（print()廃止、logger経由のみ） ---
+#
+# sync_data_dir() / _load_pdf() / _load_pdf_with_docling() は以前 print() と
+# logger.warning() を併用しており標準出力とログが二重になっていた。
+# 現在は print() を一切使わず、失敗時は常に logger.warning()、進捗メッセージは
+# verboseの値に応じて logger.info()（True）/ logger.debug()（False）に統一されている。
+# ここではその一本化が壊れていないことを検証する。
+
+
+def test_load_failure_does_not_print_to_stdout(fake_env, monkeypatch, capsys):
+    # 失敗時にprint()による標準出力が発生しないこと（verbose=Trueでも）
+    data_dir, _store = fake_env
+    _write(data_dir, "bad.txt", "壊れていることにするテキストです。" * 5)
+    monkeypatch.setattr(ingest, "LOADERS", {**ingest.LOADERS, ".txt": lambda path: _FailingLoader(path)})
+
+    ingest.sync_data_dir(verbose=True)
+
+    assert capsys.readouterr().out == ""
+
+
+def test_load_failure_logs_warning_via_logger(fake_env, monkeypatch, caplog):
+    # 読み込み失敗時はlogger.warning()で記録される（verboseの値に関わらず常に出力される）
+    data_dir, _store = fake_env
+    _write(data_dir, "bad.txt", "壊れていることにするテキストです。" * 5)
+    monkeypatch.setattr(ingest, "LOADERS", {**ingest.LOADERS, ".txt": lambda path: _FailingLoader(path)})
+
+    with caplog.at_level(logging.WARNING, logger="ingest"):
+        ingest.sync_data_dir(verbose=False)
+
+    warnings = [r for r in caplog.records if r.levelname == "WARNING"]
+    assert len(warnings) == 1
+    assert "bad.txt" in warnings[0].getMessage()
+    assert "読み込みに失敗" in warnings[0].getMessage()
+
+
+def test_add_documents_failure_logs_warning_via_logger(fake_env, monkeypatch, caplog):
+    # ベクトルストアへの追加失敗時もlogger.warning()で記録される
+    data_dir, _store = fake_env
+    _write(data_dir, "new.txt", "新規追加されるファイルの内容です。" * 5)
+
+    def flaky_add_documents(documents):
+        raise RuntimeError("埋め込みモデルの一時的な失敗を想定")
+
+    monkeypatch.setattr(_store, "add_documents", flaky_add_documents)
+
+    with caplog.at_level(logging.WARNING, logger="ingest"):
+        ingest.sync_data_dir(verbose=False)
+
+    warnings = [r for r in caplog.records if r.levelname == "WARNING"]
+    assert len(warnings) == 1
+    assert "new.txt" in warnings[0].getMessage()
+    assert "ベクトルストアへの追加に失敗" in warnings[0].getMessage()
+
+
+def test_progress_message_logged_as_info_when_verbose_true(fake_env, caplog):
+    # verbose=True の進捗メッセージ（追加）はINFOレベルで出力される
+    data_dir, _store = fake_env
+    _write(data_dir, "a.txt", "十分な長さのテキストです。" * 5)
+
+    with caplog.at_level(logging.DEBUG, logger="ingest"):
+        ingest.sync_data_dir(verbose=True)
+
+    matching = [r for r in caplog.records if "追加" in r.getMessage() and "a.txt" in r.getMessage()]
+    assert len(matching) == 1
+    assert matching[0].levelname == "INFO"
+
+
+def test_progress_message_logged_as_debug_when_verbose_false(fake_env, caplog):
+    # verbose=False の進捗メッセージ（追加）はDEBUGレベルで出力される（デフォルト設定では非表示）
+    data_dir, _store = fake_env
+    _write(data_dir, "a.txt", "十分な長さのテキストです。" * 5)
+
+    with caplog.at_level(logging.DEBUG, logger="ingest"):
+        ingest.sync_data_dir(verbose=False)
+
+    matching = [r for r in caplog.records if "追加" in r.getMessage() and "a.txt" in r.getMessage()]
+    assert len(matching) == 1
+    assert matching[0].levelname == "DEBUG"
+
+
+def test_updated_progress_message_respects_verbose_level(fake_env, caplog):
+    # 更新時の進捗メッセージも同様にverboseに応じたレベルで出力される
+    data_dir, _store = fake_env
+    path = _write(data_dir, "a.txt", "元のテキスト内容です。")
+    ingest.sync_data_dir(verbose=False)
+    path.write_text("変更後のまったく別のテキスト内容です。", encoding="utf-8")
+
+    with caplog.at_level(logging.DEBUG, logger="ingest"):
+        ingest.sync_data_dir(verbose=True)
+
+    matching = [r for r in caplog.records if "更新" in r.getMessage() and "a.txt" in r.getMessage()]
+    assert len(matching) == 1
+    assert matching[0].levelname == "INFO"
+
+
+def test_removed_progress_message_respects_verbose_level(fake_env, caplog):
+    # 削除時の進捗メッセージも同様にverboseに応じたレベルで出力される
+    data_dir, _store = fake_env
+    path = _write(data_dir, "a.txt", "削除されるファイルの内容です。")
+    ingest.sync_data_dir(verbose=False)
+    path.unlink()
+
+    with caplog.at_level(logging.DEBUG, logger="ingest"):
+        ingest.sync_data_dir(verbose=False)
+
+    matching = [r for r in caplog.records if "削除" in r.getMessage() and "a.txt" in r.getMessage()]
+    assert len(matching) == 1
+    assert matching[0].levelname == "DEBUG"
+
+
+def test_no_changes_message_logged_as_info_when_verbose_true(fake_env, caplog):
+    # 変更なしメッセージもverbose=Trueならinfoレベルで出力される
+    data_dir, _store = fake_env
+    _write(data_dir, "a.txt", "変わらないテキスト内容です。")
+    ingest.sync_data_dir(verbose=False)
+
+    with caplog.at_level(logging.DEBUG, logger="ingest"):
+        ingest.sync_data_dir(verbose=True)
+
+    matching = [r for r in caplog.records if "変更はありませんでした" in r.getMessage()]
+    assert len(matching) == 1
+    assert matching[0].levelname == "INFO"
+
+
+def test_no_changes_message_logged_as_debug_when_verbose_false(fake_env, caplog):
+    # 変更なしメッセージはverbose=Falseならdebugレベルで出力される（デフォルト設定では非表示）
+    data_dir, _store = fake_env
+    _write(data_dir, "a.txt", "変わらないテキスト内容です。")
+    ingest.sync_data_dir(verbose=False)
+
+    with caplog.at_level(logging.DEBUG, logger="ingest"):
+        ingest.sync_data_dir(verbose=False)
+
+    matching = [r for r in caplog.records if "変更はありませんでした" in r.getMessage()]
+    assert len(matching) == 1
+    assert matching[0].levelname == "DEBUG"
+
+
+def test_no_changes_message_not_logged_when_default_level_and_verbose_false(fake_env, caplog):
+    # verbose=Falseでdebugログを収集しない既定のログレベル（WARNING等）では
+    # 進捗メッセージがそもそも記録されない（app.py/api経由の本番導線を想定した確認）
+    data_dir, _store = fake_env
+    _write(data_dir, "a.txt", "変わらないテキスト内容です。")
+    ingest.sync_data_dir(verbose=False)
+
+    with caplog.at_level(logging.WARNING, logger="ingest"):
+        ingest.sync_data_dir(verbose=False)
+
+    assert caplog.records == []
+
+
+def test_docling_fallback_progress_message_respects_verbose_level(monkeypatch, tmp_path, caplog):
+    # _load_pdf()内のDoclingフォールバック進捗メッセージもverboseに応じたレベルで出力される
+    fake_pdf_path = tmp_path / "encrypted.pdf"
+    fake_pdf_path.write_bytes(b"not a real pdf")
+
+    class _FailingPyMuPDFLoader:
+        def __init__(self, path):
+            self.path = path
+
+        def load(self):
+            raise ValueError("暗号化されたPDFは読み込めません")
+
+    class _SucceedingDoclingLoader:
+        def __init__(self, file_path, export_type):
+            self.file_path = file_path
+
+        def load(self):
+            return [Document(page_content="Doclingで抽出した本文です。")]
+
+    monkeypatch.setattr(ingest, "DOCLING_AVAILABLE", True)
+    monkeypatch.setattr(ingest, "PyMuPDFLoader", _FailingPyMuPDFLoader)
+    monkeypatch.setattr(ingest, "DoclingLoader", _SucceedingDoclingLoader)
+
+    with caplog.at_level(logging.DEBUG, logger="ingest"):
+        ingest._load_pdf(fake_pdf_path, verbose=True)
+
+    matching = [r for r in caplog.records if "Doclingでの再解析を試みます" in r.getMessage()]
+    assert len(matching) == 1
+    assert matching[0].levelname == "INFO"
+
+
+def test_docling_load_failure_progress_message_is_debug_when_verbose_false(monkeypatch, tmp_path, caplog):
+    # _load_pdf_with_docling()内のDocling解析失敗メッセージも、
+    # verbose=Falseならdebugレベルで出力される
+    fake_pdf_path = tmp_path / "broken.pdf"
+    fake_pdf_path.write_bytes(b"not a real pdf")
+
+    class _FailingDoclingLoader:
+        def __init__(self, file_path, export_type):
+            self.file_path = file_path
+
+        def load(self):
+            raise RuntimeError("Doclingでも読み込めません")
+
+    monkeypatch.setattr(ingest, "DoclingLoader", _FailingDoclingLoader)
+
+    with caplog.at_level(logging.DEBUG, logger="ingest"):
+        docs = ingest._load_pdf_with_docling(fake_pdf_path, verbose=False)
+
+    assert docs == []
+    matching = [r for r in caplog.records if "Docling解析に失敗しました" in r.getMessage()]
+    assert len(matching) == 1
+    assert matching[0].levelname == "DEBUG"
+
+
+def test_main_configures_logging_basic_config_for_cli_console_output(monkeypatch, fake_env, capsys):
+    # CLIエントリポイントmain()は、verbose=True（デフォルト）の進捗ログ（logger.info）を
+    # コンソールに表示するため、INFOレベル・標準出力向けのlogging.basicConfig()を呼ぶこと
+    monkeypatch.setattr("sys.argv", ["ingest.py"])
+    monkeypatch.setattr(ingest, "sync_data_dir", lambda: {"added": [], "updated": [], "removed": [], "failed": []})
+
+    basic_config_calls = []
+    original_basic_config = logging.basicConfig
+
+    def recording_basic_config(**kwargs):
+        basic_config_calls.append(kwargs)
+        # 実際にハンドラを増殖させ他のテストへ影響を残さないよう、実行はしない
+
+    monkeypatch.setattr(logging, "basicConfig", recording_basic_config)
+
+    ingest.main()
+
+    assert len(basic_config_calls) == 1
+    assert basic_config_calls[0]["level"] == logging.INFO
+    import sys as sys_module
+
+    assert basic_config_calls[0]["stream"] is sys_module.stdout
+
+    monkeypatch.setattr(logging, "basicConfig", original_basic_config)
+    out = capsys.readouterr().out
+    assert "同期しています" in out
+    assert "完了" in out
