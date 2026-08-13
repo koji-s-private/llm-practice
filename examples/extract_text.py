@@ -1,9 +1,15 @@
+import sys
+from pathlib import Path
 from typing import List, Optional
-from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
-from langchain_core.utils.function_calling import tool_example_to_messages
 
-from setup import model
-from pydantic import BaseModel, Field
+# リポジトリ直下の setup.py を import できるよう、examples/ の1つ上の階層を sys.path に追加する。
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+
+from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder  # noqa: E402
+from langchain_core.utils.function_calling import tool_example_to_messages  # noqa: E402
+
+from setup import model  # noqa: E402
+from pydantic import BaseModel, Field  # noqa: E402
 
 llm = model
 
@@ -67,14 +73,6 @@ prompt_template = ChatPromptTemplate.from_messages(
 # print(structured_llm.invoke(prompt))
 
 
-structured_llm = llm.with_structured_output(schema=Data)
-text = "My name is Jeff, my hair is black and i am 6 feet tall. " \
-        "Anna has the same color hair as me."
-prompt = prompt_template.invoke({"text": text})
-# structured_llm.invoke(prompt)
-print(structured_llm.invoke(prompt))
-
-
 # messages = [
 #     {
 #         "role": "user", "content": "2 🦆 2"
@@ -110,8 +108,6 @@ print(structured_llm.invoke(prompt))
 #     )
 # ]
 
-messages = []
-
 # for txt, tool_call in examples:
 #     if tool_call.people:
 #         # This final message is optional for some providers
@@ -128,7 +124,21 @@ message_no_extraction = {
     "content": "The solar system is large, but earth has only one moon.",
 }
 
-structured_llm = llm.with_structured_output(schema=Data)
-# structured_llm.invoke([message_no_extraction])
-# print(structured_llm.invoke([message_no_extraction]))
-print(structured_llm.invoke(messages + [message_no_extraction]))
+
+def main() -> None:
+    text = "My name is Jeff, my hair is black and i am 6 feet tall. " "Anna has the same color hair as me."
+    prompt = prompt_template.invoke({"text": text})
+
+    structured_llm = llm.with_structured_output(schema=Data)
+    # structured_llm.invoke(prompt)
+    print(structured_llm.invoke(prompt))
+
+    messages = []
+    structured_llm = llm.with_structured_output(schema=Data)
+    # structured_llm.invoke([message_no_extraction])
+    # print(structured_llm.invoke([message_no_extraction]))
+    print(structured_llm.invoke(messages + [message_no_extraction]))
+
+
+if __name__ == "__main__":
+    main()

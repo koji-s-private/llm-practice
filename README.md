@@ -15,7 +15,7 @@
 | `api/main.py` | FastAPI製バックエンドAPI（`ingest.py`/`rag_chain.py`/`memory.py`をラップ。フロントエンド移行Step1, Issue #88） |
 | `data/` | 質問させたいPDF/テキストファイルを置く場所（アップロードUIからもここに保存される） |
 | `data/conversations/<会話ID>/` | 自動保存された過去の質問・回答（会話ログ。会話IDごとにフォルダが分かれる） |
-| `models_and_prompts.py` / `extract_text.py` | LangChain公式チュートリアルの学習用スクリプト（そのまま残しています） |
+| `examples/models_and_prompts.py` / `examples/extract_text.py` | LangChain公式チュートリアルの学習用スクリプト（アプリ本体からは未使用。`python -m examples.extract_text` のように直接実行した場合のみLLMを呼び出す） |
 | `tests/` | `ingest.py` / `rag_chain.py` / `memory.py` のコアロジックに対する自動テスト |
 
 ## 主要ディレクトリ
