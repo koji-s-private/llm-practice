@@ -529,7 +529,7 @@ def test_load_pdf_with_docling_sets_page_metadata_from_dl_meta(monkeypatch, tmp_
 
 def test_load_pdf_with_docling_merges_small_chunks_up_to_target_chars(monkeypatch, tmp_path):
     # DOC_CHUNKSが返す小さなDocumentは、target_charsに達するまで隣接するもの同士が
-    # マージされ、細切れのまま最終チャンクにならないことを確認する（PR #168 reviewer指摘対応）。
+    # マージされ、細切れのまま最終チャンクにならないことを確認する。
     fake_pdf_path = tmp_path / "scanned.pdf"
     fake_pdf_path.write_bytes(b"not a real pdf")
 
