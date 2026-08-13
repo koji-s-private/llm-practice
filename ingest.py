@@ -285,6 +285,12 @@ def sync_data_dir(verbose: bool = True) -> dict:
     「実際にDBへ反映済みのファイル」だけが記録された状態を保ち、次回同期時に
     同じ内容のチャンクが重複登録されるのを防ぐ。
 
+    既存ファイル更新時はadd_documents()成功後にvector_store.delete()で旧チャンクを
+    削除するが、このdelete()自体が失敗した場合は旧chunk_idsをmanifestの
+    pending_delete_chunk_idsに持ち越す。持ち越しがあるファイルは、内容に変化がなく
+    unchanged判定になった場合でも削除の再試行だけは行われる（さもないと新旧チャンクが
+    重複したままベクトルストアに残り続けてしまうため）。
+
     同一プロセス内の複数Streamlitセッション（複数タブ）や複数プロセスから同時に
     呼ばれても安全なよう、manifest.json読み込み〜ベクトルDB更新〜manifest.json書き込みの
     一連の処理全体をファイルロック（SYNC_LOCK_PATH）で排他制御する。先に実行している
@@ -326,6 +332,23 @@ def _sync_data_dir_locked(verbose: bool) -> dict:
         entry = manifest.get(name)
         unchanged = entry and entry.get("mtime") == fingerprint["mtime"] and entry.get("size") == fingerprint["size"]
         if unchanged:
+            # 内容に変化はなくても、前回同期時にadd_documents()成功後のvector_store.delete()が
+            # 失敗し旧チャンクの削除だけ持ち越しになっている場合は、ここで再試行する
+            # （持ち越しがなければ何もしない、通常のunchanged判定と同じ挙動）。
+            pending_delete_chunk_ids = entry.get("pending_delete_chunk_ids")
+            if pending_delete_chunk_ids:
+                try:
+                    vector_store.delete(ids=pending_delete_chunk_ids)
+                except Exception as e:
+                    logger.warning(
+                        "%s の保留中だった旧チャンク削除の再試行に失敗しました（次回同期時に再試行します）: %s",
+                        name,
+                        e,
+                    )
+                else:
+                    del entry["pending_delete_chunk_ids"]
+                    _save_manifest(manifest)
+                    _log_progress(verbose, "%s: 保留中だった旧チャンクの削除が完了しました。", name)
             continue
 
         try:
@@ -369,10 +392,24 @@ def _sync_data_dir_locked(verbose: bool) -> dict:
             result["failed"].append(name)
             continue
 
+        # add_documents()成功後にdelete()自体が失敗するケース（ネットワーク瞬断・
+        # ベクトルストア内部エラー等）に備える。ここで例外を握りつぶして先に進めてしまうと、
+        # manifestは新内容で更新されるため次回同期はunchanged判定になり、旧チャンクの削除が
+        # 二度と試みられず重複したまま残り続けてしまう。そこで削除失敗時は旧chunk_idsを
+        # pending_delete_chunk_idsとしてmanifestに持ち越し、以後のunchanged判定時に再試行する。
+        # 前回同期時点で未解消のpending_delete_chunk_idsが残っている場合は、それも
+        # 引き継がないと二度と削除が試みられなくなるため、今回分と合算して持ち越す。
+        pending_delete_chunk_ids = set(entry.get("pending_delete_chunk_ids") or []) if entry else set()
         if entry and entry.get("chunk_ids"):
-            vector_store.delete(ids=entry["chunk_ids"])
+            try:
+                vector_store.delete(ids=entry["chunk_ids"])
+            except Exception as e:
+                logger.warning("%s の旧チャンク削除に失敗しました（次回同期時に再試行します）: %s", name, e)
+                pending_delete_chunk_ids |= set(entry["chunk_ids"])
 
         manifest[name] = {**fingerprint, "chunk_ids": chunk_ids}
+        if pending_delete_chunk_ids:
+            manifest[name]["pending_delete_chunk_ids"] = sorted(pending_delete_chunk_ids)
         result["updated" if entry else "added"].append(name)
         action = "更新" if entry else "追加"
         _log_progress(verbose, "%s: %s（%dチャンク）", action, name, len(chunks))
@@ -386,9 +423,27 @@ def _sync_data_dir_locked(verbose: bool) -> dict:
     # data/ から削除されたファイルをDBからも削除
     for name in list(manifest.keys()):
         if name not in current_files:
-            chunk_ids = manifest[name].get("chunk_ids") or []
-            if chunk_ids:
-                vector_store.delete(ids=chunk_ids)
+            entry = manifest[name]
+            # 保留中だった旧チャンク（pending_delete_chunk_ids）も、現行のchunk_idsと
+            # 合わせて削除対象にする。ここを見落とすと、ファイルごとmanifestエントリが
+            # 消えるため以後二度と再試行されず、旧チャンクがベクトルストアに残り続ける。
+            ids_to_delete = set(entry.get("chunk_ids") or []) | set(entry.get("pending_delete_chunk_ids") or [])
+            if ids_to_delete:
+                try:
+                    vector_store.delete(ids=sorted(ids_to_delete))
+                except Exception as e:
+                    # 削除に失敗した場合は、黙って重複を残さないようmanifestエントリを
+                    # pending_delete_chunk_idsだけ残した状態で維持する。ファイルは
+                    # current_filesに存在しないままなので、次回同期時もこのループで
+                    # 再試行される。
+                    logger.warning(
+                        "%s の削除処理中に旧チャンク削除に失敗しました（次回同期時に再試行します）: %s",
+                        name,
+                        e,
+                    )
+                    manifest[name] = {"pending_delete_chunk_ids": sorted(ids_to_delete)}
+                    _save_manifest(manifest)
+                    continue
             del manifest[name]
             result["removed"].append(name)
             _log_progress(verbose, "削除: %s", name)
