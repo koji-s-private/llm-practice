@@ -103,6 +103,9 @@ def safe_upload_dest(filename: str) -> Path | None:
     DATA_DIR の外を指す場合（パストラバーサルの疑いがある場合）は None を返す。
     同名ファイルが既に存在するかどうかはチェックしない（呼び出し元が
     resolve_upload_dest() で別途重複を扱う）。
+    app.py の st.file_uploader(type=[...]) 経由の呼び出しでは拡張子制限により
+    None が返るケースはほぼ発生しないが、任意のファイル名を渡しうる汎用関数
+    として多重防御の意味で None チェックを維持している。
     """
     dest = (DATA_DIR / Path(filename).name).resolve()
     if dest.parent != DATA_DIR.resolve():
