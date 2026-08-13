@@ -14,6 +14,8 @@ import json
 
 import pytest
 from fastapi.testclient import TestClient
+from langchain_core.documents import Document
+from langchain_core.messages import ToolMessage
 
 import api.main as api_main
 
@@ -163,6 +165,80 @@ def test_chat_missing_required_field_returns_422(client):
     assert response.status_code == 422
 
 
+# --- POST /api/chat: sources（参照元ドキュメント）イベント ---
+
+
+def test_chat_streams_sources_event_with_label_and_snippet_from_tool_message_artifact(client, monkeypatch):
+    """正常系: retrieve_contextツールの実行結果(ToolMessage)のartifactから参照元ドキュメントを
+    取得し、contentチャンクは通常どおり送りつつ、ストリーム終了直前にsourcesイベントとして
+    ラベル・スニペットを整形して送信する。"""
+    doc = Document(
+        page_content="これは参照元ドキュメントの本文です。",
+        metadata={"source": "/data/manual.pdf", "page": 2},
+    )
+    tool_message = ToolMessage(content="検索結果の生テキスト", tool_call_id="call-1", artifact=[doc])
+    fake_agent = _FakeAgent(chunks=[tool_message, _FakeChunk("文書に基づく回答")])
+    monkeypatch.setattr(api_main, "build_agent", lambda thread_id: fake_agent)
+
+    response = client.post("/api/chat", json={"thread_id": "thread-1", "message": "質問", "history": []})
+
+    assert response.status_code == 200
+    events = _parse_sse_events(response.text)
+    assert events == [
+        {"content": "文書に基づく回答"},
+        {"sources": [{"label": "manual.pdf（p.3）", "snippet": "これは参照元ドキュメントの本文です。"}]},
+        {"done": True},
+    ]
+
+
+def test_chat_does_not_send_content_for_tool_message_itself(client, monkeypatch):
+    """正常系: ToolMessage自体のcontent（検索結果の生テキスト）はcontentイベントとして
+    送信されない（回答本文と混ざらないことの確認）。"""
+    tool_message = ToolMessage(
+        content="Source: {...}\nContent: 生の検索結果",
+        tool_call_id="call-1",
+        artifact=[Document(page_content="本文", metadata={"source": "a.txt"})],
+    )
+    fake_agent = _FakeAgent(chunks=[tool_message, _FakeChunk("回答")])
+    monkeypatch.setattr(api_main, "build_agent", lambda thread_id: fake_agent)
+
+    response = client.post("/api/chat", json={"thread_id": "thread-1", "message": "質問", "history": []})
+
+    events = _parse_sse_events(response.text)
+    contents = [e["content"] for e in events if "content" in e]
+    assert contents == ["回答"]
+
+
+def test_chat_no_sources_event_when_tool_message_artifact_is_empty(client, monkeypatch):
+    """正常系: 参照元が見つからず一般知識で回答した場合（ToolMessage.artifactが空）は
+    sourcesイベントを送信しない。"""
+    tool_message = ToolMessage(
+        content="関連する情報はドキュメント内に見つかりませんでした。",
+        tool_call_id="call-1",
+        artifact=[],
+    )
+    fake_agent = _FakeAgent(chunks=[tool_message, _FakeChunk("一般知識による回答")])
+    monkeypatch.setattr(api_main, "build_agent", lambda thread_id: fake_agent)
+
+    response = client.post("/api/chat", json={"thread_id": "thread-1", "message": "質問", "history": []})
+
+    events = _parse_sse_events(response.text)
+    assert events == [{"content": "一般知識による回答"}, {"done": True}]
+    assert all("sources" not in e for e in events)
+
+
+def test_chat_no_sources_event_when_no_tool_message_at_all(client, monkeypatch):
+    """境界値: retrieve_contextツール自体が呼ばれなかった（ToolMessageが1件も無い）場合も
+    sourcesイベントは送信されない。"""
+    fake_agent = _FakeAgent(chunks=[_FakeChunk("回答")])
+    monkeypatch.setattr(api_main, "build_agent", lambda thread_id: fake_agent)
+
+    response = client.post("/api/chat", json={"thread_id": "thread-1", "message": "質問", "history": []})
+
+    events = _parse_sse_events(response.text)
+    assert events == [{"content": "回答"}, {"done": True}]
+
+
 # --- thread_id のパストラバーサル対策 ---
 
 _MALICIOUS_THREAD_IDS = [
@@ -296,10 +372,11 @@ def test_get_conversation_count_rejects_path_traversal_thread_id(client, monkeyp
 def test_save_conversation_returns_saved_path(client, monkeypatch, tmp_path):
     saved_path = tmp_path / "thread-a" / "20260101_000000_abcdef_question.md"
 
-    def _fake_save(question, answer, thread_id):
+    def _fake_save(question, answer, thread_id, is_fallback=False):
         assert question == "質問内容"
         assert answer == "回答内容"
         assert thread_id == "thread-a"
+        assert is_fallback is False
         return saved_path
 
     monkeypatch.setattr(api_main, "save_conversation", _fake_save)
@@ -327,7 +404,7 @@ def test_save_conversation_rejects_path_traversal_thread_id(client, monkeypatch,
     """
     called = {"count": 0}
 
-    def _fake_save(question, answer, thread_id):
+    def _fake_save(question, answer, thread_id, is_fallback=False):
         called["count"] += 1
         return None
 
@@ -342,6 +419,49 @@ def test_save_conversation_rejects_path_traversal_thread_id(client, monkeypatch,
     assert called["count"] == 0
 
 
+# --- POST /api/conversations/save: is_fallback ---
+
+
+def test_save_conversation_passes_is_fallback_true_through_to_memory(client, monkeypatch):
+    """正常系: is_fallback=trueを渡した場合、save_conversationにis_fallback=Trueとして渡される
+    （ドキュメントに根拠が無く一般知識で回答した会話ログとして記録される）。"""
+    captured = {}
+
+    def _fake_save(question, answer, thread_id, is_fallback=False):
+        captured["is_fallback"] = is_fallback
+        return "/tmp/dummy.md"
+
+    monkeypatch.setattr(api_main, "save_conversation", _fake_save)
+
+    response = client.post(
+        "/api/conversations/save",
+        json={"question": "質問内容", "answer": "回答内容", "thread_id": "thread-a", "is_fallback": True},
+    )
+
+    assert response.status_code == 200
+    assert captured["is_fallback"] is True
+
+
+def test_save_conversation_without_is_fallback_defaults_to_false(client, monkeypatch):
+    """境界値/異常系（後方互換性）: is_fallbackを省略した場合、save_conversationには
+    デフォルトのFalseが渡される（本フィールド追加前の既存クライアントの挙動を壊さない）。"""
+    captured = {}
+
+    def _fake_save(question, answer, thread_id, is_fallback=False):
+        captured["is_fallback"] = is_fallback
+        return "/tmp/dummy.md"
+
+    monkeypatch.setattr(api_main, "save_conversation", _fake_save)
+
+    response = client.post(
+        "/api/conversations/save",
+        json={"question": "質問内容", "answer": "回答内容", "thread_id": "thread-a"},
+    )
+
+    assert response.status_code == 200
+    assert captured["is_fallback"] is False
+
+
 # --- thread_id の最大長チェック ---
 
 
@@ -350,7 +470,7 @@ def test_save_conversation_accepts_thread_id_at_max_length_boundary(client, monk
     thread_id = "a" * 64
     saved_path = f"/tmp/{thread_id}/dummy.md"
 
-    def _fake_save(question, answer, thread_id_arg):
+    def _fake_save(question, answer, thread_id_arg, is_fallback=False):
         assert thread_id_arg == thread_id
         return saved_path
 
@@ -368,7 +488,11 @@ def test_save_conversation_accepts_thread_id_at_max_length_boundary(client, monk
 def test_save_conversation_accepts_thread_id_under_max_length(client, monkeypatch):
     """正常系: 上限未満（63文字）のthread_idも問題なく保存できる。"""
     thread_id = "a" * 63
-    monkeypatch.setattr(api_main, "save_conversation", lambda question, answer, thread_id_arg: "/tmp/dummy.md")
+    monkeypatch.setattr(
+        api_main,
+        "save_conversation",
+        lambda question, answer, thread_id_arg, is_fallback=False: "/tmp/dummy.md",
+    )
 
     response = client.post(
         "/api/conversations/save",
@@ -383,7 +507,7 @@ def test_save_conversation_rejects_thread_id_exceeding_max_length(client, monkey
     thread_id = "a" * 65
     called = {"count": 0}
 
-    def _fake_save(question, answer, thread_id_arg):
+    def _fake_save(question, answer, thread_id_arg, is_fallback=False):
         called["count"] += 1
         return None
 
