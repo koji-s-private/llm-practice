@@ -6,7 +6,10 @@ app.py が直接 import している以下のシンボルを monkeypatch で軽�
 差し替える:
 
 - `ingest.sync_data_dir`（サイドバーの再同期ボタン・ファイルアップロード時・
-  トップレベルの軽量シグネチャチェックがdata/の変化を検知した場合、の各所から呼ばれる）
+  トップレベルの軽量シグネチャチェックがdata/の変化を検知した場合、の各所から呼ばれる。
+  data/配下を全件走査する重い経路）
+- `ingest.add_single_conversation_file`（チャット応答後、save_conversationが返した
+  保存先パス1件だけをその場でDBへ軽量に反映する経路。data/全件は走査しない）
 - `ingest.data_dir_signature`（トップレベルで毎回呼ばれる軽量な
   変更検知。デフォルトでは実ファイルシステムを見るため、シグネチャの変化を
   意図的に起こしたいテストではmonkeypatchで差し替える）
@@ -14,20 +17,23 @@ app.py が直接 import している以下のシンボルを monkeypatch で軽�
   テストごとに切り替える）
 - `memory.new_thread_id` / `memory.conversation_count` / `memory.save_conversation` /
   `memory.list_threads` / `memory.load_conversation`
+  （`memory.save_conversation` は実際の実装と同様、保存先ファイルパス(Path)を返す）
 
 app.py はモジュールトップレベルで `from ingest import ... sync_data_dir` のように
 シンボルをインポートしているため、`AppTest.run()` がスクリプトを実行する
 「前」に対象モジュールの属性を monkeypatch しておく必要がある
 （実行時に束縛される値がその時点の属性値になるため）。
 
-同期トリガーの設計が変わった点に注意:
-- 従来: チャット応答→会話ログ保存の直後に無条件で `sync_data_dir(verbose=False)` を
-  同じturn内で呼んでいた。
-- 現在: スクリプトのトップレベルで毎回 `data_dir_signature()`（ファイル数+最新mtimeの
-  軽量比較。内容の読み込みは行わない）を計算し、前回値と異なる場合にのみ
-  `sync_data_dir()` を呼ぶ。チャット応答後の会話ログ保存自体はその場では同期をトリガー
-  せず、次にスクリプトが再実行されたタイミング（次のチャット送信・ボタン操作等）で
-  シグネチャの変化が検知されて初めて同期される。
+会話ログ保存後の同期トリガーの設計:
+- チャット応答→会話ログ保存（save_conversation）の直後、同じturn内で
+  `add_single_conversation_file(saved_path)` を呼び、保存した1ファイルだけを
+  その場でDBへ反映する（data/全件を再走査する`sync_data_dir`は呼ばない）。
+- 成功時（"added"/"updated"/"unchanged"）は `st.session_state.data_dir_signature` も
+  その場で最新値に更新し、次回rerun時のトップレベルの軽量チェックによる
+  無駄な二重同期を防ぐ。
+- 失敗時（"failed"を返す、または例外送出）はシグネチャを更新しない。これにより
+  次回のトップレベルの軽量チェックが「data/に未反映の変更あり」と判定し続け、
+  通常の全件差分同期（`sync_data_dir`）で改めて再試行される。
 """
 
 from pathlib import Path
@@ -110,6 +116,12 @@ def _ok_sync(verbose=False):
     return {"added": [], "updated": [], "removed": [], "failed": []}
 
 
+# save_conversation() の戻り値（保存先パス）のデフォルトフェイク値。
+# 実際の値そのものはほとんどのテストで意味を持たないため、add_single_conversation_file
+# 呼び出し先まで見ないテストでは固定値のままでよい。
+_FAKE_SAVED_CONVERSATION_PATH = Path("/tmp/data/conversations/thread-test/fake.md")
+
+
 @pytest.fixture(autouse=True)
 def _patch_light_dependencies(monkeypatch):
     """全テスト共通: 起動時同期とmemory系を軽量フェイクに差し替える。
@@ -118,10 +130,11 @@ def _patch_light_dependencies(monkeypatch):
     各テストが個別に上書きする。
     """
     monkeypatch.setattr(ingest, "sync_data_dir", _ok_sync)
+    monkeypatch.setattr(ingest, "add_single_conversation_file", lambda path: "added")
     monkeypatch.setattr(rag_chain, "build_agent", lambda thread_id=None: _FakeAgent())
     monkeypatch.setattr(memory, "new_thread_id", lambda: "thread-test")
     monkeypatch.setattr(memory, "conversation_count", lambda thread_id: 0)
-    monkeypatch.setattr(memory, "save_conversation", lambda *a, **k: None)
+    monkeypatch.setattr(memory, "save_conversation", lambda *a, **k: _FAKE_SAVED_CONVERSATION_PATH)
     monkeypatch.setattr(memory, "list_threads", lambda: [])
     monkeypatch.setattr(memory, "load_conversation", lambda thread_id: [])
 
@@ -589,17 +602,27 @@ def test_chat_streaming_exception_after_partial_chunks_skips_history_and_save(mo
     assert save_calls == []
 
 
-# --- 3. 会話ログ保存後の挙動（同一turn内での即時sync_data_dir呼び出しを廃止） ---
+# --- 3. 会話ログ保存後の挙動（save_conversation直後にadd_single_conversation_fileで即時反映） ---
 
 
-def test_post_chat_saves_conversation_without_immediate_resync(monkeypatch):
-    """正常系: チャット応答後は save_conversation のみが呼ばれ、
-    同じturn内では追加の sync_data_dir 呼び出しは発生しない。"""
+def test_post_chat_saves_conversation_and_syncs_single_file_immediately(monkeypatch):
+    """正常系: チャット応答後は save_conversation で保存し、その戻り値のパスを使って
+    add_single_conversation_file が同じturn内で1回だけ呼ばれる（data/全件を再走査する
+    sync_data_dir は呼ばれない）。"""
     fake_agent = _FakeAgent(answer="回答")
     monkeypatch.setattr(rag_chain, "build_agent", lambda thread_id=None: fake_agent)
 
+    saved_path = Path("/tmp/data/conversations/thread-test/saved.md")
     save_calls = []
-    monkeypatch.setattr(memory, "save_conversation", lambda *a, **k: save_calls.append(a))
+    monkeypatch.setattr(memory, "save_conversation", lambda *a, **k: (save_calls.append(a), saved_path)[1])
+
+    add_calls = []
+
+    def fake_add_single(path):
+        add_calls.append(path)
+        return "added"
+
+    monkeypatch.setattr(ingest, "add_single_conversation_file", fake_add_single)
 
     sync_calls = {"n": 0}
 
@@ -617,10 +640,148 @@ def test_post_chat_saves_conversation_without_immediate_resync(monkeypatch):
     assert at.exception == []
     assert at.error == []
     assert len(save_calls) == 1
-    assert sync_calls["n"] == 1  # チャット応答直後には追加の同期は走らない
+    assert add_calls == [saved_path]  # save_conversationの戻り値パスがそのまま渡される
+    assert sync_calls["n"] == 1  # data/全件を再走査するsync_data_dirは呼ばれない
     messages = at.session_state["messages"]
     assert len(messages) == 2
     assert messages[1].content == "回答"
+
+
+def test_post_chat_add_single_conversation_file_success_updates_signature_immediately(monkeypatch):
+    """正常系: add_single_conversation_file が成功（added/updated/unchanged）すると、
+    次回のrerunを待たずに同じturn内で st.session_state.data_dir_signature が
+    最新値に更新される（次回rerun時の無駄な二重同期を防ぐため）。
+
+    data_dir_signature() は、save_conversation で会話ログファイルが実際に
+    保存された後にだけ変化するようフェイク化する（起動時のトップレベルチェックの
+    時点ではまだファイルが増えていないため変化なし、というシナリオを正しく再現するため）。
+    """
+    fake_agent = _FakeAgent(answer="回答")
+    monkeypatch.setattr(rag_chain, "build_agent", lambda thread_id=None: fake_agent)
+
+    saved_path = Path("/tmp/data/conversations/t/x.md")
+    state = {"file_saved": False}
+
+    def fake_save_conversation(*a, **k):
+        state["file_saved"] = True
+        return saved_path
+
+    monkeypatch.setattr(memory, "save_conversation", fake_save_conversation)
+    monkeypatch.setattr(ingest, "add_single_conversation_file", lambda path: "added")
+    monkeypatch.setattr(ingest, "data_dir_signature", lambda: (2, 200.0) if state["file_saved"] else (1, 100.0))
+
+    sync_calls = {"n": 0}
+
+    def counting_sync(verbose=False):
+        sync_calls["n"] += 1
+        return {"added": [], "updated": [], "removed": [], "failed": []}
+
+    monkeypatch.setattr(ingest, "sync_data_dir", counting_sync)
+
+    at = _run_app()
+    assert sync_calls["n"] == 1  # 起動時の1回
+    assert at.session_state["data_dir_signature"] == (1, 100.0)
+
+    at = at.chat_input[0].set_value("質問です").run()
+
+    assert at.exception == []
+    # チャット送信直後のトップレベルチェック時点ではまだファイルが未保存のため
+    # 追加のsync_data_dir呼び出しは発生しない。その後の会話ログ保存→
+    # add_single_conversation_fileの成功により、この場でシグネチャが最新値に更新済み。
+    assert sync_calls["n"] == 1
+    assert at.session_state["data_dir_signature"] == (2, 200.0)
+
+    # そのため次回run()時のトップレベルの軽量チェックは「変更なし」と判定し、
+    # 追加のsync_data_dir呼び出しは発生しない（無駄な二重同期の防止）。
+    at = at.run()
+    assert sync_calls["n"] == 1
+
+
+def test_post_chat_add_single_conversation_file_status_failed_shows_no_error_and_skips_signature_update(
+    monkeypatch,
+):
+    """異常系境界値: add_single_conversation_file が例外を送出せず"failed"を返した場合
+    （読み込み失敗等、想定内のスキップ）、st.errorは表示されず、シグネチャも更新されない。
+    シグネチャを更新しないことで、次回のトップレベルの軽量チェックが引き続き
+    「未反映の変更あり」と判定し、通常の全件差分同期（sync_data_dir）で再試行される。"""
+    fake_agent = _FakeAgent(answer="回答")
+    monkeypatch.setattr(rag_chain, "build_agent", lambda thread_id=None: fake_agent)
+
+    saved_path = Path("/tmp/data/conversations/t/x.md")
+    state = {"file_saved": False}
+
+    def fake_save_conversation(*a, **k):
+        state["file_saved"] = True
+        return saved_path
+
+    monkeypatch.setattr(memory, "save_conversation", fake_save_conversation)
+    monkeypatch.setattr(ingest, "add_single_conversation_file", lambda path: "failed")
+    monkeypatch.setattr(ingest, "data_dir_signature", lambda: (2, 200.0) if state["file_saved"] else (1, 100.0))
+
+    sync_calls = {"n": 0}
+
+    def counting_sync(verbose=False):
+        sync_calls["n"] += 1
+        return {"added": [], "updated": [], "removed": [], "failed": []}
+
+    monkeypatch.setattr(ingest, "sync_data_dir", counting_sync)
+
+    at = _run_app()
+    assert at.session_state["data_dir_signature"] == (1, 100.0)
+
+    at = at.chat_input[0].set_value("質問です").run()
+
+    assert at.exception == []
+    assert at.error == []
+    # add_single_conversation_fileが"failed"を返した場合はシグネチャを更新しないため、
+    # 実際のdata_dir_signature()は変化済みでも、セッションには反映されないまま据え置かれる。
+    assert at.session_state["data_dir_signature"] == (1, 100.0)
+    # チャット応答自体は正常に完了している
+    messages = at.session_state["messages"]
+    assert len(messages) == 2
+    assert messages[1].content == "回答"
+
+    # シグネチャが更新されなかったため、次回rerun時のトップレベルチェックが
+    # 「未反映の変更あり」と判定し、通常の全件差分同期で改めて再試行される。
+    at = at.run()
+    assert sync_calls["n"] == 2  # 起動時の1回 + このrerunでの再試行1回
+
+
+def test_post_chat_add_single_conversation_file_exception_shows_error_and_skips_signature_update(monkeypatch):
+    """異常系: add_single_conversation_file が例外を送出した場合（ロックタイムアウト等）、
+    st.errorが表示され、シグネチャも更新されない。チャット応答自体はクラッシュしない。"""
+    fake_agent = _FakeAgent(answer="回答")
+    monkeypatch.setattr(rag_chain, "build_agent", lambda thread_id=None: fake_agent)
+
+    saved_path = Path("/tmp/data/conversations/t/x.md")
+    state = {"file_saved": False}
+
+    def fake_save_conversation(*a, **k):
+        state["file_saved"] = True
+        return saved_path
+
+    monkeypatch.setattr(memory, "save_conversation", fake_save_conversation)
+
+    def failing_add_single(path):
+        raise RuntimeError("lock timeout")
+
+    monkeypatch.setattr(ingest, "add_single_conversation_file", failing_add_single)
+    monkeypatch.setattr(ingest, "data_dir_signature", lambda: (2, 200.0) if state["file_saved"] else (1, 100.0))
+
+    at = _run_app()
+    assert at.session_state["data_dir_signature"] == (1, 100.0)
+
+    at = at.chat_input[0].set_value("質問です").run()
+
+    assert at.exception == []
+    assert len(at.error) == 1
+    assert "会話ログの保存処理でDBへの反映に失敗しました" in at.error[0].value
+    assert "lock timeout" in at.error[0].value
+    assert at.session_state["data_dir_signature"] == (1, 100.0)
+    # 同期失敗があっても直前のチャット応答自体は履歴に残っている
+    messages = at.session_state["messages"]
+    assert len(messages) == 2
+    assert messages[-1].content == "回答"
 
 
 class _FakeSourceDoc:
@@ -638,7 +799,7 @@ def test_post_chat_saves_conversation_with_is_fallback_true_when_no_sources(monk
     monkeypatch.setattr(rag_chain, "build_agent", lambda thread_id=None: fake_agent)
 
     save_calls = []
-    monkeypatch.setattr(memory, "save_conversation", lambda *a, **k: save_calls.append((a, k)))
+    monkeypatch.setattr(memory, "save_conversation", lambda *a, **k: save_calls.append((a, k)) or Path("/tmp/x.md"))
 
     at = _run_app()
     at.chat_input[0].set_value("質問です").run()
@@ -658,7 +819,7 @@ def test_post_chat_saves_conversation_with_is_fallback_false_when_sources_presen
     monkeypatch.setattr(rag_chain, "build_agent", lambda thread_id=None: fake_agent)
 
     save_calls = []
-    monkeypatch.setattr(memory, "save_conversation", lambda *a, **k: save_calls.append((a, k)))
+    monkeypatch.setattr(memory, "save_conversation", lambda *a, **k: save_calls.append((a, k)) or Path("/tmp/x.md"))
 
     at = _run_app()
     at.chat_input[0].set_value("質問です").run()
@@ -670,84 +831,17 @@ def test_post_chat_saves_conversation_with_is_fallback_false_when_sources_presen
     assert is_fallback is False
 
 
-def test_post_chat_signature_change_triggers_sync_on_next_run(monkeypatch):
-    """正常系: 会話ログ保存でdata/内のファイルが増えたことを想定し、
-    次回スクリプトが再実行されたタイミング（次のチャット送信等）で
-    data_dir_signature() の変化を検知して sync_data_dir が呼ばれることを確認する。"""
-    fake_agent = _FakeAgent(answer="回答")
-    monkeypatch.setattr(rag_chain, "build_agent", lambda thread_id=None: fake_agent)
-    monkeypatch.setattr(memory, "save_conversation", lambda *a, **k: None)
-
-    sig_holder = {"value": (1, 100.0)}
-    monkeypatch.setattr(ingest, "data_dir_signature", lambda: sig_holder["value"])
-
-    sync_calls = {"n": 0}
-
-    def counting_sync(verbose=False):
-        sync_calls["n"] += 1
-        return {"added": [], "updated": [], "removed": [], "failed": []}
-
-    monkeypatch.setattr(ingest, "sync_data_dir", counting_sync)
-
-    at = _run_app()
-    assert sync_calls["n"] == 1  # 起動時の1回
-
-    at = at.chat_input[0].set_value("質問1").run()
-    assert sync_calls["n"] == 1  # 会話ログ保存直後はまだ同期されない（シグネチャ未変化）
-
-    # 会話ログファイルが増えたことを想定してシグネチャを変化させる
-    sig_holder["value"] = (2, 200.0)
-    at = at.chat_input[0].set_value("質問2").run()
-
-    assert at.exception == []
-    assert sync_calls["n"] == 2  # 次回run()時にトップレベルの軽量チェックが検知して同期される
-
-
-def test_post_chat_sync_failure_on_next_run_shows_error(monkeypatch):
-    """異常系: 会話ログ保存後、次回run()時にトップレベルの同期が失敗した場合も
-    st.errorが表示され、アプリはクラッシュしない。"""
-    fake_agent = _FakeAgent(answer="回答")
-    monkeypatch.setattr(rag_chain, "build_agent", lambda thread_id=None: fake_agent)
-    monkeypatch.setattr(memory, "save_conversation", lambda *a, **k: None)
-
-    sig_holder = {"value": (1, 100.0)}
-    monkeypatch.setattr(ingest, "data_dir_signature", lambda: sig_holder["value"])
-
-    call_count = {"n": 0}
-
-    def flaky_sync(verbose=False):
-        call_count["n"] += 1
-        if call_count["n"] == 1:
-            return {"added": [], "updated": [], "removed": [], "failed": []}
-        raise RuntimeError("resync fail on data dir change")
-
-    monkeypatch.setattr(ingest, "sync_data_dir", flaky_sync)
-
-    at = _run_app()
-    at = at.chat_input[0].set_value("質問1").run()
-    assert at.error == []
-
-    sig_holder["value"] = (2, 200.0)
-    at = at.chat_input[0].set_value("質問2").run()
-
-    assert at.exception == []
-    assert len(at.error) == 1
-    assert "ドキュメントの同期に失敗しました" in at.error[0].value
-    assert "resync fail on data dir change" in at.error[0].value
-    # 同期失敗があっても直前のチャット応答自体は履歴に残っている
-    messages = at.session_state["messages"]
-    assert len(messages) == 4
-    assert messages[-1].content == "回答"
-
-
 def test_post_chat_save_conversation_not_called_when_auto_save_memory_disabled(monkeypatch):
     """境界値: 「今の会話を記憶として保存する」トグルOFFの場合は
-    save_conversation が呼ばれず、それに伴う事後の同期も発生しない。"""
+    save_conversation が呼ばれず、それに伴う add_single_conversation_file 呼び出しも発生しない。"""
     fake_agent = _FakeAgent(answer="回答")
     monkeypatch.setattr(rag_chain, "build_agent", lambda thread_id=None: fake_agent)
 
     save_calls = []
-    monkeypatch.setattr(memory, "save_conversation", lambda *a, **k: save_calls.append(a))
+    monkeypatch.setattr(memory, "save_conversation", lambda *a, **k: save_calls.append(a) or Path("/tmp/x.md"))
+
+    add_calls = []
+    monkeypatch.setattr(ingest, "add_single_conversation_file", lambda path: add_calls.append(path) or "added")
 
     sync_calls = {"n": 0}
 
@@ -768,6 +862,7 @@ def test_post_chat_save_conversation_not_called_when_auto_save_memory_disabled(m
     assert at.exception == []
     assert at.error == []
     assert save_calls == []
+    assert add_calls == []
     assert sync_calls["n"] == 1  # 事後同期は呼ばれていない（data/自体に変化がないため）
 
 

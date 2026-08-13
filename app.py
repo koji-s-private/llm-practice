@@ -29,6 +29,7 @@ from langchain_core.messages import AIMessage, HumanMessage, ToolMessage, trim_m
 import setup
 from ingest import (
     DATA_DIR,
+    add_single_conversation_file,
     data_dir_signature,
     delete_indexed_file,
     list_indexed_files,
@@ -151,6 +152,33 @@ def _sync_and_report(spinner_text: str) -> None:
     # 同期成功後の最新シグネチャを保存しておく。これにより、この直後にトップレベルの
     # 軽量チェックが再実行されても「変更なし」と判定され、無駄な二重同期が走らない
     # （手動の再同期ボタン・アップロード時の呼び出しでも共通してこの関数を通るため）。
+    st.session_state.data_dir_signature = data_dir_signature()
+
+
+def _sync_saved_conversation(path: Path) -> None:
+    """保存したばかりの会話ログ1件だけを、data/全件を走査せずその場で軽量にDB反映する。
+
+    次回のスクリプト再実行を待ってトップレベルの軽量シグネチャチェック
+    （data_dir_signature → _sync_and_report → sync_data_dir）に反映を委ねると、
+    data/配下のファイル数に比例して毎ターンの走査コストが増え続けてしまう。
+    add_single_conversation_file()は保存済みの対象1件だけを処理するため、
+    data/内のファイル数に依存しない一定コストでDB反映が完了する。
+
+    読み込み・埋め込み失敗時はエラー表示のみ行い、シグネチャは更新しない。
+    これにより次回のトップレベルの軽量チェックが「data/に未反映の変更あり」と
+    判定し続け、通常の全件差分同期（sync_data_dir）が改めてこのファイルを試行する
+    （失敗ファイルの警告表示は_show_failed_sync_files_warning()の仕組みに委ねる）。
+    """
+    try:
+        status = add_single_conversation_file(path)
+    except Exception as e:
+        st.error(f"会話ログの保存処理でDBへの反映に失敗しました。（詳細: {e}）")
+        return
+    if status == "failed":
+        return
+    # このファイル追加でdata/内のファイル数・最新mtimeが変わるため、次回rerun時の
+    # トップレベルの軽量チェックが「変更なし」と判定できるようシグネチャも更新しておく
+    # （更新しないと、次回rerun時に無駄なsync_data_dir()呼び出しがもう一度走ってしまう）。
     st.session_state.data_dir_signature = data_dir_signature()
 
 
@@ -505,11 +533,11 @@ if user_input:
         st.session_state.messages.append(AIMessage(content=answer))
 
         # 会話を自動でナレッジ化（このスレッド専用としてローカル保存）。
-        # 保存したログファイルのDB反映は、この場ですぐには行わない。
-        # 次回このスクリプトが再実行されたタイミング（次の会話・ボタン操作・リロード等）で、
-        # トップレベルの軽量シグネチャチェックがファイル数の増加を検知し、自動的に同期される
-        # （チャット1往復ごとに毎回フル同期する実装より軽量）。
+        # 保存した1ファイルだけをadd_single_conversation_file()でその場でDB反映する
+        # （data/配下の全件を再走査するsync_data_dir()は呼ばない。チャット1往復ごとに
+        # 毎回フル同期する実装より軽量）。
         # sourcesが空＝retrieve_contextが関連文書を1件も見つけられず一般知識で回答した
         # ケースなので、is_fallbackとして記録し、以降の検索対象から除外できるようにする。
         if st.session_state.auto_save_memory:
-            save_conversation(user_input, answer, st.session_state.thread_id, is_fallback=not sources)
+            saved_path = save_conversation(user_input, answer, st.session_state.thread_id, is_fallback=not sources)
+            _sync_saved_conversation(saved_path)

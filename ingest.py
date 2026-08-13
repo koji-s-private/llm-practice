@@ -9,6 +9,11 @@ data/ 配下のドキュメント（.pdf / .txt / .md）を Chroma ベクトルD
 ベクトルDBからも自動的に削除する（DBとdata/フォルダの内容がズレないようにするため）。
 判定には chroma_db/manifest.json にファイル名・更新日時・サイズ・チャンクIDを記録している。
 
+sync_data_dir()はdata/配下を都度全件列挙して差分を検出するため、data/内のファイル数に
+比例して処理コストが増える。チャット1往復ごとに会話ログが1ファイルずつ追加される
+app.pyの自動ナレッジ化のように「追加対象が1件だけと分かっている」場面向けに、
+全件列挙を行わない軽量版の add_single_conversation_file() も用意している。
+
 sync_data_dir()は複数タブ（複数Streamlitセッション）や複数プロセスから同時に呼ばれても
 安全なよう、chroma_db/sync.lock を使ったファイルロックで処理全体を排他制御している
 （詳細は sync_data_dir() のdocstring参照）。
@@ -316,6 +321,159 @@ def sync_data_dir(verbose: bool = True) -> dict:
         raise
 
 
+def add_single_conversation_file(path: Path) -> str:
+    """会話ログ1件だけを、data/ 全件を走査せずにその場でベクトルDBへ反映する軽量な経路。
+
+    app.py はチャット1往復ごとに会話ログを1ファイル追加保存するが、そのたびに
+    sync_data_dir()（DATA_DIR.rglob("*")による全件列挙＋全ファイルのstat比較）を
+    呼ぶと、data/配下のファイル数に比例して毎ターンの処理コストが増え続けてしまう。
+    本関数は対象ファイル1件分の「読み込み→分割→チャンクへのメタデータ付与→
+    vector_store.add_documents()→manifest更新」だけを行い、DATA_DIR.rglob("*")による
+    全件列挙は一切行わない（manifestの読み込み・保存自体は必要なため行う）。
+
+    sync_data_dir()と同じSYNC_LOCK_PATHのファイルロックで処理全体を排他制御し、
+    複数タブ・複数プロセスからの同時書き込みによるmanifestの競合を防ぐ。
+
+    戻り値: "added" / "updated" / "unchanged" / "failed" のいずれか
+    （_ingest_file()の戻り値をそのまま返す）。"failed"の場合、対象ファイルは
+    ログに残してスキップされ、manifestには記録されない（sync_data_dir()と同様、
+    次回の同期時に再試行される）。
+    ロック取得がSYNC_LOCK_TIMEOUT_SECONDS以内に完了しなかった場合は
+    `filelock.Timeout` をそのまま送出する（呼び出し元がsync_data_dir()と
+    同様の例外処理を行う想定）。
+    """
+    DATA_DIR.mkdir(parents=True, exist_ok=True)
+    PERSIST_DIR.mkdir(parents=True, exist_ok=True)
+
+    try:
+        with FileLock(str(SYNC_LOCK_PATH), timeout=SYNC_LOCK_TIMEOUT_SECONDS):
+            return _add_single_conversation_file_locked(path)
+    except Timeout:
+        logger.warning(
+            "%s のロック取得がタイムアウトしました（他のセッションが同期中の可能性があります）。",
+            SYNC_LOCK_PATH,
+        )
+        raise
+
+
+def _add_single_conversation_file_locked(path: Path) -> str:
+    """add_single_conversation_file()の本体（呼び出し元がファイルロックを取得済みであることが前提）。"""
+    vector_store = get_vectorstore()
+    manifest = _load_manifest()
+    splitter = RecursiveCharacterTextSplitter(chunk_size=1000, chunk_overlap=200)
+
+    name = str(path.relative_to(DATA_DIR))
+    status = _ingest_file(name, path, vector_store, manifest, splitter, verbose=False)
+    # _ingest_file()はadded/updated/pending削除解消の場合のみ保存済みだが、
+    # unchanged・failedの場合は保存していないケースがある。manifest.jsonが
+    # まだ存在しない状態のまま終わらないよう、ここで冪等に保存しておく
+    # （sync_data_dir()の最後で行っている保存と同じ意図）。
+    _save_manifest(manifest)
+    return status
+
+
+def _ingest_file(name: str, path: Path, vector_store, manifest: dict, splitter, verbose: bool) -> str:
+    """1ファイル分の追加・更新判定と、必要な場合のベクトルDBへの反映を行う。
+
+    sync_data_dir()の全件差分検出、add_single_conversation_file()の単一ファイル追加の
+    両方から呼ばれる共通処理。manifestの読み込み・保存自体は呼び出し元の責務とし、
+    ここでは受け取ったmanifest辞書をその場で書き換えるだけ（必要な保存タイミングでの
+    _save_manifest()呼び出しはこの関数内で行う）。
+
+    戻り値: "added" / "updated" / "unchanged" / "failed" のいずれか。
+    """
+    fingerprint = _fingerprint(path)
+    entry = manifest.get(name)
+    unchanged = entry and entry.get("mtime") == fingerprint["mtime"] and entry.get("size") == fingerprint["size"]
+    if unchanged:
+        # 内容に変化はなくても、前回同期時にadd_documents()成功後のvector_store.delete()が
+        # 失敗し旧チャンクの削除だけ持ち越しになっている場合は、ここで再試行する
+        # （持ち越しがなければ何もしない、通常のunchanged判定と同じ挙動）。
+        pending_delete_chunk_ids = entry.get("pending_delete_chunk_ids")
+        if pending_delete_chunk_ids:
+            try:
+                vector_store.delete(ids=pending_delete_chunk_ids)
+            except Exception as e:
+                logger.warning(
+                    "%s の保留中だった旧チャンク削除の再試行に失敗しました（次回同期時に再試行します）: %s",
+                    name,
+                    e,
+                )
+            else:
+                del entry["pending_delete_chunk_ids"]
+                _save_manifest(manifest)
+                _log_progress(verbose, "%s: 保留中だった旧チャンクの削除が完了しました。", name)
+        return "unchanged"
+
+    try:
+        if path.suffix.lower() == ".pdf":
+            docs = _load_pdf(path, verbose=verbose)
+        else:
+            loader = LOADERS[path.suffix.lower()](str(path))
+            docs = loader.load()
+        chunks = splitter.split_documents(docs)
+    except Exception as e:
+        # 1ファイルの読み込み失敗（破損PDF・パスワード付きPDF・不正なエンコーディング等）で
+        # 他の正常なファイルの同期まで止めないよう、ログに残してスキップする。
+        # manifestには記録しないので、次回同期時に再度リトライされる。
+        logger.warning("%s の読み込みに失敗したためスキップします: %s", name, e)
+        return "failed"
+
+    # 会話ログはそのスレッドのみ、それ以外（通常ドキュメント・アップロード）は
+    # 全スレッド共通で検索できるよう、チャンクにthread_idをメタデータとして付与する。
+    thread_id = _thread_id_for(name)
+    # 一般知識フォールバック回答の会話ログは、根拠のないままベクトルDBに再学習されると
+    # 以降の検索結果として再ヒットし、あたかもドキュメントの裏付けがあるかのように
+    # 扱われてしまう。全チャンクに一貫してis_fallbackキーを持たせることで、
+    # rag_chain.retrieve_context側のメタデータフィルタが確実に効くようにする。
+    is_fallback = _is_fallback_conversation(docs)
+    for chunk in chunks:
+        chunk.metadata["thread_id"] = thread_id
+        chunk.metadata["is_fallback"] = is_fallback
+
+    # 新チャンクの追加を先に行い、成功してから旧チャンクを削除する（delete→addの逆順）。
+    # delete→addの順だと、削除成功後にadd_documents()が失敗した場合、旧チャンクは
+    # 消えたのに新チャンクも登録されない「データが検索対象から消える」状態になり、
+    # manifestも更新されないため次回同期でも気づかれず放置されてしまう。
+    # add→deleteの順なら、追加が失敗しても旧チャンクがそのまま残るため安全
+    # （追加成功〜削除完了までの一瞬だけ新旧チャンクが両方検索にヒットしうるが、
+    # データが消えるより十分マシな許容範囲の副作用とする）。
+    try:
+        chunk_ids = vector_store.add_documents(documents=chunks) if chunks else []
+    except Exception as e:
+        logger.warning("%s のベクトルストアへの追加に失敗したためスキップします: %s", name, e)
+        return "failed"
+
+    # add_documents()成功後にdelete()自体が失敗するケース（ネットワーク瞬断・
+    # ベクトルストア内部エラー等）に備える。ここで例外を握りつぶして先に進めてしまうと、
+    # manifestは新内容で更新されるため次回同期はunchanged判定になり、旧チャンクの削除が
+    # 二度と試みられず重複したまま残り続けてしまう。そこで削除失敗時は旧chunk_idsを
+    # pending_delete_chunk_idsとしてmanifestに持ち越し、以後のunchanged判定時に再試行する。
+    # 前回同期時点で未解消のpending_delete_chunk_idsが残っている場合は、それも
+    # 引き継がないと二度と削除が試みられなくなるため、今回分と合算して持ち越す。
+    pending_delete_chunk_ids = set(entry.get("pending_delete_chunk_ids") or []) if entry else set()
+    if entry and entry.get("chunk_ids"):
+        try:
+            vector_store.delete(ids=entry["chunk_ids"])
+        except Exception as e:
+            logger.warning("%s の旧チャンク削除に失敗しました（次回同期時に再試行します）: %s", name, e)
+            pending_delete_chunk_ids |= set(entry["chunk_ids"])
+
+    manifest[name] = {**fingerprint, "chunk_ids": chunk_ids}
+    if pending_delete_chunk_ids:
+        manifest[name]["pending_delete_chunk_ids"] = sorted(pending_delete_chunk_ids)
+    status = "updated" if entry else "added"
+    action = "更新" if entry else "追加"
+    _log_progress(verbose, "%s: %s（%dチャンク）", action, name, len(chunks))
+
+    # ファイル1件ごとにmanifestを保存する。全件処理後にまとめて保存する設計だと、
+    # add_documents()でDBへの追加が完了した後・保存前にプロセスが中断した場合、
+    # DBには反映済みなのにmanifestには記録されない状態になり、次回同期時に
+    # 同じ内容のチャンクが重複登録されてしまう。都度保存すればその不整合を防げる。
+    _save_manifest(manifest)
+    return status
+
+
 def _sync_data_dir_locked(verbose: bool) -> dict:
     """sync_data_dir()の本体（呼び出し元がファイルロックを取得済みであることが前提）。"""
     vector_store = get_vectorstore()
@@ -331,97 +489,9 @@ def _sync_data_dir_locked(verbose: bool) -> dict:
 
     # 追加 or 変更されたファイルを取り込む
     for name, path in current_files.items():
-        fingerprint = _fingerprint(path)
-        entry = manifest.get(name)
-        unchanged = entry and entry.get("mtime") == fingerprint["mtime"] and entry.get("size") == fingerprint["size"]
-        if unchanged:
-            # 内容に変化はなくても、前回同期時にadd_documents()成功後のvector_store.delete()が
-            # 失敗し旧チャンクの削除だけ持ち越しになっている場合は、ここで再試行する
-            # （持ち越しがなければ何もしない、通常のunchanged判定と同じ挙動）。
-            pending_delete_chunk_ids = entry.get("pending_delete_chunk_ids")
-            if pending_delete_chunk_ids:
-                try:
-                    vector_store.delete(ids=pending_delete_chunk_ids)
-                except Exception as e:
-                    logger.warning(
-                        "%s の保留中だった旧チャンク削除の再試行に失敗しました（次回同期時に再試行します）: %s",
-                        name,
-                        e,
-                    )
-                else:
-                    del entry["pending_delete_chunk_ids"]
-                    _save_manifest(manifest)
-                    _log_progress(verbose, "%s: 保留中だった旧チャンクの削除が完了しました。", name)
-            continue
-
-        try:
-            if path.suffix.lower() == ".pdf":
-                docs = _load_pdf(path, verbose=verbose)
-            else:
-                loader = LOADERS[path.suffix.lower()](str(path))
-                docs = loader.load()
-            chunks = splitter.split_documents(docs)
-        except Exception as e:
-            # 1ファイルの読み込み失敗（破損PDF・パスワード付きPDF・不正なエンコーディング等）で
-            # 他の正常なファイルの同期まで止めないよう、ログに残してスキップする。
-            # manifestには記録しないので、次回同期時に再度リトライされる。
-            logger.warning("%s の読み込みに失敗したためスキップします: %s", name, e)
-            result["failed"].append(name)
-            continue
-
-        # 会話ログはそのスレッドのみ、それ以外（通常ドキュメント・アップロード）は
-        # 全スレッド共通で検索できるよう、チャンクにthread_idをメタデータとして付与する。
-        thread_id = _thread_id_for(name)
-        # 一般知識フォールバック回答の会話ログは、根拠のないままベクトルDBに再学習されると
-        # 以降の検索結果として再ヒットし、あたかもドキュメントの裏付けがあるかのように
-        # 扱われてしまう。全チャンクに一貫してis_fallbackキーを持たせることで、
-        # rag_chain.retrieve_context側のメタデータフィルタが確実に効くようにする。
-        is_fallback = _is_fallback_conversation(docs)
-        for chunk in chunks:
-            chunk.metadata["thread_id"] = thread_id
-            chunk.metadata["is_fallback"] = is_fallback
-
-        # 新チャンクの追加を先に行い、成功してから旧チャンクを削除する（delete→addの逆順）。
-        # delete→addの順だと、削除成功後にadd_documents()が失敗した場合、旧チャンクは
-        # 消えたのに新チャンクも登録されない「データが検索対象から消える」状態になり、
-        # manifestも更新されないため次回同期でも気づかれず放置されてしまう。
-        # add→deleteの順なら、追加が失敗しても旧チャンクがそのまま残るため安全
-        # （追加成功〜削除完了までの一瞬だけ新旧チャンクが両方検索にヒットしうるが、
-        # データが消えるより十分マシな許容範囲の副作用とする）。
-        try:
-            chunk_ids = vector_store.add_documents(documents=chunks) if chunks else []
-        except Exception as e:
-            logger.warning("%s のベクトルストアへの追加に失敗したためスキップします: %s", name, e)
-            result["failed"].append(name)
-            continue
-
-        # add_documents()成功後にdelete()自体が失敗するケース（ネットワーク瞬断・
-        # ベクトルストア内部エラー等）に備える。ここで例外を握りつぶして先に進めてしまうと、
-        # manifestは新内容で更新されるため次回同期はunchanged判定になり、旧チャンクの削除が
-        # 二度と試みられず重複したまま残り続けてしまう。そこで削除失敗時は旧chunk_idsを
-        # pending_delete_chunk_idsとしてmanifestに持ち越し、以後のunchanged判定時に再試行する。
-        # 前回同期時点で未解消のpending_delete_chunk_idsが残っている場合は、それも
-        # 引き継がないと二度と削除が試みられなくなるため、今回分と合算して持ち越す。
-        pending_delete_chunk_ids = set(entry.get("pending_delete_chunk_ids") or []) if entry else set()
-        if entry and entry.get("chunk_ids"):
-            try:
-                vector_store.delete(ids=entry["chunk_ids"])
-            except Exception as e:
-                logger.warning("%s の旧チャンク削除に失敗しました（次回同期時に再試行します）: %s", name, e)
-                pending_delete_chunk_ids |= set(entry["chunk_ids"])
-
-        manifest[name] = {**fingerprint, "chunk_ids": chunk_ids}
-        if pending_delete_chunk_ids:
-            manifest[name]["pending_delete_chunk_ids"] = sorted(pending_delete_chunk_ids)
-        result["updated" if entry else "added"].append(name)
-        action = "更新" if entry else "追加"
-        _log_progress(verbose, "%s: %s（%dチャンク）", action, name, len(chunks))
-
-        # ファイル1件ごとにmanifestを保存する。全件処理後にまとめて保存する設計だと、
-        # add_documents()でDBへの追加が完了した後・保存前にプロセスが中断した場合、
-        # DBには反映済みなのにmanifestには記録されない状態になり、次回同期時に
-        # 同じ内容のチャンクが重複登録されてしまう。都度保存すればその不整合を防げる。
-        _save_manifest(manifest)
+        status = _ingest_file(name, path, vector_store, manifest, splitter, verbose=verbose)
+        if status in ("added", "updated", "failed"):
+            result[status].append(name)
 
     # data/ から削除されたファイルをDBからも削除
     for name in list(manifest.keys()):
