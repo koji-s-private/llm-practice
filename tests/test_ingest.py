@@ -470,9 +470,33 @@ def test_extract_docling_page_returns_none_when_doc_items_not_list_of_dicts():
     assert ingest._extract_docling_page(metadata) is None
 
 
+def test_extract_docling_page_ignores_page_no_below_one():
+    # page_noは1始まりの想定のため、0や負値のような想定外の値は無視してNoneを返す
+    # （min(page_numbers) - 1 が -1以下の不正なpageになるのを防ぐ）
+    metadata = {"dl_meta": {"doc_items": [{"prov": [{"page_no": 0}]}]}}
+
+    assert ingest._extract_docling_page(metadata) is None
+
+
+def test_extract_docling_page_ignores_page_no_below_one_among_multiple():
+    # 複数provのうち一部がpage_no<1でも、有効な値だけを使って正しく最小値を返す
+    metadata = {
+        "dl_meta": {
+            "doc_items": [
+                {"prov": [{"page_no": 0}]},
+                {"prov": [{"page_no": 4}]},
+            ]
+        }
+    }
+
+    assert ingest._extract_docling_page(metadata) == 3
+
+
 def test_load_pdf_with_docling_sets_page_metadata_from_dl_meta(monkeypatch, tmp_path):
     # DoclingLoader(export_type=DOC_CHUNKS)が返すDocumentのdl_metaから
-    # pageメタデータ（0始まり）が正しく設定されることを確認する
+    # pageメタデータ（0始まり）が正しく設定されることを確認する。
+    # DOCLING_CHUNK_MERGE_TARGET_CHARSを超える長さにして、2つのチャンクが
+    # マージされず別々のグループとして残ることを確認する。
     fake_pdf_path = tmp_path / "scanned.pdf"
     fake_pdf_path.write_bytes(b"not a real pdf")
 
@@ -484,11 +508,11 @@ def test_load_pdf_with_docling_sets_page_metadata_from_dl_meta(monkeypatch, tmp_
         def load(self):
             return [
                 Document(
-                    page_content="1ページ目のチャンクです。",
+                    page_content="1ページ目のチャンクです。" * 100,
                     metadata={"dl_meta": {"doc_items": [{"prov": [{"page_no": 1}]}]}},
                 ),
                 Document(
-                    page_content="3ページ目のチャンクです。",
+                    page_content="3ページ目のチャンクです。" * 100,
                     metadata={"dl_meta": {"doc_items": [{"prov": [{"page_no": 3}]}]}},
                 ),
             ]
@@ -501,6 +525,60 @@ def test_load_pdf_with_docling_sets_page_metadata_from_dl_meta(monkeypatch, tmp_
     assert docs[0].metadata["page"] == 0
     assert docs[1].metadata["page"] == 2
     assert docs[0].metadata["source"] == str(fake_pdf_path)
+
+
+def test_load_pdf_with_docling_merges_small_chunks_up_to_target_chars(monkeypatch, tmp_path):
+    # DOC_CHUNKSが返す小さなDocumentは、target_charsに達するまで隣接するもの同士が
+    # マージされ、細切れのまま最終チャンクにならないことを確認する（PR #168 reviewer指摘対応）。
+    fake_pdf_path = tmp_path / "scanned.pdf"
+    fake_pdf_path.write_bytes(b"not a real pdf")
+
+    class _DocChunksDoclingLoader:
+        def __init__(self, file_path, export_type):
+            self.file_path = file_path
+
+        def load(self):
+            return [
+                Document(
+                    page_content=f"{i}番目の短い段落です。",
+                    metadata={"dl_meta": {"doc_items": [{"prov": [{"page_no": 1}]}]}},
+                )
+                for i in range(5)
+            ]
+
+    monkeypatch.setattr(ingest, "DoclingLoader", _DocChunksDoclingLoader)
+
+    docs = ingest._load_pdf_with_docling(fake_pdf_path, verbose=False)
+
+    # 5つの短い段落（合計でもDOCLING_CHUNK_MERGE_TARGET_CHARSを大きく下回る）は
+    # 1つのDocumentにマージされる。
+    assert len(docs) == 1
+    assert docs[0].metadata["page"] == 0
+    assert "0番目の短い段落です。" in docs[0].page_content
+    assert "4番目の短い段落です。" in docs[0].page_content
+
+
+def test_merge_docling_chunks_splits_when_exceeding_target_chars():
+    # target_charsを超える直前で新しいグループに区切られ、各グループのpageは
+    # グループ内の最小のページ番号（0始まりに正規化済み）になることを確認する
+    docs = [
+        Document(
+            page_content="あ" * 6,
+            metadata={"dl_meta": {"doc_items": [{"prov": [{"page_no": 1}]}]}},
+        ),
+        Document(
+            page_content="い" * 6,
+            metadata={"dl_meta": {"doc_items": [{"prov": [{"page_no": 2}]}]}},
+        ),
+    ]
+
+    merged = ingest._merge_docling_chunks(docs, target_chars=10)
+
+    assert len(merged) == 2
+    assert merged[0].page_content == "あ" * 6
+    assert merged[0].metadata["page"] == 0
+    assert merged[1].page_content == "い" * 6
+    assert merged[1].metadata["page"] == 1
 
 
 def test_load_pdf_with_docling_does_not_set_page_metadata_when_dl_meta_missing(monkeypatch, tmp_path):
