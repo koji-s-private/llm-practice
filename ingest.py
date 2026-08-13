@@ -224,15 +224,49 @@ def _load_pdf(path: Path, verbose: bool = True) -> list:
 
 
 def _load_pdf_with_docling(path: Path, verbose: bool = True) -> list:
-    """Doclingでの再解析を試みる。失敗した場合は空リストを返す（例外は送出しない）。"""
+    """Doclingでの再解析を試みる。失敗した場合は空リストを返す（例外は送出しない）。
+
+    export_type=DOC_CHUNKS を使うことで、PyMuPDFLoaderと同様にDocumentごとに
+    ページ番号相当のメタデータ（page）を付与できる。ファイル全体を1つのMarkdown文書として
+    返す export_type=MARKDOWN では、Docling内部のHybridChunkerによるチャンク分割を経ないため
+    dl_meta（ページ等のprovenance情報）自体が付与されず、ページ境界の情報が失われてしまう。
+    """
     try:
-        docling_docs = DoclingLoader(file_path=str(path), export_type=ExportType.MARKDOWN).load()
+        docling_docs = DoclingLoader(file_path=str(path), export_type=ExportType.DOC_CHUNKS).load()
     except Exception as e:
         _log_progress(verbose, "    → Docling解析に失敗しました（%s）", e)
         return []
     for doc in docling_docs:
         doc.metadata.setdefault("source", str(path))
+        page = _extract_docling_page(doc.metadata)
+        if page is not None:
+            doc.metadata["page"] = page
     return docling_docs
+
+
+def _extract_docling_page(metadata: dict) -> int | None:
+    """DoclingLoader(export_type=DOC_CHUNKS)が付与するdl_metaから代表ページ番号を取り出す。
+
+    dl_meta["doc_items"]の各要素はprov（ページ番号・座標などのprovenance情報）のリストを持ち、
+    1チャンクが複数ページにまたがることもある。ここでは表示用に最小のpage_no（最初のページ）を
+    代表値として採用する。Doclingのpage_noは1始まりのため、PyMuPDFLoaderが付与するpage
+    （0始まり、app.pyの_format_source_label()が+1して表示する）と揃うよう1引いて返す。
+    dl_metaやdoc_items・provが存在しない、または想定外の形式の場合はNoneを返す
+    （呼び出し元はpageメタデータを付与せず、ページ番号非表示のまま扱う）。
+    """
+    dl_meta = metadata.get("dl_meta")
+    if not isinstance(dl_meta, dict):
+        return None
+    page_numbers = [
+        prov["page_no"]
+        for item in dl_meta.get("doc_items", [])
+        if isinstance(item, dict)
+        for prov in item.get("prov", [])
+        if isinstance(prov, dict) and isinstance(prov.get("page_no"), int)
+    ]
+    if not page_numbers:
+        return None
+    return min(page_numbers) - 1
 
 
 def _thread_id_for(rel_path: str) -> str:
