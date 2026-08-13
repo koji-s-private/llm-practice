@@ -78,8 +78,8 @@ def test_ruff_config_excludes_tutorial_scripts_and_selects_expected_rules():
     ruff_config = config["tool"]["ruff"]
     assert ruff_config["line-length"] == 120
     assert set(ruff_config["extend-exclude"]) == {
-        "extract_text.py",
-        "models_and_prompts.py",
+        "examples/extract_text.py",
+        "examples/models_and_prompts.py",
     }
     assert set(ruff_config["lint"]["select"]) == {"E", "F", "W", "I"}
 

@@ -35,6 +35,7 @@ pytest
 | `test_select_next_issue.py` | `.github/scripts/select_next_issue.py` | AIチームのIssue選定ロジックのテスト（CI専用スクリプトのためファイルパスから直接import） |
 | `test_ci_config.py` | `.github/workflows/ci.yml` / `pyproject.toml` | CIワークフロー定義（トリガー・実行ステップの順序）とruff設定（除外ファイル・ルールセット）の静的検証 |
 | `test_theme_config.py` | `.streamlit/config.toml` / `app.py` | Streamlitのカスタムテーマ設定と `st.set_page_config` の引数（page_title/page_icon/layout）の静的検証 |
+| `test_examples_scripts.py` | `examples/extract_text.py` / `examples/models_and_prompts.py` | チュートリアル用スクリプトが `examples/` 配下に存在すること・importだけではLLM呼び出し等の副作用が起きないことの検証 |
 
 ## 新しいテストを追加する際の命名規則
 

@@ -11,10 +11,10 @@ pythonpath = ["."]
 # 1行あたりの最大文字数（デフォルト88だとコメント中の日本語コメントで折り返しが多発するため緩和）
 line-length = 120
 target-version = "py310"
-# LangChain公式チュートリアル由来の学習用スクリプト（Issue #23で整理予定。AGENTS.mdの
+# LangChain公式チュートリアル由来の学習用スクリプト（examples/ 配下。AGENTS.mdの
 # 日本語コメント必須ルールも同様に対象外としている）はコメントアウトされたチュートリアル
 # コードが未使用importに見えるだけのため、lint対象から除外する
-extend-exclude = ["extract_text.py", "models_and_prompts.py"]
+extend-exclude = ["examples/extract_text.py", "examples/models_and_prompts.py"]
 
 [tool.ruff.lint]
 # 最低限のルールセット: E/W(pycodestyle) F(pyflakes) I(isort/import順序)

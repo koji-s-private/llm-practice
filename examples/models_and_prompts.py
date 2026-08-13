@@ -1,5 +1,11 @@
-from setup import model
-from langchain_core.messages import HumanMessage, SystemMessage
+import sys
+from pathlib import Path
+
+# リポジトリ直下の setup.py を import できるよう、examples/ の1つ上の階層を sys.path に追加する。
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+
+from setup import model  # noqa: E402
+from langchain_core.messages import HumanMessage, SystemMessage  # noqa: E402
 
 
 # messages = [
@@ -21,7 +27,7 @@ from langchain_core.messages import HumanMessage, SystemMessage
 #     print(token.content, end="|")
 
 
-from langchain_core.prompts import ChatPromptTemplate
+from langchain_core.prompts import ChatPromptTemplate  # noqa: E402
 
 system_template = "Translate the following from English into {language}."
 
@@ -29,9 +35,15 @@ prompt_template = ChatPromptTemplate.from_messages(
     [("system", system_template), ("user", "{text}")]
 )
 
-prompt = prompt_template.invoke({"language": "Italian", "text": "Hello, how are you?"})
-print(prompt)
-print(prompt.to_messages())
 
-response = model.invoke(prompt)
-print(response.content)
+def main() -> None:
+    prompt = prompt_template.invoke({"language": "Italian", "text": "Hello, how are you?"})
+    print(prompt)
+    print(prompt.to_messages())
+
+    response = model.invoke(prompt)
+    print(response.content)
+
+
+if __name__ == "__main__":
+    main()
