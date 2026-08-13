@@ -404,6 +404,125 @@ def test_load_pdf_uses_pymupdf_directly_when_text_is_sufficient(monkeypatch, tmp
     assert docs[0].page_content == "十分な量のテキストです。" * 10
 
 
+def test_extract_docling_page_returns_page_from_single_prov():
+    # dl_meta.doc_items[].prov[].page_no（1始まり）が単一の場合、0始まりに正規化して返す
+    metadata = {
+        "dl_meta": {
+            "doc_items": [
+                {"prov": [{"page_no": 3}]},
+            ]
+        }
+    }
+
+    assert ingest._extract_docling_page(metadata) == 2
+
+
+def test_extract_docling_page_returns_minimum_across_multiple_pages():
+    # 1チャンクが複数ページにまたがる場合、最小のpage_noを採用する
+    metadata = {
+        "dl_meta": {
+            "doc_items": [
+                {"prov": [{"page_no": 5}]},
+                {"prov": [{"page_no": 2}, {"page_no": 7}]},
+                {"prov": [{"page_no": 9}]},
+            ]
+        }
+    }
+
+    assert ingest._extract_docling_page(metadata) == 1
+
+
+def test_extract_docling_page_returns_none_when_dl_meta_missing():
+    assert ingest._extract_docling_page({}) is None
+
+
+def test_extract_docling_page_returns_none_when_dl_meta_not_dict():
+    assert ingest._extract_docling_page({"dl_meta": "not-a-dict"}) is None
+
+
+def test_extract_docling_page_returns_none_when_doc_items_empty():
+    assert ingest._extract_docling_page({"dl_meta": {"doc_items": []}}) is None
+
+
+def test_extract_docling_page_returns_none_when_prov_empty():
+    metadata = {"dl_meta": {"doc_items": [{"prov": []}]}}
+
+    assert ingest._extract_docling_page(metadata) is None
+
+
+def test_extract_docling_page_returns_none_when_page_no_missing():
+    metadata = {"dl_meta": {"doc_items": [{"prov": [{}]}]}}
+
+    assert ingest._extract_docling_page(metadata) is None
+
+
+def test_extract_docling_page_returns_none_when_page_no_wrong_type():
+    # page_noが文字列など整数以外の型の場合は無視してNoneを返す（想定外の形式）
+    metadata = {"dl_meta": {"doc_items": [{"prov": [{"page_no": "3"}]}]}}
+
+    assert ingest._extract_docling_page(metadata) is None
+
+
+def test_extract_docling_page_returns_none_when_doc_items_not_list_of_dicts():
+    # doc_itemsの要素が辞書でない想定外の形式の場合も安全にNoneを返す
+    metadata = {"dl_meta": {"doc_items": ["not-a-dict"]}}
+
+    assert ingest._extract_docling_page(metadata) is None
+
+
+def test_load_pdf_with_docling_sets_page_metadata_from_dl_meta(monkeypatch, tmp_path):
+    # DoclingLoader(export_type=DOC_CHUNKS)が返すDocumentのdl_metaから
+    # pageメタデータ（0始まり）が正しく設定されることを確認する
+    fake_pdf_path = tmp_path / "scanned.pdf"
+    fake_pdf_path.write_bytes(b"not a real pdf")
+
+    class _DocChunksDoclingLoader:
+        def __init__(self, file_path, export_type):
+            assert export_type == ingest.ExportType.DOC_CHUNKS
+            self.file_path = file_path
+
+        def load(self):
+            return [
+                Document(
+                    page_content="1ページ目のチャンクです。",
+                    metadata={"dl_meta": {"doc_items": [{"prov": [{"page_no": 1}]}]}},
+                ),
+                Document(
+                    page_content="3ページ目のチャンクです。",
+                    metadata={"dl_meta": {"doc_items": [{"prov": [{"page_no": 3}]}]}},
+                ),
+            ]
+
+    monkeypatch.setattr(ingest, "DoclingLoader", _DocChunksDoclingLoader)
+
+    docs = ingest._load_pdf_with_docling(fake_pdf_path, verbose=False)
+
+    assert len(docs) == 2
+    assert docs[0].metadata["page"] == 0
+    assert docs[1].metadata["page"] == 2
+    assert docs[0].metadata["source"] == str(fake_pdf_path)
+
+
+def test_load_pdf_with_docling_does_not_set_page_metadata_when_dl_meta_missing(monkeypatch, tmp_path):
+    # dl_metaが取得できない（Documentに含まれない）場合はpageメタデータを設定しない（従来通り）
+    fake_pdf_path = tmp_path / "scanned.pdf"
+    fake_pdf_path.write_bytes(b"not a real pdf")
+
+    class _DoclingLoaderWithoutDlMeta:
+        def __init__(self, file_path, export_type):
+            self.file_path = file_path
+
+        def load(self):
+            return [Document(page_content="dl_metaのないチャンクです。")]
+
+    monkeypatch.setattr(ingest, "DoclingLoader", _DoclingLoaderWithoutDlMeta)
+
+    docs = ingest._load_pdf_with_docling(fake_pdf_path, verbose=False)
+
+    assert len(docs) == 1
+    assert "page" not in docs[0].metadata
+
+
 def test_failed_file_is_not_recorded_in_manifest_and_retried_next_sync(fake_env, monkeypatch):
     # 失敗したファイルはmanifestに記録されず、次回同期時に再度読み込みが試みられる（リトライ）
     data_dir, store = fake_env
