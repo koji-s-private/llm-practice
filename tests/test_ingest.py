@@ -675,6 +675,111 @@ def test_pending_delete_chunk_ids_not_lost_when_file_updated_again_while_pending
     assert v1_chunk_ids.isdisjoint(store.docs_by_id.keys()) or "pending_delete_chunk_ids" in manifest["a.txt"]
 
 
+def test_delete_failure_when_file_removed_defers_removal_and_retries(fake_env, monkeypatch):
+    # 境界値: 「data/ から削除されたファイルをDBからも削除」ループで
+    # vector_store.delete()自体が失敗した場合（chunk_idsのみ、pending_delete_chunk_idsは
+    # 無い状態）、例外は握りつぶされてresult["removed"]には計上されず、manifestエントリは
+    # {"pending_delete_chunk_ids": [...]}の形で維持され、次回同期時に再試行されるべき
+    data_dir, store = fake_env
+    path = _write(data_dir, "a.txt", "削除されるファイルの内容です。" * 5)
+    ingest.sync_data_dir(verbose=False)
+    chunk_ids = set(store.docs_by_id.keys())
+    assert chunk_ids
+
+    real_delete = store.delete
+
+    def flaky_delete(ids):
+        raise RuntimeError("ベクトルストアの一時的な削除失敗を想定")
+
+    monkeypatch.setattr(store, "delete", flaky_delete)
+    path.unlink()
+
+    result = ingest.sync_data_dir(verbose=False)
+
+    # delete()失敗時は例外が握りつぶされ、removedには計上されない
+    assert result == {"added": [], "updated": [], "removed": [], "failed": []}
+    # チャンクは削除に失敗しているため、まだベクトルストアに残っている
+    assert chunk_ids.issubset(store.docs_by_id.keys())
+
+    manifest = json.loads(ingest.MANIFEST_PATH.read_text(encoding="utf-8"))
+    # manifestエントリはpending_delete_chunk_idsのみを持つ形で維持される
+    assert manifest["a.txt"] == {"pending_delete_chunk_ids": sorted(chunk_ids)}
+
+    # deleteを復旧させて再度同期すると、削除が再試行されmanifestからエントリごと消える
+    monkeypatch.setattr(store, "delete", real_delete)
+    result = ingest.sync_data_dir(verbose=False)
+
+    assert result == {"added": [], "updated": [], "removed": ["a.txt"], "failed": []}
+    manifest = json.loads(ingest.MANIFEST_PATH.read_text(encoding="utf-8"))
+    assert "a.txt" not in manifest
+    assert chunk_ids.isdisjoint(store.docs_by_id.keys())
+
+
+def test_delete_failure_when_file_removed_logs_warning_via_logger(fake_env, monkeypatch, caplog):
+    # 削除検知時点でのdelete()失敗もlogger.warning()で記録される
+    data_dir, store = fake_env
+    path = _write(data_dir, "a.txt", "削除されるファイルの内容です。" * 5)
+    ingest.sync_data_dir(verbose=False)
+
+    def flaky_delete(ids):
+        raise RuntimeError("ベクトルストアの一時的な削除失敗を想定")
+
+    monkeypatch.setattr(store, "delete", flaky_delete)
+    path.unlink()
+
+    with caplog.at_level(logging.WARNING, logger="ingest"):
+        ingest.sync_data_dir(verbose=False)
+
+    warnings = [r for r in caplog.records if r.levelname == "WARNING"]
+    assert len(warnings) == 1
+    assert "a.txt" in warnings[0].getMessage()
+    assert "削除処理中に旧チャンク削除に失敗" in warnings[0].getMessage()
+
+
+def test_delete_failure_when_file_removed_merges_pending_ids_and_retries(fake_env, monkeypatch):
+    # 境界値: 更新時のdelete失敗で持ち越されたpending_delete_chunk_idsがある状態で
+    # ファイルが削除され、かつファイル削除時点のdelete()（chunk_ids + pending_delete_chunk_ids
+    # の合算分）自体も失敗するケース。合算後のIDがpending_delete_chunk_idsとしてそのまま
+    # 維持され、削除も再試行できることを確認する
+    data_dir, store = fake_env
+    path = _write(data_dir, "a.txt", "バージョン1のテキストです。" * 5)
+    ingest.sync_data_dir(verbose=False)
+    v1_chunk_ids = set(store.docs_by_id.keys())
+
+    path.write_text("バージョン2のテキストです。" * 5, encoding="utf-8")
+
+    real_delete = store.delete
+
+    def flaky_delete(ids):
+        raise RuntimeError("ベクトルストアの一時的な削除失敗を想定")
+
+    monkeypatch.setattr(store, "delete", flaky_delete)
+    ingest.sync_data_dir(verbose=False)
+    manifest = json.loads(ingest.MANIFEST_PATH.read_text(encoding="utf-8"))
+    assert set(manifest["a.txt"]["pending_delete_chunk_ids"]) == v1_chunk_ids
+    v2_chunk_ids = set(manifest["a.txt"]["chunk_ids"])
+    all_chunk_ids = v1_chunk_ids | v2_chunk_ids
+
+    # deleteを失敗させたままファイル自体を削除する
+    path.unlink()
+    result = ingest.sync_data_dir(verbose=False)
+
+    # ファイル削除時のdelete()（v1+v2の合算分）も失敗するため、removedには計上されない
+    assert result == {"added": [], "updated": [], "removed": [], "failed": []}
+    manifest = json.loads(ingest.MANIFEST_PATH.read_text(encoding="utf-8"))
+    assert manifest["a.txt"] == {"pending_delete_chunk_ids": sorted(all_chunk_ids)}
+    assert all_chunk_ids.issubset(store.docs_by_id.keys())
+
+    # deleteを復旧させて再度同期すると、合算分がまとめて削除されmanifestからエントリごと消える
+    monkeypatch.setattr(store, "delete", real_delete)
+    result = ingest.sync_data_dir(verbose=False)
+
+    assert result == {"added": [], "updated": [], "removed": ["a.txt"], "failed": []}
+    manifest = json.loads(ingest.MANIFEST_PATH.read_text(encoding="utf-8"))
+    assert "a.txt" not in manifest
+    assert all_chunk_ids.isdisjoint(store.docs_by_id.keys())
+
+
 def test_add_documents_failure_on_new_file_has_no_old_chunks_to_keep(fake_env, monkeypatch):
     # 境界値: 新規ファイル追加時（entryが存在せず旧チャンクが無いケース）にadd_documents()が
     # 失敗しても、delete()が呼ばれたり例外で落ちたりせず、failedに記録されるだけで正常終了すること
