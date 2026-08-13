@@ -1,4 +1,4 @@
-"""examples/配下のチュートリアル用スクリプトの整理（Issue #23）に関するテスト。
+"""examples/配下のチュートリアル用スクリプトの整理に関するテスト。
 
 `extract_text.py` / `models_and_prompts.py` はリポジトリ直下から `examples/` へ移動し、
 トップレベルにあった実行コード（LLM呼び出し等）を `main()` に切り出して
