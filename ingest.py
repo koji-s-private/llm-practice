@@ -34,6 +34,7 @@ import json
 import logging
 import os
 import re
+import sys
 from pathlib import Path
 
 from filelock import FileLock, Timeout
@@ -51,6 +52,19 @@ except ImportError:
     DOCLING_AVAILABLE = False
 
 logger = logging.getLogger(__name__)
+
+
+def _log_progress(verbose: bool, message: str, *args) -> None:
+    """同期処理の進捗メッセージをloggerに出力する（print()による二重出力を避けるための一本化窓口）。
+
+    verbose=Trueならinfoレベル、Falseならdebugレベルで出力する。実際にコンソールへ
+    表示されるかどうかはロガーの設定次第（例: CLIのmain()がlogging.basicConfig()で
+    INFOレベルのコンソールハンドラを設定していればverbose時のみ表示される）。
+    読み込み失敗などの警告は本関数を使わず、常に logger.warning() を直接呼ぶ
+    （verboseの値に関わらず常に見えるべき情報のため）。
+    """
+    logger.log(logging.INFO if verbose else logging.DEBUG, message, *args)
+
 
 DATA_DIR = Path(__file__).parent / "data"
 CONVERSATIONS_DIRNAME = "conversations"
@@ -169,14 +183,12 @@ def _load_pdf(path: Path, verbose: bool = True) -> list:
         # 呼び出し元（sync_data_dir）で "failed" として記録・次回リトライさせる。
         if not DOCLING_AVAILABLE:
             raise
-        if verbose:
-            print(f"    → PyMuPDFでの読み込みに失敗したため、Doclingでの再解析を試みます（{e}）...")
+        _log_progress(verbose, "    → PyMuPDFでの読み込みに失敗したため、Doclingでの再解析を試みます（%s）...", e)
         docling_docs = _load_pdf_with_docling(path, verbose=verbose)
         if not docling_docs:
             raise
-        if verbose:
-            docling_chars = sum(len(d.page_content.strip()) for d in docling_docs)
-            print(f"    → Doclingで{docling_chars}文字を抽出しました。")
+        docling_chars = sum(len(d.page_content.strip()) for d in docling_docs)
+        _log_progress(verbose, "    → Doclingで%d文字を抽出しました。", docling_chars)
         return docling_docs
 
     total_chars = sum(len(d.page_content.strip()) for d in fast_docs)
@@ -185,17 +197,19 @@ def _load_pdf(path: Path, verbose: bool = True) -> list:
     if avg_chars_per_page >= MIN_CHARS_PER_PAGE_FOR_FAST_PATH or not DOCLING_AVAILABLE:
         return fast_docs
 
-    if verbose:
-        print(
-            f"    → テキスト抽出量が少ない（平均{avg_chars_per_page:.0f}文字/ページ）ため、"
-            "Doclingで図解・OCR解析を試みます（時間がかかる場合があります）..."
-        )
+    _log_progress(
+        verbose,
+        "    → テキスト抽出量が少ない（平均%.0f文字/ページ）ため、"
+        "Doclingで図解・OCR解析を試みます（時間がかかる場合があります）...",
+        avg_chars_per_page,
+    )
     docling_docs = _load_pdf_with_docling(path, verbose=verbose)
     if docling_docs:
         docling_chars = sum(len(d.page_content.strip()) for d in docling_docs)
         if docling_chars > total_chars:
-            if verbose:
-                print(f"    → Doclingで{docling_chars}文字を抽出しました（PyMuPDF: {total_chars}文字）。")
+            _log_progress(
+                verbose, "    → Doclingで%d文字を抽出しました（PyMuPDF: %d文字）。", docling_chars, total_chars
+            )
             return docling_docs
 
     return fast_docs
@@ -206,8 +220,7 @@ def _load_pdf_with_docling(path: Path, verbose: bool = True) -> list:
     try:
         docling_docs = DoclingLoader(file_path=str(path), export_type=ExportType.MARKDOWN).load()
     except Exception as e:
-        if verbose:
-            print(f"    → Docling解析に失敗しました（{e}）")
+        _log_progress(verbose, "    → Docling解析に失敗しました（%s）", e)
         return []
     for doc in docling_docs:
         doc.metadata.setdefault("source", str(path))
@@ -328,8 +341,6 @@ def _sync_data_dir_locked(verbose: bool) -> dict:
             # manifestには記録しないので、次回同期時に再度リトライされる。
             logger.warning("%s の読み込みに失敗したためスキップします: %s", name, e)
             result["failed"].append(name)
-            if verbose:
-                print(f"スキップ（読み込み失敗）: {name}（{e}）")
             continue
 
         # 会話ログはそのスレッドのみ、それ以外（通常ドキュメント・アップロード）は
@@ -356,8 +367,6 @@ def _sync_data_dir_locked(verbose: bool) -> dict:
         except Exception as e:
             logger.warning("%s のベクトルストアへの追加に失敗したためスキップします: %s", name, e)
             result["failed"].append(name)
-            if verbose:
-                print(f"スキップ（ベクトルストアへの追加失敗）: {name}（{e}）")
             continue
 
         if entry and entry.get("chunk_ids"):
@@ -365,9 +374,8 @@ def _sync_data_dir_locked(verbose: bool) -> dict:
 
         manifest[name] = {**fingerprint, "chunk_ids": chunk_ids}
         result["updated" if entry else "added"].append(name)
-        if verbose:
-            action = "更新" if entry else "追加"
-            print(f"{action}: {name}（{len(chunks)}チャンク）")
+        action = "更新" if entry else "追加"
+        _log_progress(verbose, "%s: %s（%dチャンク）", action, name, len(chunks))
 
         # ファイル1件ごとにmanifestを保存する。全件処理後にまとめて保存する設計だと、
         # add_documents()でDBへの追加が完了した後・保存前にプロセスが中断した場合、
@@ -383,8 +391,7 @@ def _sync_data_dir_locked(verbose: bool) -> dict:
                 vector_store.delete(ids=chunk_ids)
             del manifest[name]
             result["removed"].append(name)
-            if verbose:
-                print(f"削除: {name}")
+            _log_progress(verbose, "削除: %s", name)
             # 追加・更新時と同様、削除もDB反映とmanifest保存を1件ごとに一致させる。
             _save_manifest(manifest)
 
@@ -392,8 +399,8 @@ def _sync_data_dir_locked(verbose: bool) -> dict:
     # 存在しない状態のまま終わらないよう最後に保存しておく（内容は変わらないため冪等）。
     _save_manifest(manifest)
 
-    if verbose and not any(result.values()):
-        print("変更はありませんでした（すでに同期済みです）。")
+    if not any(result.values()):
+        _log_progress(verbose, "変更はありませんでした（すでに同期済みです）。")
 
     return result
 
@@ -476,6 +483,13 @@ def main():
     if args.status:
         print_status()
         return
+
+    # sync_data_dir(verbose=True)（デフォルト）が出す進捗ログ（logger.info）をCLI実行時に
+    # コンソールへ表示するためのハンドラ設定。app.py/api経由（verbose=False）ではこの設定は
+    # 行われず、ファイル読み込み失敗時のlogger.warning()のみがPythonの既定動作で表示される。
+    # stream=sys.stdoutにするのは、同じmain()内の他のprint()出力との表示順序を揃えるため
+    # （logging標準のデフォルトはstderrで、print()と混在すると出力順序が入れ替わりうる）。
+    logging.basicConfig(level=logging.INFO, format="%(message)s", stream=sys.stdout)
 
     print("data/ をベクトルDBに同期しています...")
     result = sync_data_dir()
