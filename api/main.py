@@ -24,16 +24,18 @@
 import json
 import re
 from collections.abc import Generator
+from pathlib import Path
 
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
-from langchain_core.messages import AIMessage, HumanMessage
+from langchain_core.documents import Document
+from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 from pydantic import BaseModel
 
 from ingest import sync_data_dir
 from memory import CONVERSATIONS_DIR, conversation_count, new_thread_id, save_conversation
-from rag_chain import build_agent
+from rag_chain import GLOBAL_THREAD_ID, build_agent
 
 app = FastAPI(
     title="Doclore API",
@@ -114,6 +116,57 @@ def _to_langchain_messages(history: list[ChatMessage]) -> list:
     return messages
 
 
+def _format_source_label(metadata: dict) -> str:
+    """参照元ドキュメントのメタデータから表示用ラベルを組み立てる（app.pyの同名関数と同じ方針）。
+
+    - source: ファイルパス → ファイル名のみを表示
+    - thread_id: 会話ログ由来のチャンクにのみ付与される（GLOBAL_THREAD_IDは
+      全スレッド共通ドキュメントを表すため対象外）。付与されている場合は
+      「会話ログ（スレッド: xxx）」であることが分かるように先頭に付ける
+    - page: PDFのページ番号（0始まり）があれば「（p.N）」を末尾に付ける
+    """
+    source = metadata.get("source", "unknown")
+    page = metadata.get("page")
+    thread_id = metadata.get("thread_id")
+
+    label = Path(source).name if source != "unknown" else source
+    if thread_id and thread_id != GLOBAL_THREAD_ID:
+        label = f"会話ログ（スレッド: {thread_id}） - {label}"
+    if page is not None:
+        label += f"（p.{page + 1}）"
+    return label
+
+
+def _format_snippet(text: str, limit: int = 300) -> str:
+    """参照元プレビュー用に本文を整形する（app.pyの同名関数と同じ方針）。
+
+    limit文字を超える場合は句点・改行などの区切り文字のうち末尾に近いものを探して
+    区切り、見つからなければ直近の空白で単語の途中を避けて切る。
+    """
+    stripped = text.strip()
+    if len(stripped) <= limit:
+        return stripped
+
+    truncated = stripped[:limit]
+    break_chars = "。\n！？!?"
+    best_pos = max((truncated.rfind(ch) for ch in break_chars), default=-1)
+    if best_pos >= limit // 2:
+        truncated = truncated[: best_pos + 1]
+    else:
+        space_pos = truncated.rfind(" ")
+        if space_pos >= limit // 2:
+            truncated = truncated[:space_pos]
+
+    return truncated.rstrip() + "..."
+
+
+def _serialize_sources(sources: list[Document]) -> list[dict]:
+    """retrieve_contextツールが返した参照元ドキュメント一覧をSSE送信用のJSONに変換する。"""
+    return [
+        {"label": _format_source_label(doc.metadata), "snippet": _format_snippet(doc.page_content)} for doc in sources
+    ]
+
+
 def _stream_chat_response(thread_id: str, message: str, history: list[ChatMessage]) -> Generator[str, None, None]:
     """agentの回答をSSE形式（`data: <json>\\n\\n`）のテキストとして順次yieldする。
 
@@ -122,11 +175,21 @@ def _stream_chat_response(thread_id: str, message: str, history: list[ChatMessag
     インターフェース）。各要素は `(メッセージチャンク, メタデータ)` のタプルで、
     ツール呼び出し中の内部メッセージにはcontentが空文字のものも含まれるため、
     contentがあるものだけをクライアントに送る。
+
+    ToolMessage（retrieve_contextツールの実行結果）はcontentが検索結果の生テキストで
+    回答本文ではないため送信対象から除外し、代わりにartifact（取得ドキュメント）を
+    蓄積しておき、ストリーム終了後に `sources` イベントとしてまとめて送信する
+    （app.pyの `_stream_answer` と同じ方針）。
     """
+    sources: list[Document] = []
     try:
         agent = build_agent(thread_id)
         input_messages = _to_langchain_messages(history) + [HumanMessage(content=message)]
         for chunk, _metadata in agent.stream({"messages": input_messages}, stream_mode="messages"):
+            if isinstance(chunk, ToolMessage):
+                if getattr(chunk, "artifact", None):
+                    sources.extend(chunk.artifact)
+                continue
             content = getattr(chunk, "content", "")
             if content:
                 yield f"data: {json.dumps({'content': content}, ensure_ascii=False)}\n\n"
@@ -135,6 +198,9 @@ def _stream_chat_response(thread_id: str, message: str, history: list[ChatMessag
         # 差し替えられないため、SSEの1イベントとしてエラー内容を通知する。
         yield f"data: {json.dumps({'error': str(e)}, ensure_ascii=False)}\n\n"
         return
+
+    if sources:
+        yield f"data: {json.dumps({'sources': _serialize_sources(sources)}, ensure_ascii=False)}\n\n"
 
     yield f"data: {json.dumps({'done': True}, ensure_ascii=False)}\n\n"
 
@@ -207,11 +273,17 @@ def get_conversation_count(thread_id: str | None = None) -> dict:
 
 
 class SaveConversationRequest(BaseModel):
-    """POST /api/conversations/save のリクエストボディ。"""
+    """POST /api/conversations/save のリクエストボディ。
+
+    is_fallback: ドキュメントに根拠が見つからず一般知識で回答した場合に True を渡す
+    （app.pyの `save_conversation(..., is_fallback=not sources)` 相当）。省略時は
+    既存動作を壊さないよう False（根拠ありとして扱う）とする。
+    """
 
     question: str
     answer: str
     thread_id: str
+    is_fallback: bool = False
 
 
 class SaveConversationResponse(BaseModel):
@@ -227,5 +299,5 @@ def save_conversation_endpoint(request: SaveConversationRequest) -> dict:
     保存後のベクトルDBへの反映は行わない（Streamlit版と同様、次回の /api/sync 呼び出しに委ねる）。
     """
     _validate_thread_id(request.thread_id)
-    path = save_conversation(request.question, request.answer, request.thread_id)
+    path = save_conversation(request.question, request.answer, request.thread_id, is_fallback=request.is_fallback)
     return {"path": str(path)}
