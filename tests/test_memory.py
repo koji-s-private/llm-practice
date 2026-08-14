@@ -304,7 +304,7 @@ def test_load_conversation_ignores_non_markdown_files(tmp_path, monkeypatch):
     assert len(conversations) == 1
 
 
-# --- _validate_thread_id() / thread_id のパストラバーサル対策（Issue #134） ---
+# --- _validate_thread_id() / thread_id のパストラバーサル対策 ---
 
 
 class TestValidateThreadId:
