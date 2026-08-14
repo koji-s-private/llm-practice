@@ -19,7 +19,20 @@ from pathlib import Path
 
 CONVERSATIONS_DIR = Path(__file__).parent / "data" / "conversations"
 
-# 会話ログMarkdownから質問・回答本文を取り出すためのパターン（save_conversationの書式に対応）。
+# 会話ログMarkdownの質問・回答見出し（本文中の区切り位置の目印として使う）。
+_QUESTION_HEADER = "## 質問\n\n"
+_ANSWER_HEADER = "\n\n## 回答\n\n"
+
+# save_conversation()が書き込む「質問文字数」「回答文字数」のメタデータ行。
+# 質問・回答本文そのものに"## 質問"や"## 回答"という文字列が偶然含まれていても、
+# 見出しの位置を正規表現でパターンマッチするのではなく、あらかじめ記録しておいた
+# 文字数ぶんだけをそのまま切り出すことで本文の中身に依存せず正確に復元できる。
+_QUESTION_LENGTH_PATTERN = re.compile(r"^- 質問文字数: (\d+)$", re.MULTILINE)
+_ANSWER_LENGTH_PATTERN = re.compile(r"^- 回答文字数: (\d+)$", re.MULTILINE)
+
+# 文字数メタデータが無い旧形式ファイル（本Issue対応より前に保存された会話ログ）向けの
+# フォールバック。非貪欲マッチのため、質問・回答本文に"## 質問"/"## 回答"に類する
+# 文字列が含まれる場合は途中で切れうるが、後方互換のため残す。
 _QUESTION_PATTERN = re.compile(r"## 質問\n\n(.*?)\n\n## 回答", re.DOTALL)
 _ANSWER_PATTERN = re.compile(r"## 回答\n\n(.*)", re.DOTALL)
 
@@ -75,21 +88,50 @@ def save_conversation(question: str, answer: str, thread_id: str, is_fallback: b
     content = (
         f"# 会話ログ\n\n"
         f"- 日時: {now.strftime('%Y-%m-%d %H:%M:%S')}\n"
-        f"- 一般知識フォールバック: {'true' if is_fallback else 'false'}\n\n"
-        f"## 質問\n\n{question}\n\n## 回答\n\n{answer}\n"
+        f"- 一般知識フォールバック: {'true' if is_fallback else 'false'}\n"
+        f"- 質問文字数: {len(question)}\n"
+        f"- 回答文字数: {len(answer)}\n\n"
+        f"{_QUESTION_HEADER}{question}{_ANSWER_HEADER}{answer}\n"
     )
     path.write_text(content, encoding="utf-8")
     return path
 
 
+def _extract_qa(content: str) -> tuple[str, str]:
+    """会話ログMarkdownの本文から質問・回答を抜き出す。
+
+    「質問文字数」「回答文字数」のメタデータがあれば、見出しの直後からその文字数ぶんを
+    そのまま切り出す（質問・回答本文に"## 質問"/"## 回答"のような文字列が含まれていても、
+    正規表現の途中マッチに惑わされず正確に復元できる）。メタデータが無い、または見出しの
+    位置が見つからない場合（本Issue対応より前に保存された旧形式ファイル）は、
+    従来通り正規表現ベースの抽出にフォールバックする。
+    """
+    q_len_match = _QUESTION_LENGTH_PATTERN.search(content)
+    a_len_match = _ANSWER_LENGTH_PATTERN.search(content)
+    if q_len_match and a_len_match:
+        q_start = content.find(_QUESTION_HEADER)
+        if q_start != -1:
+            q_start += len(_QUESTION_HEADER)
+            q_end = q_start + int(q_len_match.group(1))
+            a_start = content.find(_ANSWER_HEADER, q_end)
+            # 質問の直後に回答見出しが続かない場合（記録された文字数と本文がズレている等の
+            # 想定外のケース）は、位置がズレたまま切り出さずフォールバックに任せる。
+            if a_start == q_end:
+                a_start += len(_ANSWER_HEADER)
+                a_end = a_start + int(a_len_match.group(1))
+                return content[q_start:q_end], content[a_start:a_end]
+
+    q_match = _QUESTION_PATTERN.search(content)
+    a_match = _ANSWER_PATTERN.search(content)
+    return (
+        q_match.group(1).strip() if q_match else "",
+        a_match.group(1).strip() if a_match else "",
+    )
+
+
 def _extract_question(content: str) -> str:
-    match = _QUESTION_PATTERN.search(content)
-    return match.group(1).strip() if match else ""
-
-
-def _extract_answer(content: str) -> str:
-    match = _ANSWER_PATTERN.search(content)
-    return match.group(1).strip() if match else ""
+    question, _ = _extract_qa(content)
+    return question
 
 
 def _parse_created_at(path: Path) -> datetime:
@@ -151,8 +193,8 @@ def load_conversation(thread_id: str) -> list[dict]:
 
     conversations = []
     for f in sorted(thread_dir.glob("*.md")):
-        content = f.read_text(encoding="utf-8")
-        conversations.append({"question": _extract_question(content), "answer": _extract_answer(content)})
+        question, answer = _extract_qa(f.read_text(encoding="utf-8"))
+        conversations.append({"question": question, "answer": answer})
     return conversations
 
 

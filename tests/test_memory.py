@@ -304,6 +304,125 @@ def test_load_conversation_ignores_non_markdown_files(tmp_path, monkeypatch):
     assert len(conversations) == 1
 
 
+# --- Issue #145: 質問・回答本文に見出し文字列（"## 質問" / "## 回答"）が
+#     偶然含まれる場合でも、途中で切れずに正しく復元されること ---
+
+
+def test_save_conversation_writes_question_and_answer_length_metadata(tmp_path, monkeypatch):
+    """正常系: save_conversation() が質問・回答それぞれの文字数メタデータ行を書き込む。"""
+    monkeypatch.setattr(memory, "CONVERSATIONS_DIR", tmp_path)
+
+    path = memory.save_conversation(question="質問文", answer="回答文です", thread_id="thread-a")
+
+    content = path.read_text(encoding="utf-8")
+    assert f"- 質問文字数: {len('質問文')}" in content
+    assert f"- 回答文字数: {len('回答文です')}" in content
+
+
+def test_load_conversation_normal_case_without_heading_like_strings(tmp_path, monkeypatch):
+    """正常系（リグレッション確認）: 見出し文字列を含まない通常のケースは従来通り復元される。"""
+    monkeypatch.setattr(memory, "CONVERSATIONS_DIR", tmp_path)
+    memory.save_conversation(
+        question="Pythonとは何ですか？", answer="Pythonはプログラミング言語です。", thread_id="thread-a"
+    )
+
+    conversations = memory.load_conversation("thread-a")
+
+    assert conversations == [{"question": "Pythonとは何ですか？", "answer": "Pythonはプログラミング言語です。"}]
+
+
+def test_load_conversation_question_containing_answer_heading_is_restored_correctly(tmp_path, monkeypatch):
+    """Issue #145: 質問文中に "## 回答" という文字列が含まれていても、質問・回答が途中で
+    切れずに正しく復元される。"""
+    monkeypatch.setattr(memory, "CONVERSATIONS_DIR", tmp_path)
+    question = "Markdownで## 回答という見出しを書くにはどうすればいいですか？"
+    answer = "そのまま `## 回答` と書けば見出しになります。"
+    memory.save_conversation(question=question, answer=answer, thread_id="thread-a")
+
+    conversations = memory.load_conversation("thread-a")
+
+    assert conversations == [{"question": question, "answer": answer}]
+
+
+def test_load_conversation_answer_containing_question_heading_is_restored_correctly(tmp_path, monkeypatch):
+    """Issue #145: 回答文中に "## 質問" という文字列が含まれていても、正しく復元される。"""
+    monkeypatch.setattr(memory, "CONVERSATIONS_DIR", tmp_path)
+    question = "見出しレベル2の書き方を教えてください"
+    answer = "例えば `## 質問` のように、行頭に `##` を書くと見出しになります。"
+    memory.save_conversation(question=question, answer=answer, thread_id="thread-a")
+
+    conversations = memory.load_conversation("thread-a")
+
+    assert conversations == [{"question": question, "answer": answer}]
+
+
+def test_load_conversation_both_question_and_answer_contain_heading_like_strings(tmp_path, monkeypatch):
+    """Issue #145（複合ケース）: 質問・回答の両方に "## 質問" / "## 回答" 相当の文字列が
+    含まれていても、それぞれ正しく復元される。"""
+    monkeypatch.setattr(memory, "CONVERSATIONS_DIR", tmp_path)
+    question = "会話ログの書式は「## 質問」の次に本文、その後「## 回答」と続きますか？"
+    answer = "はい、その通りです。「## 質問」の後に質問本文、「## 回答」の後に回答本文が続きます。"
+    memory.save_conversation(question=question, answer=answer, thread_id="thread-a")
+
+    conversations = memory.load_conversation("thread-a")
+
+    assert conversations == [{"question": question, "answer": answer}]
+
+
+def test_list_threads_first_question_correct_when_question_contains_answer_heading(tmp_path, monkeypatch):
+    """Issue #145: list_threads() の first_question も、質問文中の "## 回答" に惑わされず
+    正しく（途中で切れずに）取得できる。"""
+    monkeypatch.setattr(memory, "CONVERSATIONS_DIR", tmp_path)
+    question = "## 回答 という見出しの直後に本文を書く形式について教えてください"
+    memory.save_conversation(question=question, answer="回答本文です", thread_id="thread-a")
+
+    threads = memory.list_threads()
+
+    assert threads[0]["first_question"] == question
+
+
+def test_extract_qa_legacy_format_without_length_metadata_falls_back_to_regex(tmp_path, monkeypatch):
+    """後方互換性: 文字数メタデータが無い旧形式ファイル（見出し文字列を含まない）は、
+    従来通り正規表現ベースのフォールバックで正しく復元される。"""
+    monkeypatch.setattr(memory, "CONVERSATIONS_DIR", tmp_path)
+    _write_log(tmp_path, "thread-a", "20240101_090000_aaa111_q.md", question="旧形式の質問", answer="旧形式の回答")
+
+    conversations = memory.load_conversation("thread-a")
+
+    assert conversations == [{"question": "旧形式の質問", "answer": "旧形式の回答"}]
+
+
+def test_extract_qa_legacy_format_with_heading_like_content_is_a_known_limitation(tmp_path, monkeypatch):
+    """既知の制約: 文字数メタデータが無い旧形式ファイルで、かつ質問本文中に空行を挟んで
+    "## 回答" のような見出し文字列相当（"\n\n## 回答"）が含まれる場合は、非貪欲マッチの
+    フォールバックが使われるため従来通り途中で切れる（この既知の制約自体を固定する
+    リグレッションテストであり、修正を要求するものではない）。"""
+    monkeypatch.setattr(memory, "CONVERSATIONS_DIR", tmp_path)
+    question = "前半\n\n## 回答らしき文字列\n\n後半"
+    _write_log(tmp_path, "thread-a", "20240101_090000_aaa111_q.md", question=question, answer="回答本文")
+
+    conversations = memory.load_conversation("thread-a")
+
+    # 旧形式では非貪欲マッチにより、質問本文中の最初の "\n\n## 回答" の手前までしか復元されない
+    assert conversations[0]["question"] == "前半"
+
+
+def test_extract_qa_falls_back_to_regex_when_length_metadata_is_inconsistent(tmp_path, monkeypatch):
+    """境界値: 文字数メタデータが本文と矛盾する（記録されたオフセットに回答見出しが
+    見つからない）場合はクラッシュせず、正規表現ベースのフォールバックに切り替わる。"""
+    monkeypatch.setattr(memory, "CONVERSATIONS_DIR", tmp_path)
+    path = memory.save_conversation(question="質問本文", answer="回答本文", thread_id="thread-a")
+    content = path.read_text(encoding="utf-8")
+    # 質問文字数メタデータを実際の値とは異なる値に書き換え、意図的に整合性を崩す
+    tampered = content.replace(f"- 質問文字数: {len('質問本文')}", f"- 質問文字数: {len('質問本文') + 1}")
+    path.write_text(tampered, encoding="utf-8")
+
+    conversations = memory.load_conversation("thread-a")
+
+    # フォールバックの正規表現でも本文自体は問題なく復元できる（見出し文字列を含まないため）
+    assert conversations == [{"question": "質問本文", "answer": "回答本文"}]
+
+
 # --- _validate_thread_id() / thread_id のパストラバーサル対策 ---
 
 
