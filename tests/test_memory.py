@@ -3,6 +3,8 @@
 import os
 from datetime import datetime
 
+import pytest
+
 import memory
 
 
@@ -300,3 +302,186 @@ def test_load_conversation_ignores_non_markdown_files(tmp_path, monkeypatch):
     conversations = memory.load_conversation("thread-a")
 
     assert len(conversations) == 1
+
+
+# --- _validate_thread_id() / thread_id のパストラバーサル対策（Issue #134） ---
+
+
+class TestValidateThreadId:
+    """_validate_thread_id() 単体の正常系・異常系・境界値。"""
+
+    @pytest.mark.parametrize(
+        "thread_id",
+        [
+            "a1b2c3d4",  # new_thread_id() が生成する形式（uuid hexの先頭8文字）
+            "thread-a",
+            "thread_a",
+            "Thread-ID_123",
+            "a" * 100,  # 長さの上限は特に設けていないため、長い文字列も許可される
+            "0",  # 数字1文字のみでも許可される
+        ],
+    )
+    def test_accepts_valid_thread_id(self, thread_id):
+        assert memory._validate_thread_id(thread_id) == thread_id
+
+    @pytest.mark.parametrize(
+        "thread_id",
+        [
+            "../../etc/passwd",
+            "../secret",
+            "..",
+            "a/../../b",
+            "/etc/passwd",
+            "thread/a",
+            "thread\\a",
+            "",
+            "thread a",  # 空白は不許可
+            "thread.a",  # ドットは不許可
+            "thread:a",
+            "thread;rm -rf /",
+            "thread\x00null",
+            "日本語スレッド",  # 非ASCII文字は不許可
+        ],
+    )
+    def test_rejects_invalid_thread_id(self, thread_id):
+        with pytest.raises(ValueError):
+            memory._validate_thread_id(thread_id)
+
+    def test_rejects_non_string_thread_id(self):
+        with pytest.raises(ValueError):
+            memory._validate_thread_id(None)
+
+    def test_error_message_includes_offending_value(self):
+        with pytest.raises(ValueError, match=r"\.\./\.\./etc/passwd"):
+            memory._validate_thread_id("../../etc/passwd")
+
+
+class TestSaveConversationThreadIdValidation:
+    """save_conversation() が _validate_thread_id() を経由することの確認。"""
+
+    def test_accepts_uuid_hex_thread_id(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(memory, "CONVERSATIONS_DIR", tmp_path)
+        thread_id = memory.new_thread_id()
+
+        path = memory.save_conversation(question="質問", answer="回答", thread_id=thread_id)
+
+        assert path.parent == tmp_path / thread_id
+
+    def test_accepts_hyphen_and_underscore_thread_id(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(memory, "CONVERSATIONS_DIR", tmp_path)
+
+        path = memory.save_conversation(question="質問", answer="回答", thread_id="my-thread_01")
+
+        assert path.parent == tmp_path / "my-thread_01"
+
+    def test_rejects_path_traversal_thread_id_and_does_not_create_files_outside_conversations_dir(
+        self, tmp_path, monkeypatch
+    ):
+        conversations_dir = tmp_path / "data" / "conversations"
+        conversations_dir.mkdir(parents=True)
+        monkeypatch.setattr(memory, "CONVERSATIONS_DIR", conversations_dir)
+
+        with pytest.raises(ValueError):
+            memory.save_conversation(question="質問", answer="回答", thread_id="../../etc/passwd")
+
+        # conversations_dirの外側（tmp_path直下）にファイルが作られていないことを確認する
+        assert not (tmp_path / "etc").exists()
+
+    def test_rejects_slash_containing_thread_id(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(memory, "CONVERSATIONS_DIR", tmp_path)
+
+        with pytest.raises(ValueError):
+            memory.save_conversation(question="質問", answer="回答", thread_id="a/b")
+
+    def test_rejects_empty_thread_id(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(memory, "CONVERSATIONS_DIR", tmp_path)
+
+        with pytest.raises(ValueError):
+            memory.save_conversation(question="質問", answer="回答", thread_id="")
+
+
+class TestLoadConversationThreadIdValidation:
+    """load_conversation() が _validate_thread_id() を経由することの確認。"""
+
+    def test_accepts_uuid_hex_thread_id(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(memory, "CONVERSATIONS_DIR", tmp_path)
+        thread_id = memory.new_thread_id()
+        _write_log(tmp_path, thread_id, "20240101_090000_aaa111_q.md", question="質問", answer="回答")
+
+        conversations = memory.load_conversation(thread_id)
+
+        assert conversations == [{"question": "質問", "answer": "回答"}]
+
+    def test_accepts_hyphen_and_underscore_thread_id(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(memory, "CONVERSATIONS_DIR", tmp_path)
+        _write_log(tmp_path, "my-thread_01", "20240101_090000_aaa111_q.md", question="質問", answer="回答")
+
+        conversations = memory.load_conversation("my-thread_01")
+
+        assert conversations == [{"question": "質問", "answer": "回答"}]
+
+    def test_rejects_path_traversal_thread_id(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(memory, "CONVERSATIONS_DIR", tmp_path)
+
+        with pytest.raises(ValueError):
+            memory.load_conversation("../../etc/passwd")
+
+    def test_rejects_dotdot_alone(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(memory, "CONVERSATIONS_DIR", tmp_path)
+
+        with pytest.raises(ValueError):
+            memory.load_conversation("..")
+
+    def test_rejects_empty_thread_id(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(memory, "CONVERSATIONS_DIR", tmp_path)
+
+        with pytest.raises(ValueError):
+            memory.load_conversation("")
+
+
+class TestConversationCountThreadIdValidation:
+    """conversation_count() が _validate_thread_id() を経由することの確認。"""
+
+    def test_accepts_uuid_hex_thread_id(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(memory, "CONVERSATIONS_DIR", tmp_path)
+        thread_id = memory.new_thread_id()
+        memory.save_conversation("Q", "A", thread_id=thread_id)
+
+        assert memory.conversation_count(thread_id) == 1
+
+    def test_accepts_hyphen_and_underscore_thread_id(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(memory, "CONVERSATIONS_DIR", tmp_path)
+        memory.save_conversation("Q", "A", thread_id="my-thread_01")
+
+        assert memory.conversation_count("my-thread_01") == 1
+
+    def test_rejects_path_traversal_thread_id(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(memory, "CONVERSATIONS_DIR", tmp_path)
+
+        with pytest.raises(ValueError):
+            memory.conversation_count("../../etc/passwd")
+
+    def test_rejects_slash_containing_thread_id(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(memory, "CONVERSATIONS_DIR", tmp_path)
+
+        with pytest.raises(ValueError):
+            memory.conversation_count("a/b")
+
+    def test_validates_even_when_conversations_dir_does_not_exist(self, tmp_path, monkeypatch):
+        """境界値: 従来はCONVERSATIONS_DIRの存在チェックが検証より先だったため0が返っていたが、
+        検証を先に行う順序に整理されたことで、ディレクトリ不在時でも不正なthread_idは
+        ValueErrorになる（サイレントに0を返して見過ごされることを防ぐ）。"""
+        monkeypatch.setattr(memory, "CONVERSATIONS_DIR", tmp_path / "does-not-exist")
+
+        with pytest.raises(ValueError):
+            memory.conversation_count("../../etc/passwd")
+
+    def test_empty_string_thread_id_is_treated_as_no_thread_id_specified(self, tmp_path, monkeypatch):
+        """境界値: 空文字列はPythonのif文でFalsyと判定されるため、
+        `if thread_id else CONVERSATIONS_DIR` の分岐で全体カウントの経路に入り、
+        _validate_thread_id() を通らない（save_conversation/load_conversationとは異なる挙動）。"""
+        monkeypatch.setattr(memory, "CONVERSATIONS_DIR", tmp_path)
+        memory.save_conversation("Q1", "A1", thread_id="thread-a")
+        memory.save_conversation("Q2", "A2", thread_id="thread-b")
+
+        assert memory.conversation_count("") == 2
