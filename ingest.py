@@ -127,6 +127,21 @@ def safe_upload_dest(filename: str) -> Path | None:
     return dest
 
 
+def safe_relative_dest(relative_path: str) -> Path | None:
+    """既知の相対パス（サブフォルダを含みうる）を DATA_DIR 配下の安全な実パスに変換する。
+
+    list_indexed_files() が返す相対パス（例: "manuals/spec.pdf"）をそのまま解決する用途で、
+    safe_upload_dest() と異なりディレクトリ部分を切り捨てない（サブフォルダ構造を保ったまま
+    対象ファイルを一意に特定する）。resolve() 後に DATA_DIR 配下から外れていないかを
+    最終チェックし、外れる場合（`../` によるパストラバーサルの疑いがある場合）は None を返す。
+    """
+    data_dir_resolved = DATA_DIR.resolve()
+    dest = (DATA_DIR / relative_path).resolve()
+    if dest != data_dir_resolved and data_dir_resolved not in dest.parents:
+        return None
+    return dest
+
+
 def resolve_upload_dest(filename: str, taken_paths: set[Path] | None = None) -> Path | None:
     """アップロードされたファイル名から、上書きを避けた実際の書き込み先パスを求める。
 
@@ -638,12 +653,13 @@ def delete_indexed_file(name: str) -> bool:
     ここではmanifest・ベクトルDBの更新は行わない。呼び出し元がこの後sync_data_dir()を
     呼ぶことで、data/にファイルが存在しなくなったことが検知され、DB・manifestから
     自動的に除外される（sync_data_dir()の既存の削除検知ロジックをそのまま利用する）。
-    パストラバーサル対策としてsafe_upload_dest()と同じ経路でパスを解決する
-    （list_indexed_files()が返すファイルはconversations/配下を除いた
-    data/直下のファイルのみのため、これで十分安全に解決できる）。
+    list_indexed_files()が返す相対パスはdata/直下だけでなくサブフォルダ（例:
+    "manuals/spec.pdf"）を含みうるため、safe_upload_dest()（ファイル名のみを受け取り
+    ディレクトリ部分を切り捨てる、アップロード保存先解決用）ではなくsafe_relative_dest()
+    （サブフォルダ構造を保ったままDATA_DIR配下かどうかを検証する）でパスを解決する。
     対象ファイルが存在しない場合は何もせずFalseを返す。
     """
-    path = safe_upload_dest(name)
+    path = safe_relative_dest(name)
     if path is None or not path.exists():
         return False
     path.unlink()
