@@ -494,13 +494,18 @@ if user_input:
                     if isinstance(chunk, ToolMessage):
                         if getattr(chunk, "artifact", None):
                             # retrieve_contextが1ターン中に複数回呼ばれた場合、異なる検索クエリが
-                            # 同じチャンクをヒットさせることがある。(source, page, thread_id)を
-                            # キーに既出のチャンクを除外し、「参照した箇所」への重複表示を防ぐ。
+                            # 同じチャンクをヒットさせることがある。(source, page, thread_id,
+                            # page_content)をキーに既出のチャンクを除外し、「参照した箇所」への
+                            # 重複表示を防ぐ。page_contentもキーに含めるのは、pageがDocling経由
+                            # （PDF等）でのみ付与されthread_idはファイル単位で同一のため、
+                            # .txt/.mdのようにpageを持たないファイルではsource/thread_idだけでは
+                            # 同一ファイル内の別チャンクまで誤って同一キーになってしまうため。
                             for doc in chunk.artifact:
                                 key = (
                                     doc.metadata.get("source"),
                                     doc.metadata.get("page"),
                                     doc.metadata.get("thread_id"),
+                                    doc.page_content,
                                 )
                                 if key in seen_source_keys:
                                     continue
