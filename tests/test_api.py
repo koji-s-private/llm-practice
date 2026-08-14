@@ -400,7 +400,7 @@ def test_save_conversation_missing_field_returns_422(client):
 def test_save_conversation_rejects_path_traversal_thread_id(client, monkeypatch, thread_id):
     """絶対パス・相対トラバーサル等の不正なthread_idは400で拒否され、save_conversation()は呼ばれない。
 
-    data/conversations/ の外への任意ファイル書き込みを防ぐための検証（PR #97 レビュー指摘対応）。
+    data/conversations/ の外への任意ファイル書き込みを防ぐための検証。
     """
     called = {"count": 0}
 
