@@ -15,16 +15,23 @@ import json
 import pytest
 from fastapi.testclient import TestClient
 from langchain_core.documents import Document
-from langchain_core.messages import ToolMessage
+from langchain_core.messages import AIMessageChunk, ToolMessage
 
 import api.main as api_main
 
 
 class _FakeChunk:
-    """agent.stream(..., stream_mode="messages") が返すタプルの1要素目（メッセージチャンク）を模擬する。"""
+    """agent.stream(..., stream_mode="messages") が返すタプルの1要素目（メッセージチャンク）を模擬する。
 
-    def __init__(self, content):
+    `text` は `BaseMessage.text` プロパティ（str型ならそのまま、content blocksのlist型なら
+    text系ブロックのみを結合した文字列を返す）相当を模擬する。`text` を省略した場合は
+    `content` がstr型であることを前提に、そのまま `text` としても使う（既存テストの簡便な書き方）。
+    Anthropicのcontent blocks形式（listのcontent）を模擬する場合は `text` を明示的に指定する。
+    """
+
+    def __init__(self, content, text=None):
         self.content = content
+        self.text = content if text is None else text
 
 
 class _FakeAgent:
@@ -101,6 +108,73 @@ def test_chat_skips_chunks_with_empty_content(client, monkeypatch):
 
     events = _parse_sse_events(response.text)
     assert events == [{"content": "回答本体"}, {"done": True}]
+
+
+# --- POST /api/chat: Anthropicのcontent blocks（list形式）からのtext抽出 ---
+
+
+def test_chat_streams_text_extracted_from_anthropic_content_blocks_list(client, monkeypatch):
+    """正常系: contentがAnthropicのtool bind時のcontent blocks形式（list）でも、
+    実際のAIMessageChunk（BaseMessage.textプロパティ）経由でtext系ブロックのみを
+    結合した文字列がSSEに送信され、list/dictがそのままJSON化されないことを確認する
+    （_FakeChunkではなく実際のlangchain_coreのメッセージ型を使って検証する）。"""
+    real_chunk = AIMessageChunk(content=[{"type": "text", "text": "こんにちは"}])
+    fake_agent = _FakeAgent(chunks=[real_chunk])
+    monkeypatch.setattr(api_main, "build_agent", lambda thread_id: fake_agent)
+
+    response = client.post("/api/chat", json={"thread_id": "thread-1", "message": "質問", "history": []})
+
+    assert response.status_code == 200
+    events = _parse_sse_events(response.text)
+    assert events == [{"content": "こんにちは"}, {"done": True}]
+    assert isinstance(events[0]["content"], str)
+
+
+def test_chat_joins_multiple_text_blocks_and_ignores_non_text_blocks(client, monkeypatch):
+    """正常系: content blocksが複数のtext系ブロックとtext以外のブロック（例: tool_use）が
+    混在する場合、text系ブロックのみが結合されて送信される。"""
+    real_chunk = AIMessageChunk(
+        content=[
+            {"type": "text", "text": "こんにちは"},
+            {"type": "tool_use", "id": "call-1", "name": "dummy_tool", "input": {}},
+            {"type": "text", "text": "、世界"},
+        ]
+    )
+    fake_agent = _FakeAgent(chunks=[real_chunk])
+    monkeypatch.setattr(api_main, "build_agent", lambda thread_id: fake_agent)
+
+    response = client.post("/api/chat", json={"thread_id": "thread-1", "message": "質問", "history": []})
+
+    events = _parse_sse_events(response.text)
+    assert events == [{"content": "こんにちは、世界"}, {"done": True}]
+
+
+def test_chat_skips_chunk_when_content_blocks_have_no_text_block(client, monkeypatch):
+    """境界値: content blocksにtext系ブロックが1件も無い場合（例: tool_useのみ）は
+    text抽出結果が空文字になり、チャンクはスキップされる。"""
+    tool_use_only_chunk = AIMessageChunk(
+        content=[{"type": "tool_use", "id": "call-1", "name": "dummy_tool", "input": {}}]
+    )
+    fake_agent = _FakeAgent(chunks=[tool_use_only_chunk, _FakeChunk("回答本体")])
+    monkeypatch.setattr(api_main, "build_agent", lambda thread_id: fake_agent)
+
+    response = client.post("/api/chat", json={"thread_id": "thread-1", "message": "質問", "history": []})
+
+    events = _parse_sse_events(response.text)
+    assert events == [{"content": "回答本体"}, {"done": True}]
+
+
+def test_chat_fake_chunk_supports_content_blocks_list_with_explicit_text(client, monkeypatch):
+    """正常系: _FakeChunkにcontent（Anthropicのcontent blocks形式のlist）とtext（期待される
+    抽出結果）を別々に指定できることの確認（テストダブル自体の仕様確認）。"""
+    chunk = _FakeChunk(content=[{"type": "text", "text": "こんにちは"}], text="こんにちは")
+    fake_agent = _FakeAgent(chunks=[chunk])
+    monkeypatch.setattr(api_main, "build_agent", lambda thread_id: fake_agent)
+
+    response = client.post("/api/chat", json={"thread_id": "thread-1", "message": "質問", "history": []})
+
+    events = _parse_sse_events(response.text)
+    assert events == [{"content": "こんにちは"}, {"done": True}]
 
 
 def test_chat_reports_error_as_sse_event_without_done(client, monkeypatch):
