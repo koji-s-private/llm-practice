@@ -112,6 +112,23 @@ class _FakeAgentWithSources:
         yield AIMessageChunk(content=self.answer), {}
 
 
+class _FakeAgentWithMultipleToolCalls:
+    """retrieve_contextが1ターン中に複数回呼ばれるケースを模したフェイクエージェント。
+
+    ToolMessageを複数回yieldし、各回のartifactに重複するドキュメントが
+    含まれていても sources 側で重複排除されることを確認するために使う。
+    """
+
+    def __init__(self, answer, artifacts):
+        self.answer = answer
+        self.artifacts = artifacts
+
+    def stream(self, payload, stream_mode="messages"):
+        for i, artifact in enumerate(self.artifacts):
+            yield ToolMessage(content="検索結果", artifact=artifact, tool_call_id=f"call-{i}"), {}
+        yield AIMessageChunk(content=self.answer), {}
+
+
 def _ok_sync(verbose=False):
     return {"added": [], "updated": [], "removed": [], "failed": []}
 
@@ -581,6 +598,33 @@ def test_chat_streaming_tool_message_artifact_becomes_sources_expander(monkeypat
     assert at.exception == []
     expanders = [e for e in at.expander if "参照した箇所を見る" in e.label]
     assert len(expanders) == 1
+
+
+def test_chat_streaming_dedupes_sources_across_multiple_tool_calls(monkeypatch):
+    """正常系: retrieve_contextが1ターン中に複数回呼ばれ、それぞれのartifactに
+    (source, page, thread_id)が同じドキュメントが含まれていても、
+    「参照した箇所」には重複排除された件数のみが表示される。"""
+    duplicated_doc_call1 = _FakeSourceDoc(page_content="1回目の検索結果", metadata={"source": "doc.txt"})
+    duplicated_doc_call2 = _FakeSourceDoc(
+        page_content="2回目の検索結果（本文は別だが同じ箇所）", metadata={"source": "doc.txt"}
+    )
+    unique_doc = _FakeSourceDoc(page_content="別の箇所", metadata={"source": "other.txt"})
+    fake_agent = _FakeAgentWithMultipleToolCalls(
+        answer="複数回検索した末の回答",
+        artifacts=[[duplicated_doc_call1], [duplicated_doc_call2, unique_doc]],
+    )
+    monkeypatch.setattr(rag_chain, "build_agent", lambda thread_id=None: fake_agent)
+
+    at = _run_app()
+    at.chat_input[0].set_value("質問です").run()
+
+    assert at.exception == []
+    expanders = [e for e in at.expander if "参照した箇所を見る" in e.label]
+    assert len(expanders) == 1
+    # doc.txtは2回検索にヒットしたが1件のみ、other.txtと合わせて計2件になる
+    markdown_texts = [m.value for m in expanders[0].markdown]
+    assert sum("doc.txt" in text for text in markdown_texts) == 1
+    assert sum("other.txt" in text for text in markdown_texts) == 1
 
 
 def test_chat_streaming_exception_after_partial_chunks_skips_history_and_save(monkeypatch):

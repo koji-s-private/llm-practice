@@ -486,13 +486,26 @@ if user_input:
                 ではなくこちらを使い、プロバイダによらず本文を取りこぼさないようにする。
                 """
                 first_token = True
+                seen_source_keys: set = set()
                 for chunk, _metadata in st.session_state.agent.stream(
                     {"messages": _windowed_history(st.session_state.messages) + [HumanMessage(content=user_input)]},
                     stream_mode="messages",
                 ):
                     if isinstance(chunk, ToolMessage):
                         if getattr(chunk, "artifact", None):
-                            sources.extend(chunk.artifact)
+                            # retrieve_contextが1ターン中に複数回呼ばれた場合、異なる検索クエリが
+                            # 同じチャンクをヒットさせることがある。(source, page, thread_id)を
+                            # キーに既出のチャンクを除外し、「参照した箇所」への重複表示を防ぐ。
+                            for doc in chunk.artifact:
+                                key = (
+                                    doc.metadata.get("source"),
+                                    doc.metadata.get("page"),
+                                    doc.metadata.get("thread_id"),
+                                )
+                                if key in seen_source_keys:
+                                    continue
+                                seen_source_keys.add(key)
+                                sources.append(doc)
                         continue
                     text = getattr(chunk, "text", "")
                     if text:
