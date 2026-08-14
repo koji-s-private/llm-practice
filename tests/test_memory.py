@@ -304,7 +304,7 @@ def test_load_conversation_ignores_non_markdown_files(tmp_path, monkeypatch):
     assert len(conversations) == 1
 
 
-# --- Issue #145: 質問・回答本文に見出し文字列（"## 質問" / "## 回答"）が
+# --- 質問・回答本文に見出し文字列（"## 質問" / "## 回答"）が
 #     偶然含まれる場合でも、途中で切れずに正しく復元されること ---
 
 
@@ -332,7 +332,7 @@ def test_load_conversation_normal_case_without_heading_like_strings(tmp_path, mo
 
 
 def test_load_conversation_question_containing_answer_heading_is_restored_correctly(tmp_path, monkeypatch):
-    """Issue #145: 質問文中に "## 回答" という文字列が含まれていても、質問・回答が途中で
+    """正常系: 質問文中に "## 回答" という文字列が含まれていても、質問・回答が途中で
     切れずに正しく復元される。"""
     monkeypatch.setattr(memory, "CONVERSATIONS_DIR", tmp_path)
     question = "Markdownで## 回答という見出しを書くにはどうすればいいですか？"
@@ -345,7 +345,7 @@ def test_load_conversation_question_containing_answer_heading_is_restored_correc
 
 
 def test_load_conversation_answer_containing_question_heading_is_restored_correctly(tmp_path, monkeypatch):
-    """Issue #145: 回答文中に "## 質問" という文字列が含まれていても、正しく復元される。"""
+    """正常系: 回答文中に "## 質問" という文字列が含まれていても、正しく復元される。"""
     monkeypatch.setattr(memory, "CONVERSATIONS_DIR", tmp_path)
     question = "見出しレベル2の書き方を教えてください"
     answer = "例えば `## 質問` のように、行頭に `##` を書くと見出しになります。"
@@ -357,7 +357,7 @@ def test_load_conversation_answer_containing_question_heading_is_restored_correc
 
 
 def test_load_conversation_both_question_and_answer_contain_heading_like_strings(tmp_path, monkeypatch):
-    """Issue #145（複合ケース）: 質問・回答の両方に "## 質問" / "## 回答" 相当の文字列が
+    """複合ケース: 質問・回答の両方に "## 質問" / "## 回答" 相当の文字列が
     含まれていても、それぞれ正しく復元される。"""
     monkeypatch.setattr(memory, "CONVERSATIONS_DIR", tmp_path)
     question = "会話ログの書式は「## 質問」の次に本文、その後「## 回答」と続きますか？"
@@ -370,7 +370,7 @@ def test_load_conversation_both_question_and_answer_contain_heading_like_strings
 
 
 def test_list_threads_first_question_correct_when_question_contains_answer_heading(tmp_path, monkeypatch):
-    """Issue #145: list_threads() の first_question も、質問文中の "## 回答" に惑わされず
+    """正常系: list_threads() の first_question も、質問文中の "## 回答" に惑わされず
     正しく（途中で切れずに）取得できる。"""
     monkeypatch.setattr(memory, "CONVERSATIONS_DIR", tmp_path)
     question = "## 回答 という見出しの直後に本文を書く形式について教えてください"
