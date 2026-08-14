@@ -200,6 +200,95 @@ def test_retrieve_context_returns_relevant_docs(monkeypatch):
     assert "a.txt" not in content
 
 
+def test_retrieve_context_limits_number_of_returned_docs(monkeypatch):
+    """MAX_RETRIEVED_DOCSを超える件数が関連ありと判定されても、上位MAX_RETRIEVED_DOCS件
+    （類似度スコア順）だけに絞られ、コンテキスト長を圧迫しないことを確認する。"""
+    docs = [_FakeDocument(f"内容{i}", {"source": f"{i}.txt"}) for i in range(rag_chain.MAX_RETRIEVED_DOCS + 3)]
+    results = [(doc, 0.1 * i) for i, doc in enumerate(docs)]
+    retrieve_context, _ = _build_agent_with_store(monkeypatch, results=results)
+    monkeypatch.setattr(rag_chain, "_grade_relevance", lambda query, docs: list(range(len(docs))))
+
+    content, artifact = retrieve_context.func("質問")
+
+    assert len(artifact) == rag_chain.MAX_RETRIEVED_DOCS
+    # narrowedは類似度スコア順（scoreが小さい順）に並んでいるため、上位N件は先頭N件になる
+    assert artifact == docs[: rag_chain.MAX_RETRIEVED_DOCS]
+    assert content.count("Source:") == rag_chain.MAX_RETRIEVED_DOCS
+
+
+def test_retrieve_context_returns_all_docs_when_relevant_count_equals_max(monkeypatch):
+    """関連文書数がちょうどMAX_RETRIEVED_DOCS件のときは、1件も欠けずに全件返すこと
+    （境界値: off-by-oneでスライスが1件多く/少なく切り捨てられていないこと）を確認する。"""
+    docs = [_FakeDocument(f"内容{i}", {"source": f"{i}.txt"}) for i in range(rag_chain.MAX_RETRIEVED_DOCS)]
+    results = [(doc, 0.1 * i) for i, doc in enumerate(docs)]
+    retrieve_context, _ = _build_agent_with_store(monkeypatch, results=results)
+    monkeypatch.setattr(rag_chain, "_grade_relevance", lambda query, docs: list(range(len(docs))))
+
+    content, artifact = retrieve_context.func("質問")
+
+    assert len(artifact) == rag_chain.MAX_RETRIEVED_DOCS
+    assert artifact == docs
+    assert content.count("Source:") == rag_chain.MAX_RETRIEVED_DOCS
+
+
+def test_retrieve_context_returns_all_docs_when_relevant_count_below_max(monkeypatch):
+    """関連文書数がMAX_RETRIEVED_DOCS未満（1件）のときは、上限による絞り込みが
+    誤って作用せず、そのまま全件返すことを確認する。"""
+    doc = _FakeDocument("唯一の関連文書", {"source": "only.txt"})
+    retrieve_context, _ = _build_agent_with_store(monkeypatch, results=[(doc, 0.1)])
+    monkeypatch.setattr(rag_chain, "_grade_relevance", lambda query, docs: [0])
+
+    content, artifact = retrieve_context.func("質問")
+
+    assert artifact == [doc]
+    assert content.count("Source:") == 1
+
+
+def test_retrieve_context_truncates_doc_content_in_serialized_output(monkeypatch):
+    """1件あたりの本文はMAX_DOC_CHARS文字に切り詰めてLLMへ渡すが、artifact（UI表示用）側は
+    切り詰めずフル文を保持する（app.py側で表示用に別途整形されるため）ことを確認する。"""
+    long_content = "あ" * (rag_chain.MAX_DOC_CHARS + 100)
+    doc = _FakeDocument(long_content, {"source": "long.txt"})
+    retrieve_context, _ = _build_agent_with_store(monkeypatch, results=[(doc, 0.1)])
+    monkeypatch.setattr(rag_chain, "_grade_relevance", lambda query, docs: [0])
+
+    content, artifact = retrieve_context.func("質問")
+
+    assert "あ" * rag_chain.MAX_DOC_CHARS in content
+    assert "あ" * (rag_chain.MAX_DOC_CHARS + 1) not in content
+    assert artifact[0].page_content == long_content
+
+
+def test_retrieve_context_does_not_truncate_content_at_exactly_max_doc_chars(monkeypatch):
+    """本文がちょうどMAX_DOC_CHARS文字（境界値）のときは、1文字も欠けずそのまま
+    含まれることを確認する（マルチバイト文字を含む日本語本文でも、Pythonの文字列
+    スライスはコードポイント単位のため文字の途中で不正に分割されない）。"""
+    exact_content = "あ" * rag_chain.MAX_DOC_CHARS
+    doc = _FakeDocument(exact_content, {"source": "exact.txt"})
+    retrieve_context, _ = _build_agent_with_store(monkeypatch, results=[(doc, 0.1)])
+    monkeypatch.setattr(rag_chain, "_grade_relevance", lambda query, docs: [0])
+
+    content, artifact = retrieve_context.func("質問")
+
+    assert f"Content: {exact_content}" in content
+    assert artifact[0].page_content == exact_content
+
+
+def test_retrieve_context_does_not_truncate_short_doc_content(monkeypatch):
+    """本文がMAX_DOC_CHARS未満の短い文書は、切り詰められず全文がそのまま
+    含まれることを確認する（多くの実データはこのケースに該当するため）。"""
+    short_content = "短い本文です。" * 3
+    assert len(short_content) < rag_chain.MAX_DOC_CHARS
+    doc = _FakeDocument(short_content, {"source": "short.txt"})
+    retrieve_context, _ = _build_agent_with_store(monkeypatch, results=[(doc, 0.1)])
+    monkeypatch.setattr(rag_chain, "_grade_relevance", lambda query, docs: [0])
+
+    content, artifact = retrieve_context.func("質問")
+
+    assert f"Content: {short_content}" in content
+    assert artifact[0].page_content == short_content
+
+
 def test_retrieve_context_restricts_search_to_global_and_own_thread(monkeypatch):
     retrieve_context, store = _build_agent_with_store(monkeypatch, results=[])
 
