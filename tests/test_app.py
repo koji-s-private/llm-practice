@@ -627,6 +627,116 @@ def test_chat_streaming_dedupes_sources_across_multiple_tool_calls(monkeypatch):
     assert sum("other.txt" in text for text in markdown_texts) == 1
 
 
+def test_chat_streaming_no_expander_when_retrieve_context_never_called(monkeypatch):
+    """境界値: retrieve_contextが1回も呼ばれずToolMessageが1件も届かない場合、
+    sourcesは空のままとなり「参照した箇所を見る」expanderは表示されない。"""
+    fake_agent = _FakeAgent(answer="一般知識のみによる回答")
+    monkeypatch.setattr(rag_chain, "build_agent", lambda thread_id=None: fake_agent)
+
+    at = _run_app()
+    at.chat_input[0].set_value("質問です").run()
+
+    assert at.exception == []
+    expanders = [e for e in at.expander if "参照した箇所を見る" in e.label]
+    assert expanders == []
+
+
+def test_chat_streaming_keeps_same_source_different_page_as_distinct(monkeypatch):
+    """境界値: 同じsourceでもpageが異なるドキュメントは別チャンクとして扱われ、
+    重複排除されずに両方とも表示される（pageがキーの一部として機能していることの確認）。"""
+    page1_doc = _FakeSourceDoc(page_content="1ページ目の内容", metadata={"source": "doc.pdf", "page": 1})
+    page2_doc = _FakeSourceDoc(page_content="2ページ目の内容", metadata={"source": "doc.pdf", "page": 2})
+    fake_agent = _FakeAgentWithMultipleToolCalls(
+        answer="複数ページを参照した回答",
+        artifacts=[[page1_doc], [page2_doc]],
+    )
+    monkeypatch.setattr(rag_chain, "build_agent", lambda thread_id=None: fake_agent)
+
+    at = _run_app()
+    at.chat_input[0].set_value("質問です").run()
+
+    assert at.exception == []
+    expanders = [e for e in at.expander if "参照した箇所を見る" in e.label]
+    assert len(expanders) == 1
+    markdown_texts = [m.value for m in expanders[0].markdown]
+    assert sum("[1]" in text or "[2]" in text for text in markdown_texts) == 2
+
+
+def test_chat_streaming_dedupes_partial_overlap_across_three_tool_calls(monkeypatch):
+    """境界値: retrieve_contextが3回以上呼ばれ、一部のみが重複するケースでも、
+    重複した箇所のみが正しく除外され、ユニークな箇所はすべて残る。"""
+    doc_a = _FakeSourceDoc(page_content="Aの内容", metadata={"source": "a.txt"})
+    doc_a_dup = _FakeSourceDoc(page_content="Aの内容（2回目にヒット）", metadata={"source": "a.txt"})
+    doc_b = _FakeSourceDoc(page_content="Bの内容", metadata={"source": "b.txt"})
+    doc_b_dup = _FakeSourceDoc(page_content="Bの内容（3回目にヒット）", metadata={"source": "b.txt"})
+    doc_c = _FakeSourceDoc(page_content="Cの内容", metadata={"source": "c.txt"})
+    fake_agent = _FakeAgentWithMultipleToolCalls(
+        answer="3回検索した末の回答",
+        artifacts=[[doc_a], [doc_b, doc_a_dup], [doc_c, doc_b_dup]],
+    )
+    monkeypatch.setattr(rag_chain, "build_agent", lambda thread_id=None: fake_agent)
+
+    at = _run_app()
+    at.chat_input[0].set_value("質問です").run()
+
+    assert at.exception == []
+    expanders = [e for e in at.expander if "参照した箇所を見る" in e.label]
+    assert len(expanders) == 1
+    markdown_texts = [m.value for m in expanders[0].markdown]
+    for name in ("a.txt", "b.txt", "c.txt"):
+        assert sum(name in text for text in markdown_texts) == 1
+
+
+def test_chat_streaming_no_dedupe_when_all_sources_distinct(monkeypatch):
+    """正常系（回帰確認）: 複数回のretrieve_context呼び出しがすべて別々の箇所を
+    ヒットさせた通常ケースでは、重複が無いため全件がそのまま表示される。"""
+    doc_a = _FakeSourceDoc(page_content="Aの内容", metadata={"source": "a.txt"})
+    doc_b = _FakeSourceDoc(page_content="Bの内容", metadata={"source": "b.txt"})
+    doc_c = _FakeSourceDoc(page_content="Cの内容", metadata={"source": "c.txt"})
+    fake_agent = _FakeAgentWithMultipleToolCalls(
+        answer="3回検索した末の回答",
+        artifacts=[[doc_a], [doc_b], [doc_c]],
+    )
+    monkeypatch.setattr(rag_chain, "build_agent", lambda thread_id=None: fake_agent)
+
+    at = _run_app()
+    at.chat_input[0].set_value("質問です").run()
+
+    assert at.exception == []
+    expanders = [e for e in at.expander if "参照した箇所を見る" in e.label]
+    assert len(expanders) == 1
+    markdown_texts = [m.value for m in expanders[0].markdown]
+    for name in ("a.txt", "b.txt", "c.txt"):
+        assert sum(name in text for text in markdown_texts) == 1
+
+
+def test_chat_streaming_collapses_distinct_chunks_when_page_and_thread_id_both_missing(monkeypatch):
+    """境界値（既知の限界の明文化）: pageもthread_idも付与されないソース
+    （TextLoaderで取り込む.txt/.mdなど、ページ番号の概念が無いファイル）から
+    本文の異なる2チャンクがヒットした場合、重複排除キー(source, page, thread_id)は
+    共に(source, None, None)となり区別できないため、後から出てきたチャンクは
+    「重複」とみなされて脱落する。これはIssue #146の対象（同一チャンクの重複表示）
+    を解決する一方で、metadataにpage等の区別可能な情報が無いソースについては
+    別々のチャンクを誤って1件に潰してしまう副作用があることを回帰的に固定する。"""
+    chunk1 = _FakeSourceDoc(page_content="sample.txtの前半チャンク", metadata={"source": "data/sample.txt"})
+    chunk2 = _FakeSourceDoc(page_content="sample.txtの後半チャンク（本文は別物）", metadata={"source": "data/sample.txt"})
+    fake_agent = _FakeAgentWithMultipleToolCalls(
+        answer="sample.txtを参照した回答",
+        artifacts=[[chunk1, chunk2]],
+    )
+    monkeypatch.setattr(rag_chain, "build_agent", lambda thread_id=None: fake_agent)
+
+    at = _run_app()
+    at.chat_input[0].set_value("質問です").run()
+
+    assert at.exception == []
+    expanders = [e for e in at.expander if "参照した箇所を見る" in e.label]
+    assert len(expanders) == 1
+    markdown_texts = [m.value for m in expanders[0].markdown]
+    # 本来は本文の異なる2チャンクだが、page/thread_id情報が無いため1件に潰れる
+    assert sum("sample.txt" in text for text in markdown_texts) == 1
+
+
 def test_chat_streaming_exception_after_partial_chunks_skips_history_and_save(monkeypatch):
     """異常系: 一部の回答チャンクを既にyieldした後に例外が送出された場合でも、
     部分的な回答が会話履歴に残らず、save_conversationも呼ばれない
