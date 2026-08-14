@@ -61,6 +61,18 @@ CANDIDATE_K = 8
 # 残るため、緩めの値を保つ）。
 RECALL_DISTANCE_THRESHOLD = 1.3
 
+# LLM採点（_grade_relevance）で「関連あり」と判定された文書のうち、実際にretrieve_contextが
+# 返す上限件数。narrowedは一次検索（ベクトル類似度）のスコア順に並んでおり、_grade_relevanceは
+# その順序を保ったままインデックスを返す仕様なので、先頭N件を採用すれば類似度が高い順の
+# 上位N件を返すことになる。CANDIDATE_K件（最大8件）すべてが関連ありと判定されると
+# ingest.pyのchunk_size=1000（文字ベース）と相まって検索結果だけで数千トークンに達し得るため、
+# 会話履歴とは別にコンテキスト長を圧迫しないよう上限を設ける。
+MAX_RETRIEVED_DOCS = 4
+
+# retrieve_contextが返す1件あたりの本文の文字数上限。ingest.pyのchunk_size=1000文字を
+# そのまま含めると1件だけでも数百トークンになるため、要点を掴める範囲で切り詰める。
+MAX_DOC_CHARS = 500
+
 SYSTEM_PROMPT = (
     "あなたはローカルドキュメントQ&Aアシスタントです。"
     "まず retrieve_context ツールを使って data/ 配下のドキュメントから関連情報を検索してください。"
@@ -212,12 +224,16 @@ def build_agent(thread_id: str = GLOBAL_THREAD_ID):
         narrowed = [doc for doc, score in candidates if score < RECALL_DISTANCE_THRESHOLD]
 
         relevant_idx = _grade_relevance(query, narrowed)
-        retrieved_docs = [narrowed[i] for i in relevant_idx]
+        # relevant_idxはnarrowed（類似度スコア順）のインデックスを昇順に返す仕様のため、
+        # 先頭からMAX_RETRIEVED_DOCS件に絞れば類似度が高い順の上位N件になる。
+        retrieved_docs = [narrowed[i] for i in relevant_idx][:MAX_RETRIEVED_DOCS]
 
         if not retrieved_docs:
             return "関連する情報はドキュメント内に見つかりませんでした。", []
 
-        serialized = "\n\n".join(f"Source: {doc.metadata}\nContent: {doc.page_content}" for doc in retrieved_docs)
+        serialized = "\n\n".join(
+            f"Source: {doc.metadata}\nContent: {doc.page_content[:MAX_DOC_CHARS]}" for doc in retrieved_docs
+        )
         return serialized, retrieved_docs
 
     return create_agent(model, tools=[retrieve_context], system_prompt=SYSTEM_PROMPT)
