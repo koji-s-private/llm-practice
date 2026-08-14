@@ -16,11 +16,20 @@
   `_setdefault_even_if_empty()` を使う。
 - `langchain.chat_models.init_chat_model` と `langchain.agents.create_agent` は
   実際のLLM呼び出し・エージェント構築を避けるためフェイクに差し替える。
+- 上記のダミー環境変数は `setup.py` が将来新たな環境変数に依存するよう変更された場合に
+  対応漏れが起こりうる。対応漏れがあると非対話環境でも `getpass.getpass()` に到達し
+  無応答（ハング）になりうるため、`getpass.getpass` 自体もデフォルトで例外を送出する
+  ように差し替え、対応漏れを無応答ではなく即座のテスト失敗として検知できるようにする
+  （`getpass.getpass()` の呼び出しを検証する側のテストは、そのテスト内で
+  `monkeypatch.setattr` を使って個別に上書きする）。
 """
 
+import getpass
 import os
 import sys
 import types
+
+import pytest
 
 
 def _setdefault_even_if_empty(name: str, default: str) -> None:
@@ -86,3 +95,21 @@ import langchain.chat_models  # noqa: E402
 
 langchain.chat_models.init_chat_model = _fake_init_chat_model
 langchain.agents.create_agent = _fake_create_agent
+
+
+@pytest.fixture(autouse=True)
+def _forbid_unexpected_getpass(monkeypatch):
+    """`getpass.getpass()` が呼ばれたら即座にテストを失敗させる（デフォルトの安全策）。
+
+    上記のダミー環境変数設定に対応漏れがあると、非対話環境でも `setup.py` が
+    `getpass.getpass()` に到達しうる。その場合、無応答でハングする代わりに
+    明示的な例外で即座に検知できるようにする。`getpass.getpass()` の呼び出し自体を
+    確認したいテストは、そのテスト内で `monkeypatch.setattr` を使って個別に上書きする。
+    """
+
+    def _raise_if_called(*args, **kwargs):
+        raise RuntimeError(
+            "getpass.getpass() が呼ばれました。tests/conftest.py のダミー環境変数設定に対応漏れがある可能性があります。"
+        )
+
+    monkeypatch.setattr(getpass, "getpass", _raise_if_called)
