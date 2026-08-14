@@ -180,6 +180,12 @@ def _stream_chat_response(thread_id: str, message: str, history: list[ChatMessag
     回答本文ではないため送信対象から除外し、代わりにartifact（取得ドキュメント）を
     蓄積しておき、ストリーム終了後に `sources` イベントとしてまとめて送信する
     （app.pyの `_stream_answer` と同じ方針）。
+
+    AIMessageChunk.content はプロバイダによって型が異なる（OpenAIは常にstr、
+    Anthropicはtoolsをbindしている場合 [{"type": "text", "text": "..."}] のような
+    content blocksのlistで返る）。BaseMessage.text プロパティはstr/listいずれの形式でも
+    text系ブロックのみを結合した文字列を返してくれるため、素朴なgetattr(chunk, "content", "")
+    ではなくこちらを使い、プロバイダによらず本文（str）のみをSSEで送信する。
     """
     sources: list[Document] = []
     try:
@@ -190,9 +196,9 @@ def _stream_chat_response(thread_id: str, message: str, history: list[ChatMessag
                 if getattr(chunk, "artifact", None):
                     sources.extend(chunk.artifact)
                 continue
-            content = getattr(chunk, "content", "")
-            if content:
-                yield f"data: {json.dumps({'content': content}, ensure_ascii=False)}\n\n"
+            text = getattr(chunk, "text", "")
+            if text:
+                yield f"data: {json.dumps({'content': text}, ensure_ascii=False)}\n\n"
     except Exception as e:
         # Streamlit版のst.error相当。ストリーミング開始後は通常のHTTPエラーレスポンスに
         # 差し替えられないため、SSEの1イベントとしてエラー内容を通知する。

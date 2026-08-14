@@ -21,10 +21,14 @@ import api.main as api_main
 
 
 class _FakeChunk:
-    """agent.stream(..., stream_mode="messages") が返すタプルの1要素目（メッセージチャンク）を模擬する。"""
+    """agent.stream(..., stream_mode="messages") が返すタプルの1要素目（メッセージチャンク）を模擬する。
+
+    `text` は `BaseMessage.text` プロパティ相当（str型のcontentをそのまま返す）を模擬する。
+    """
 
     def __init__(self, content):
         self.content = content
+        self.text = content
 
 
 class _FakeAgent:
