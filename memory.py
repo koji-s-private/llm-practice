@@ -23,6 +23,22 @@ CONVERSATIONS_DIR = Path(__file__).parent / "data" / "conversations"
 _QUESTION_PATTERN = re.compile(r"## 質問\n\n(.*?)\n\n## 回答", re.DOTALL)
 _ANSWER_PATTERN = re.compile(r"## 回答\n\n(.*)", re.DOTALL)
 
+# new_thread_id()が生成するuuid hex文字列を含む、英数字・ハイフン・アンダースコアのみを許可する。
+# "/" や ".." のようなパス区切り・親ディレクトリ参照を含む値を拒否することで、将来thread_idに
+# 外部入力がそのまま渡されるようになってもパストラバーサルが起きないようにする。
+_THREAD_ID_PATTERN = re.compile(r"^[A-Za-z0-9_-]+$")
+
+
+def _validate_thread_id(thread_id: str) -> str:
+    """thread_idが安全な文字のみで構成されているか検証し、そのまま返す。
+
+    CONVERSATIONS_DIR配下のパス組み立てに使う前に必ず通すことで、
+    ディレクトリトラバーサルや意図しないパスへのアクセスを防ぐ。
+    """
+    if not isinstance(thread_id, str) or not _THREAD_ID_PATTERN.match(thread_id):
+        raise ValueError(f"不正なthread_idです: {thread_id!r}")
+    return thread_id
+
 
 def new_thread_id() -> str:
     """新しい会話スレッドのIDを生成する（「新しい会話」ボタンや初回アクセス時に使用）。"""
@@ -49,7 +65,7 @@ def save_conversation(question: str, answer: str, thread_id: str, is_fallback: b
     呼び出し側で ingest.sync_data_dir() を呼べば、そのままベクトルDBに反映される
     （このスレッド専用のナレッジとして、他のスレッドからは検索されない）。
     """
-    thread_dir = CONVERSATIONS_DIR / thread_id
+    thread_dir = CONVERSATIONS_DIR / _validate_thread_id(thread_id)
     thread_dir.mkdir(parents=True, exist_ok=True)
 
     now = datetime.now()
@@ -129,7 +145,7 @@ def load_conversation(thread_id: str) -> list[dict]:
     過去スレッドを再開する際、チャット画面に会話履歴を再現するために使う。
     各要素は {"question": str, "answer": str} の形式。
     """
-    thread_dir = CONVERSATIONS_DIR / thread_id
+    thread_dir = CONVERSATIONS_DIR / _validate_thread_id(thread_id)
     if not thread_dir.exists():
         return []
 
@@ -145,9 +161,7 @@ def conversation_count(thread_id: str | None = None) -> int:
 
     thread_id を指定すればそのスレッドのみ、省略すれば全スレッド合計を返す。
     """
-    if not CONVERSATIONS_DIR.exists():
-        return 0
-    target_dir = CONVERSATIONS_DIR / thread_id if thread_id else CONVERSATIONS_DIR
+    target_dir = CONVERSATIONS_DIR / _validate_thread_id(thread_id) if thread_id else CONVERSATIONS_DIR
     if not target_dir.exists():
         return 0
     return sum(1 for f in target_dir.rglob("*.md") if f.is_file())
