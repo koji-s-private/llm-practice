@@ -4,7 +4,7 @@
 実際のベクトルDB・埋め込みモデルを使わずに検証する。
 - list_indexed_files() は manifest.json のみを読むため、_save_manifest() で
   manifest を直接組み立てて検証する。
-- delete_indexed_file() は safe_upload_dest() 経由でパスを解決し実ファイルを削除するだけで、
+- delete_indexed_file() は safe_relative_dest() 経由でパスを解決し実ファイルを削除するだけで、
   manifest・ベクトルDBには一切触れない設計のため、DATA_DIR上のファイル操作のみを確認する。
 """
 
@@ -131,9 +131,8 @@ def test_delete_indexed_file_does_not_touch_manifest_or_other_files(fake_data_en
     ],
 )
 def test_delete_indexed_file_rejects_directory_traversal_and_only_targets_data_dir(fake_data_env, traversal_name):
-    # パストラバーサルを試みる名前でも safe_upload_dest() 経由でベースネームのみに
-    # 無害化されるため、DATA_DIR外のファイルには一切触れない。
-    # 同名の（無害化後の）ファイルがDATA_DIR上に存在しなければFalseで何も削除されない。
+    # パストラバーサルを試みる相対パスはsafe_relative_dest()がDATA_DIR外と判定しNoneを返すため、
+    # DATA_DIR外のファイルには一切触れない。
     data_dir = fake_data_env
 
     result = ingest.delete_indexed_file(traversal_name)
@@ -143,37 +142,75 @@ def test_delete_indexed_file_rejects_directory_traversal_and_only_targets_data_d
     assert list(data_dir.iterdir()) == []
 
 
-def test_delete_indexed_file_with_traversal_name_only_deletes_basename_match_inside_data_dir(fake_data_env):
-    # トラバーサル名でも無害化されたベースネーム（例: "passwd"）がDATA_DIR上に
-    # たまたま存在する場合は、そのDATA_DIR配下のファイルだけが削除される
-    # （DATA_DIR外への到達は一切発生しないことの確認）。
+def test_delete_indexed_file_traversal_name_does_not_delete_decoy_file_inside_data_dir(fake_data_env):
+    # パストラバーサルを試みる相対パスは、DATA_DIR配下にたまたま同名（ベースネーム一致）の
+    # ファイルが存在していても、そのファイルを誤って削除しない（DATA_DIR外を指す時点でNoneを
+    # 返し、DATA_DIR配下のどのファイルにも一切触れないことの確認）。
     data_dir = fake_data_env
     decoy = data_dir / "passwd"
-    decoy.write_text("DATA_DIR配下にある安全なファイルです。", encoding="utf-8")
+    decoy.write_text("DATA_DIR配下にある無関係なファイルです。", encoding="utf-8")
 
     result = ingest.delete_indexed_file("../../etc/passwd")
 
-    assert result is True
-    assert not decoy.exists()
+    assert result is False
+    assert decoy.exists()
 
 
 def test_delete_indexed_file_returns_false_for_bare_dotdot(fake_data_env):
-    # ".." そのものはsafe_upload_dest()がNoneを返すため、path.exists()判定にすら進まずFalse
+    # ".." はDATA_DIRの親ディレクトリを指すため、safe_relative_dest()がNoneを返しFalseになる
     result = ingest.delete_indexed_file("..")
 
     assert result is False
 
 
-def test_delete_indexed_file_ignores_directory_component_and_targets_data_dir_root(fake_data_env):
-    # 境界値: ディレクトリを含む名前（例: サブフォルダ名を装ったもの）を渡しても
-    # ディレクトリ部分は無視され、DATA_DIR直下の同名ファイルのみが対象になる。
-    # これによりconversations/配下のファイル名を渡しても、直下に同名ファイルが
-    # 無ければ何も削除されない。
+def test_delete_indexed_file_deletes_file_in_subfolder(fake_data_env):
+    # サブフォルダ配下に手動配置されたファイル（list_indexed_files()がサブフォルダ込みの
+    # 相対パスで返すもの）を指定した場合、そのサブフォルダ内の対象ファイルが正しく削除される。
     data_dir = fake_data_env
-    (data_dir / "conversations").mkdir()
-    (data_dir / "conversations" / "log.md").write_text("会話ログです。", encoding="utf-8")
+    (data_dir / "manuals").mkdir()
+    target = data_dir / "manuals" / "spec.pdf"
+    target.write_text("サブフォルダ内の削除対象です。", encoding="utf-8")
 
-    result = ingest.delete_indexed_file("conversations/log.md")
+    result = ingest.delete_indexed_file("manuals/spec.pdf")
+
+    assert result is True
+    assert not target.exists()
+
+
+def test_delete_indexed_file_in_subfolder_does_not_delete_same_named_file_at_root(fake_data_env):
+    # サブフォルダ内のファイルを削除しても、DATA_DIR直下にある無関係な同名ファイルは
+    # 誤って削除されない（サブフォルダ部分を切り捨てて解決していた旧実装のバグの回帰確認）。
+    data_dir = fake_data_env
+    (data_dir / "manuals").mkdir()
+    target = data_dir / "manuals" / "spec.pdf"
+    target.write_text("サブフォルダ内の削除対象です。", encoding="utf-8")
+    decoy = data_dir / "spec.pdf"
+    decoy.write_text("DATA_DIR直下にある無関係な同名ファイルです。", encoding="utf-8")
+
+    result = ingest.delete_indexed_file("manuals/spec.pdf")
+
+    assert result is True
+    assert not target.exists()
+    assert decoy.exists()
+
+
+def test_delete_indexed_file_in_subfolder_returns_false_when_target_missing_even_if_root_file_exists(fake_data_env):
+    # サブフォルダ内の対象ファイルが存在しない場合、DATA_DIR直下に同名ファイルがあっても
+    # それを誤って削除せずFalseを返す（旧実装は誤ってdata_dir直下のファイルを削除・成功扱いしていた）。
+    data_dir = fake_data_env
+    (data_dir / "manuals").mkdir()
+    decoy = data_dir / "spec.pdf"
+    decoy.write_text("DATA_DIR直下にある無関係な同名ファイルです。", encoding="utf-8")
+
+    result = ingest.delete_indexed_file("manuals/spec.pdf")
 
     assert result is False
-    assert (data_dir / "conversations" / "log.md").exists()
+    assert decoy.exists()
+
+
+def test_delete_indexed_file_rejects_traversal_within_subfolder_path(fake_data_env):
+    # サブフォルダを経由してDATA_DIR外へ抜けようとするパス（例: "manuals/../../etc/passwd"）も
+    # safe_relative_dest()のDATA_DIR配下チェックにより拒否される。
+    result = ingest.delete_indexed_file("manuals/../../etc/passwd")
+
+    assert result is False
