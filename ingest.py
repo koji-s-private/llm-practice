@@ -44,6 +44,7 @@ from pathlib import Path
 
 from filelock import FileLock, Timeout
 from langchain_community.document_loaders import PyMuPDFLoader, TextLoader
+from langchain_core.documents import Document
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 
 from rag_chain import COLLECTION_NAME, GLOBAL_THREAD_ID, PERSIST_DIR, get_vectorstore
@@ -95,6 +96,14 @@ LOADERS = {
 # 1ページあたりの抽出文字数がこれ未満の場合、「うまくテキスト抽出できていない
 # （図解・スキャンPDFの疑いがある）」とみなしDoclingでの再解析を試みる。
 MIN_CHARS_PER_PAGE_FOR_FAST_PATH = 40
+
+# Doclingフォールバック（export_type=DOC_CHUNKS）が返す細切れのDocumentを、後段の
+# RecursiveCharacterTextSplitter（chunk_size=1000）に渡す前にまとめ直す際の目安文字数。
+# DOC_CHUNKSは段落・テーブルセルなど構造単位ごとに小さいDocumentを返すため、そのまま
+# splitterに渡すとほぼ素通しになりチャンクが細かくなりすぎる（後続splitterはDocumentを
+# またいでマージしない）。splitterのchunk_sizeと同じ値にすることで、Docling経由でも
+# 通常経路（PyMuPDF＋文字数ベース分割）に近いチャンク粒度になるようにする。
+DOCLING_CHUNK_MERGE_TARGET_CHARS = 1000
 
 # memory.save_conversation() が会話ログのMarkdownに書き込むメタデータ行を検出する正規表現。
 FALLBACK_METADATA_PATTERN = re.compile(r"^-\s*一般知識フォールバック:\s*true\s*$", re.MULTILINE)
@@ -224,15 +233,90 @@ def _load_pdf(path: Path, verbose: bool = True) -> list:
 
 
 def _load_pdf_with_docling(path: Path, verbose: bool = True) -> list:
-    """Doclingでの再解析を試みる。失敗した場合は空リストを返す（例外は送出しない）。"""
+    """Doclingでの再解析を試みる。失敗した場合は空リストを返す（例外は送出しない）。
+
+    export_type=DOC_CHUNKS を使うことで、PyMuPDFLoaderと同様にDocumentごとに
+    ページ番号相当のメタデータ（page）を付与できる。ファイル全体を1つのMarkdown文書として
+    返す export_type=MARKDOWN では、Docling内部のHybridChunkerによるチャンク分割を経ないため
+    dl_meta（ページ等のprovenance情報）自体が付与されず、ページ境界の情報が失われてしまう。
+    DOC_CHUNKSが返す個々のDocumentは段落・テーブルセル単位と細かいため、後段の
+    RecursiveCharacterTextSplitterに渡す前に_merge_docling_chunks()である程度まとめておく。
+    """
     try:
-        docling_docs = DoclingLoader(file_path=str(path), export_type=ExportType.MARKDOWN).load()
+        docling_docs = DoclingLoader(file_path=str(path), export_type=ExportType.DOC_CHUNKS).load()
     except Exception as e:
         _log_progress(verbose, "    → Docling解析に失敗しました（%s）", e)
         return []
     for doc in docling_docs:
         doc.metadata.setdefault("source", str(path))
-    return docling_docs
+    return _merge_docling_chunks(docling_docs)
+
+
+def _merge_docling_chunks(docling_docs: list, target_chars: int = DOCLING_CHUNK_MERGE_TARGET_CHARS) -> list[Document]:
+    """DOC_CHUNKSが返す細切れのDocumentを、target_chars程度になるまで隣接結合する。
+
+    先頭から順にDocumentのpage_contentを"\\n\\n"で連結していき、次のDocumentを加えると
+    target_charsを超える場合はそこで区切り、新しいグループを開始する（構造的な区切りは
+    考慮せず、文字数のみで区切る単純な方式。後段のRecursiveCharacterTextSplitterが
+    最終的な文単位の分割を担うため、ここでは粒度を揃えることだけを目的とする）。
+    各グループのpageメタデータは、グループ内に含まれる各Documentの元のページ番号
+    （_extract_docling_page()の結果）のうち最小値（最初に登場したページ）を採用する。
+    グループ内に有効なページ番号が1つも無い場合はpageメタデータを付与しない。
+    """
+    merged_docs: list[Document] = []
+    source = docling_docs[0].metadata.get("source") if docling_docs else None
+    buffer_texts: list[str] = []
+    buffer_pages: list[int] = []
+    buffer_len = 0
+
+    def flush() -> None:
+        if not buffer_texts:
+            return
+        metadata = {}
+        if source is not None:
+            metadata["source"] = source
+        if buffer_pages:
+            metadata["page"] = min(buffer_pages)
+        merged_docs.append(Document(page_content="\n\n".join(buffer_texts), metadata=metadata))
+
+    for doc in docling_docs:
+        text = doc.page_content
+        page = _extract_docling_page(doc.metadata)
+        if buffer_texts and buffer_len + len(text) > target_chars:
+            flush()
+            buffer_texts, buffer_pages, buffer_len = [], [], 0
+        buffer_texts.append(text)
+        if page is not None:
+            buffer_pages.append(page)
+        buffer_len += len(text)
+
+    flush()
+    return merged_docs
+
+
+def _extract_docling_page(metadata: dict) -> int | None:
+    """DoclingLoader(export_type=DOC_CHUNKS)が付与するdl_metaから代表ページ番号を取り出す。
+
+    dl_meta["doc_items"]の各要素はprov（ページ番号・座標などのprovenance情報）のリストを持ち、
+    1チャンクが複数ページにまたがることもある。ここでは表示用に最小のpage_no（最初のページ）を
+    代表値として採用する。Doclingのpage_noは1始まりのため、PyMuPDFLoaderが付与するpage
+    （0始まり、app.pyの_format_source_label()が+1して表示する）と揃うよう1引いて返す。
+    dl_metaやdoc_items・provが存在しない、page_noが1未満（想定外の値）、または想定外の形式の
+    場合はNoneを返す（呼び出し元はpageメタデータを付与せず、ページ番号非表示のまま扱う）。
+    """
+    dl_meta = metadata.get("dl_meta")
+    if not isinstance(dl_meta, dict):
+        return None
+    page_numbers = [
+        prov["page_no"]
+        for item in dl_meta.get("doc_items", [])
+        if isinstance(item, dict)
+        for prov in item.get("prov", [])
+        if isinstance(prov, dict) and isinstance(prov.get("page_no"), int) and prov["page_no"] >= 1
+    ]
+    if not page_numbers:
+        return None
+    return min(page_numbers) - 1
 
 
 def _thread_id_for(rel_path: str) -> str:
