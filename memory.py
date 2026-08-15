@@ -23,16 +23,14 @@ CONVERSATIONS_DIR = Path(__file__).parent / "data" / "conversations"
 _QUESTION_HEADER = "## 質問\n\n"
 _ANSWER_HEADER = "\n\n## 回答\n\n"
 
-# save_conversation()が書き込む「質問文字数」「回答文字数」のメタデータ行。
-# 質問・回答本文そのものに"## 質問"や"## 回答"という文字列が偶然含まれていても、
-# 見出しの位置を正規表現でパターンマッチするのではなく、あらかじめ記録しておいた
-# 文字数ぶんだけをそのまま切り出すことで本文の中身に依存せず正確に復元できる。
+# save_conversation()が書き込む「質問文字数」「回答文字数」のメタデータ行。見出しの
+# 正規表現マッチではなく記録済みの文字数ぶんをそのまま切り出すことで、本文中に
+# "## 質問"/"## 回答"に類する文字列が偶然含まれていても正確に復元できる。
 _QUESTION_LENGTH_PATTERN = re.compile(r"^- 質問文字数: (\d+)$", re.MULTILINE)
 _ANSWER_LENGTH_PATTERN = re.compile(r"^- 回答文字数: (\d+)$", re.MULTILINE)
 
-# 文字数メタデータが無い旧形式ファイル向けのフォールバック。非貪欲マッチのため、
-# 質問・回答本文に"## 質問"/"## 回答"に類する文字列が含まれる場合は途中で切れうるが、
-# 後方互換のため残す。
+# 文字数メタデータが無い旧形式ファイル向けのフォールバック（非貪欲マッチのため
+# 本文に類似の文字列が含まれる場合は途中で切れうるが、後方互換のため残す）。
 _QUESTION_PATTERN = re.compile(r"## 質問\n\n(.*?)\n\n## 回答", re.DOTALL)
 _ANSWER_PATTERN = re.compile(r"## 回答\n\n(.*)", re.DOTALL)
 

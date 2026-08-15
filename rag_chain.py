@@ -42,35 +42,23 @@ CHUNK_SIZE = 1000
 # 無料・ローカルで動く埋め込みモデル（LangChain公式ドキュメントのデフォルト例と同じ）
 EMBEDDING_MODEL_NAME = "sentence-transformers/all-mpnet-base-v2"
 
-# 一次検索（ベクトル類似度）で候補として広めに拾ってくる件数。
-# 最終的な絞り込みは後段のLLM採点（_grade_relevance）に任せるため、ここは再現率重視で広めにとる。
-#
-# scripts/evaluate_retrieval.py でCANDIDATE_K=4/8/12、
-# RECALL_DISTANCE_THRESHOLD=1.0/1.3/1.5の組み合わせを日本語の評価セット（質問と正解ドキュメント
-# のペア）で比較した結果、8→12にしても再現率は伸びず（同じ再現率のまま候補だけ増えて適合率が
-# 悪化する）、4に絞ると再現率が明確に落ちる（正解ドキュメントを取りこぼす）ことを確認したため、
-# 現状の8を維持する。
+# 一次検索（ベクトル類似度）で候補として広めに拾ってくる件数。最終的な絞り込みは
+# 後段のLLM採点（_grade_relevance）に任せるため、ここは再現率重視で広めにとる。
+# scripts/evaluate_retrieval.pyでの評価（4/8/12を比較）では、8→12にしても再現率は
+# 伸びず適合率が悪化する一方、4に絞ると再現率が明確に落ちるため8を維持している。
 CANDIDATE_K = 8
 
-# 一次検索の粗いフィルタ用のL2距離上限（ここでは明らかに無関係なものだけを間引き、
-# 最終判定はLLM採点に任せるため、単独のしきい値だったときより緩めにしている）。
-# 正規化済み埋め込み同士のL2距離は0（完全一致）〜2（真逆）の範囲。
-#
-# scripts/evaluate_retrieval.py での評価では、1.0/1.3/1.5のどの値でも
-# 適合率・再現率がほぼ変化しなかった（日本語の短文では、無関係な文書と関連文書のL2距離が
-# 大きく重なり合い、この範囲のしきい値では実質的にほとんど間引けていない）。
-# つまりこの段階の距離しきい値だけでは十分な精度が出せず、後段のLLM採点（_grade_relevance）
-# が精度を担保する設計は妥当と判断し、より厳しい値に変更するメリットが確認できなかったため
-# 現状の1.3を維持する（下げても再現率・適合率が改善しない一方、実データでの取りこぼしリスクは
-# 残るため、緩めの値を保つ）。
+# 一次検索の粗いフィルタ用のL2距離上限（明らかに無関係なものだけを間引き、最終判定は
+# LLM採点に任せる）。正規化済み埋め込み同士のL2距離は0（完全一致）〜2（真逆）の範囲。
+# scripts/evaluate_retrieval.pyでの評価では1.0/1.3/1.5のどの値でも精度がほぼ
+# 変化しなかった（日本語の短文では距離がこの範囲でほとんど分離できない）ため、
+# 取りこぼしリスクの小さい緩めの1.3を維持している。
 RECALL_DISTANCE_THRESHOLD = 1.3
 
 # LLM採点（_grade_relevance）で「関連あり」と判定された文書のうち、実際にretrieve_contextが
-# 返す上限件数。narrowedは一次検索（ベクトル類似度）のスコア順に並んでおり、_grade_relevanceは
-# その順序を保ったままインデックスを返す仕様なので、先頭N件を採用すれば類似度が高い順の
-# 上位N件を返すことになる。CANDIDATE_K件（最大8件）すべてが関連ありと判定されると
-# CHUNK_SIZE（文字ベース）と相まって検索結果だけで数千トークンに達し得るため、
-# 会話履歴とは別にコンテキスト長を圧迫しないよう上限を設ける。
+# 返す上限件数。narrowedは一次検索のスコア順に並んでおり、_grade_relevanceはその順序を
+# 保ったままインデックスを返すため、先頭N件が類似度上位N件になる。CANDIDATE_K件すべてが
+# 関連ありと判定された場合でも、会話履歴とは別にコンテキスト長を圧迫しないよう上限を設ける。
 MAX_RETRIEVED_DOCS = 4
 
 # retrieve_contextが返す1件あたりの本文の文字数上限。CHUNK_SIZE文字をそのまま含めると
@@ -210,15 +198,11 @@ def build_agent(thread_id: str = GLOBAL_THREAD_ID):
         ベクトル類似度で候補を広めに集めたあと、LLMによる採点で本当に関連するものだけに
         絞り込む（reranking）。見つからない場合は、質問を言い換えて再度呼び出してよい。
         """
-        # スコアはChromaのL2距離（小さいほど類似）。埋め込みは正規化済み（get_embeddings参照）なので
-        # 0〜2の範囲に収まる。ここではRECALL_DISTANCE_THRESHOLD未満を「候補」として粗く間引くだけで、
-        # 最終判定は _grade_relevance に任せる。
-        # is_fallback=Trueの会話ログ（一般知識フォールバックで回答したもの）は、
-        # 根拠のない回答が以降の検索結果として再ヒットし、あたかもドキュメントの裏付けが
-        # あるかのように扱われてしまう（ハルシネーションの自己増幅）ことを防ぐため除外する。
-        # 完全一致の{"is_fallback": False}ではなく{"$ne": True}を使うのは、is_fallbackメタデータ
-        # を持たない既存ドキュメント（このフィルタ導入前に取り込み済みのチャンク）まで誤って
-        # 除外しないようにするため。
+        # スコアはChromaのL2距離（小さいほど類似、正規化済み埋め込みのため0〜2の範囲）。
+        # is_fallback=Trueの会話ログ（一般知識フォールバック回答）は、根拠のない回答が
+        # 以降の検索で再ヒットしないよう除外する。{"is_fallback": False}ではなく
+        # {"$ne": True}にするのは、フィルタ導入前の既存チャンク（メタデータ無し）を
+        # 誤って除外しないため。
         candidates = vector_store.similarity_search_with_score(
             query,
             k=CANDIDATE_K,
@@ -232,8 +216,7 @@ def build_agent(thread_id: str = GLOBAL_THREAD_ID):
         narrowed = [doc for doc, score in candidates if score < RECALL_DISTANCE_THRESHOLD]
 
         relevant_idx = _grade_relevance(query, narrowed)
-        # relevant_idxはnarrowed（類似度スコア順）のインデックスを昇順に返す仕様のため、
-        # 先頭からMAX_RETRIEVED_DOCS件に絞れば類似度が高い順の上位N件になる。
+        # relevant_idxは類似度スコア順を保ったインデックスのため、先頭N件で上位N件になる。
         retrieved_docs = [narrowed[i] for i in relevant_idx][:MAX_RETRIEVED_DOCS]
 
         if not retrieved_docs:
