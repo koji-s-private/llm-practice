@@ -47,6 +47,7 @@ pytest
 | `test_agent_workflow_dependency_setup.py` | `.github/workflows/ai-team.yml` / `pr-conflict-guard.yml` / `ci-failure-guard.yml` | AIチームのサブエージェント向けワークフローが、checkout直後に依存パッケージを事前インストールする構成になっていることの静的検証 |
 | `test_theme_config.py` | `.streamlit/config.toml` / `app.py` | Streamlitのカスタムテーマ設定と `st.set_page_config` の引数（page_title/page_icon/layout）の静的検証 |
 | `test_examples_scripts.py` | `examples/extract_text.py` / `examples/models_and_prompts.py` | チュートリアル用スクリプトが `examples/` 配下に存在すること・importだけではLLM呼び出し等の副作用が起きないことの検証 |
+| `test_readme_sync.py` | `tests/README.md` | この一覧表に記載されたファイル名集合と `tests/` 配下に実在する `test_*.py` ファイル名集合が一致すること（表の陳腐化検知）のテスト |
 
 ## 新しいテストを追加する際の命名規則
 
