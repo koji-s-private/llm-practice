@@ -1394,7 +1394,7 @@ def test_upload_invalid_filename_shows_error_without_warning(tmp_path, monkeypat
 
 
 def test_upload_not_reprocessed_on_unrelated_new_chat_button_rerun(tmp_path, monkeypatch):
-    """異常系境界値（回帰防止, Issue #155）: st.file_uploaderの値はユーザーがアップロード欄を
+    """異常系境界値: st.file_uploaderの値はユーザーがアップロード欄を
     操作するかページをリロードするまでセッションに保持され続けるStreamlitの仕様のため、
     「🆕 新しい会話を始める」のようなアップロードと無関係な操作で再実行されても、
     同じファイルが繰り返し保存・再インデックスされない（report (2).txt, report (3).txt ...
@@ -1428,7 +1428,7 @@ def test_upload_not_reprocessed_on_unrelated_new_chat_button_rerun(tmp_path, mon
 
 
 def test_upload_not_reprocessed_on_unrelated_chat_send_rerun(tmp_path, monkeypatch):
-    """異常系境界値（回帰防止, Issue #155）: チャット送信によるスクリプト再実行でも、
+    """異常系境界値: チャット送信によるスクリプト再実行でも、
     アップロード欄を操作していなければ同じファイルが再保存・再インデックスされない。"""
     data_dir = tmp_path / "data"
     monkeypatch.setattr(ingest, "DATA_DIR", data_dir)
