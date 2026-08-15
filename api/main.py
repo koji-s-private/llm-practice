@@ -60,13 +60,10 @@ def health() -> dict:
 
 # --- thread_id のバリデーション（パストラバーサル対策） ---
 
-# memory.py の save_conversation() / conversation_count() は thread_id をそのまま
-# `CONVERSATIONS_DIR / thread_id` としてファイルシステムパスに組み込む。これまで
-# thread_id は app.py（Streamlit版）が new_thread_id()（uuid4().hex[:8]）で生成した
-# サーバー内部値のみだったが、本API層ではHTTPリクエストの生の thread_id が直接渡って
-# くるため、絶対パスや `../` を含む値を許可すると data/conversations/ の外への
-# 任意ファイル書き込み・情報漏えいにつながる。ingest.py の safe_upload_dest() と
-# 同様の考え方で、許可する文字種を制限した上で resolve() 後の実パスも念のため検証する。
+# memory.py は thread_id をそのまま `CONVERSATIONS_DIR / thread_id` としてパスに組み込む。
+# 本API層ではHTTPリクエストの生のthread_idが直接渡ってくるため、絶対パスや`../`を含む値を
+# 許可するとdata/conversations/の外への任意ファイル書き込みにつながる。ingest.pyの
+# safe_upload_dest()と同様に、許可文字種を制限した上でresolve()後の実パスも検証する。
 _THREAD_ID_PATTERN = re.compile(r"^[A-Za-z0-9_-]+$")
 
 # new_thread_id() が生成する値（uuid4().hex[:8]、8文字）に対して十分な余裕を持たせつつ、
