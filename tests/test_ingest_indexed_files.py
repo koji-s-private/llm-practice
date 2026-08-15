@@ -80,11 +80,59 @@ def test_list_indexed_files_excludes_legacy_flat_conversation_log(fake_data_env)
     assert ingest.list_indexed_files() == []
 
 
-def test_list_indexed_files_chunk_count_is_zero_when_chunk_ids_missing(fake_data_env):
-    # 境界値: chunk_idsキー自体が無いエントリでも例外にならずchunk_count=0を返す
-    ingest._save_manifest({"empty.txt": {"mtime": 1.0, "size": 0}})
+def test_list_indexed_files_excludes_ghost_entry_without_chunk_ids(fake_data_env):
+    # delete()失敗時にpending_delete_chunk_idsだけを持ち越した「ゴーストエントリ」
+    # （chunk_idsキー自体が無いエントリ）は、data/上は既に削除済みのファイルのため一覧から除外される。
+    ingest._save_manifest(
+        {
+            "doc.txt": {"mtime": 1.0, "size": 10, "chunk_ids": ["c1"]},
+            "ghost.txt": {"pending_delete_chunk_ids": ["c2"]},
+        }
+    )
+
+    assert ingest.list_indexed_files() == [{"name": "doc.txt", "chunk_count": 1}]
+
+
+def test_list_indexed_files_includes_entry_with_empty_chunk_ids(fake_data_env):
+    # chunk_idsキー自体は存在するが空リストの場合（0チャンクのファイル等）は
+    # ゴーストエントリではないため一覧に含める
+    ingest._save_manifest({"empty.txt": {"mtime": 1.0, "size": 0, "chunk_ids": []}})
 
     assert ingest.list_indexed_files() == [{"name": "empty.txt", "chunk_count": 0}]
+
+
+def test_list_indexed_files_excludes_multiple_ghost_entries_mixed_with_normal_files(fake_data_env):
+    # ゴーストエントリが複数・通常エントリが複数混在していても、通常エントリだけが
+    # ファイル名昇順で正しく残ることを確認する（1件ずつの組み合わせだけでなく複数件でも
+    # フィルタ条件が壊れないことの回帰防止）。
+    ingest._save_manifest(
+        {
+            "c.txt": {"mtime": 1.0, "size": 10, "chunk_ids": ["c1"]},
+            "ghost_a.txt": {"pending_delete_chunk_ids": ["g1"]},
+            "a.txt": {"mtime": 2.0, "size": 20, "chunk_ids": ["c2", "c3"]},
+            "ghost_b.txt": {"pending_delete_chunk_ids": ["g2", "g3"]},
+        }
+    )
+
+    result = ingest.list_indexed_files()
+
+    assert result == [
+        {"name": "a.txt", "chunk_count": 2},
+        {"name": "c.txt", "chunk_count": 1},
+    ]
+
+
+def test_list_indexed_files_excludes_ghost_entry_with_empty_pending_delete_chunk_ids(fake_data_env):
+    # 境界値: pending_delete_chunk_ids自体が空リスト（あるいはキーが無い）の
+    # ゴーストエントリでも、"chunk_ids"キーが無い時点で例外にならず除外される。
+    ingest._save_manifest(
+        {
+            "ghost_empty_pending.txt": {"pending_delete_chunk_ids": []},
+            "ghost_no_pending_key.txt": {},
+        }
+    )
+
+    assert ingest.list_indexed_files() == []
 
 
 # --- delete_indexed_file() ---

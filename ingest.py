@@ -638,12 +638,16 @@ def list_indexed_files() -> list[dict]:
     会話ログ（data/conversations/配下）はユーザーがアップロード・削除で管理する対象ではないため
     除外し、data/直下のドキュメントのみを返す。戻り値はファイル名昇順のリストで、各要素は
     {"name": ファイル名, "chunk_count": チャンク数} の辞書。
+
+    delete()失敗時にpending_delete_chunk_idsだけを持ち越した「ゴーストエントリ」
+    （"chunk_ids"キー自体を持たないエントリ）は、data/上は既に削除済みでバックグラウンドの
+    再試行を待っているだけの内部状態のため、ユーザー向けの一覧には含めない。
     """
     manifest = _load_manifest()
     return [
-        {"name": name, "chunk_count": len(entry.get("chunk_ids", []))}
+        {"name": name, "chunk_count": len(entry["chunk_ids"])}
         for name, entry in sorted(manifest.items())
-        if Path(name).parts[0] != CONVERSATIONS_DIRNAME
+        if Path(name).parts[0] != CONVERSATIONS_DIRNAME and "chunk_ids" in entry
     ]
 
 
