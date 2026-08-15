@@ -272,10 +272,18 @@ def test_windowed_history_returns_empty_list_as_is():
     assert app._windowed_history([]) == []
 
 
-def test_windowed_history_drops_oldest_messages_when_over_budget():
+def test_windowed_history_drops_oldest_messages_when_over_budget(monkeypatch):
     """異常系: トークン予算を超える長い会話では、
-    古いメッセージが間引かれ、先頭が必ずHumanMessageになる。"""
+    古いメッセージが間引かれ、先頭が必ずHumanMessageになる。
+
+    conftest.pyのダミー環境変数によりデフォルトのCURRENT_PROVIDERは"anthropic"
+    （予算50000トークン）になっており、以下の会話量（約8000トークン相当）では
+    間引きが発生しない。ここではOllama利用時の予算（デフォルト設定で約3192
+    トークン）を明示的に使うことで、間引きが発生する条件を安定して再現する。"""
     import app
+    import setup
+
+    monkeypatch.setattr(setup, "CURRENT_PROVIDER", "ollama")
 
     long_text = "あ" * 2000  # 概算で500トークン程度
     messages = []
@@ -314,15 +322,23 @@ def test_windowed_history_does_not_mutate_input_list():
 
 
 def test_chat_streaming_sends_windowed_history_to_agent(monkeypatch):
-    """正常系: 会話が長くなり既定のトークン予算(MAX_HISTORY_TOKENS)を超えると、
+    """正常系: 会話が長くなりOllama利用時のトークン予算を超えると、
     agent.stream()に渡すメッセージ一覧が実際に間引かれ、画面表示用の
-    st.session_state.messagesはフルの履歴を保持し続ける（送信分のみが絞り込まれる）。"""
+    st.session_state.messagesはフルの履歴を保持し続ける（送信分のみが絞り込まれる）。
+
+    conftest.pyのダミー環境変数によりデフォルトのCURRENT_PROVIDERは"anthropic"
+    （予算50000トークン）になっており、以下の会話量（約8000トークン相当）では
+    間引きが発生しない。ここではOllama利用時の予算（デフォルト設定で約3192
+    トークン）を明示的に使うことで、間引きが発生する条件を安定して再現する。"""
+    import setup
+
+    monkeypatch.setattr(setup, "CURRENT_PROVIDER", "ollama")
     fake_agent = _FakeAgent(answer="短い回答")
     monkeypatch.setattr(rag_chain, "build_agent", lambda thread_id=None: fake_agent)
 
     at = _run_app()
     # 概算で1メッセージあたり数百トークンになる長さの質問を複数ターン送り、
-    # 既定予算(3000トークン)を確実に超えさせる。
+    # Ollama利用時の既定予算(約3192トークン)を確実に超えさせる。
     long_question = "あ" * 2000
     turn_count = 8
     for i in range(turn_count):
@@ -336,6 +352,154 @@ def test_chat_streaming_sends_windowed_history_to_agent(monkeypatch):
     last_call_messages = fake_agent.stream_calls[-1]["messages"]
     assert len(last_call_messages) < turn_count * 2 + 1  # 全履歴+今回の質問 より少ない
     assert not any("質問0" in getattr(m, "content", "") for m in last_call_messages)
+
+
+# --- 1c. プロバイダごとのトークン予算（_history_token_budget） ---
+
+
+def test_history_token_budget_anthropic_uses_api_provider_budget(monkeypatch):
+    """正常系: CURRENT_PROVIDERが"anthropic"の場合、API向けの大きい予算
+    （_API_PROVIDER_HISTORY_TOKENS）が使われる。"""
+    import app
+    import setup
+
+    monkeypatch.setattr(setup, "CURRENT_PROVIDER", "anthropic")
+
+    assert app._history_token_budget() == app._API_PROVIDER_HISTORY_TOKENS
+
+
+def test_history_token_budget_openai_uses_api_provider_budget(monkeypatch):
+    """正常系: CURRENT_PROVIDERが"openai"の場合も、Anthropicと同じくAPI向けの
+    大きい予算（_API_PROVIDER_HISTORY_TOKENS）が使われる。"""
+    import app
+    import setup
+
+    monkeypatch.setattr(setup, "CURRENT_PROVIDER", "openai")
+
+    assert app._history_token_budget() == app._API_PROVIDER_HISTORY_TOKENS
+
+
+def test_history_token_budget_ollama_derives_from_num_ctx(monkeypatch):
+    """正常系: CURRENT_PROVIDERが"ollama"の場合、予算はOLLAMA_NUM_CTXから
+    余白（_OLLAMA_CONTEXT_MARGIN_TOKENS）を差し引いた値になる。"""
+    import app
+    import setup
+
+    monkeypatch.setattr(setup, "CURRENT_PROVIDER", "ollama")
+    monkeypatch.setattr(setup, "OLLAMA_NUM_CTX", 8192)
+
+    assert app._history_token_budget() == 8192 - app._OLLAMA_CONTEXT_MARGIN_TOKENS
+
+
+def test_history_token_budget_ollama_tracks_num_ctx_changes(monkeypatch):
+    """正常系: OLLAMA_NUM_CTXを変更すると、Ollama利用時の予算もそれに追従する。"""
+    import app
+    import setup
+
+    monkeypatch.setattr(setup, "CURRENT_PROVIDER", "ollama")
+    monkeypatch.setattr(setup, "OLLAMA_NUM_CTX", 20000)
+
+    assert app._history_token_budget() == 20000 - app._OLLAMA_CONTEXT_MARGIN_TOKENS
+
+
+def test_history_token_budget_ollama_has_lower_bound_for_tiny_num_ctx(monkeypatch):
+    """境界値: OLLAMA_NUM_CTXが極端に小さく余白を差し引くと負値になる場合でも、
+    予算は下限(_OLLAMA_MIN_HISTORY_TOKENS)を下回らない。"""
+    import app
+    import setup
+
+    monkeypatch.setattr(setup, "CURRENT_PROVIDER", "ollama")
+    monkeypatch.setattr(setup, "OLLAMA_NUM_CTX", 100)
+
+    assert app._history_token_budget() == app._OLLAMA_MIN_HISTORY_TOKENS
+
+
+def test_history_token_budget_falls_back_when_provider_is_none(monkeypatch):
+    """異常系: CURRENT_PROVIDERが未設定(None、想定外のケース)の場合、
+    安全側のフォールバック予算(_FALLBACK_HISTORY_TOKENS)が使われる。"""
+    import app
+    import setup
+
+    monkeypatch.setattr(setup, "CURRENT_PROVIDER", None)
+
+    assert app._history_token_budget() == app._FALLBACK_HISTORY_TOKENS
+
+
+def test_history_token_budget_falls_back_for_unexpected_provider_value(monkeypatch):
+    """異常系: CURRENT_PROVIDERが既知の3値以外の想定外の文字列の場合も、
+    安全側のフォールバック予算(_FALLBACK_HISTORY_TOKENS)が使われる。"""
+    import app
+    import setup
+
+    monkeypatch.setattr(setup, "CURRENT_PROVIDER", "unknown-provider")
+
+    assert app._history_token_budget() == app._FALLBACK_HISTORY_TOKENS
+
+
+def test_windowed_history_keeps_all_messages_for_anthropic_over_ollama_budget(monkeypatch):
+    """正常系: CURRENT_PROVIDERが"anthropic"の場合、Ollama利用時の予算
+    （デフォルト設定で約3192トークン）を超える会話量でも、API向けの大きい
+    予算（50000トークン）の範囲内であれば間引かれず全メッセージが維持される。"""
+    import app
+    import setup
+
+    monkeypatch.setattr(setup, "CURRENT_PROVIDER", "anthropic")
+
+    long_text = "あ" * 2000  # 概算で500トークン程度
+    messages = []
+    for i in range(8):
+        messages.append(HumanMessage(content=f"質問{i}: {long_text}"))
+        messages.append(AIMessage(content=f"回答{i}: {long_text}"))
+
+    windowed = app._windowed_history(messages)
+
+    assert windowed == messages
+
+
+def test_windowed_history_ollama_budget_change_affects_drop_result(monkeypatch):
+    """正常系: CURRENT_PROVIDERが"ollama"の場合、OLLAMA_NUM_CTXを大きくすると
+    それに応じて予算も増え、同じ会話量でも間引きの発生有無が変わる。"""
+    import app
+    import setup
+
+    monkeypatch.setattr(setup, "CURRENT_PROVIDER", "ollama")
+
+    long_text = "あ" * 2000
+    messages = []
+    for i in range(8):
+        messages.append(HumanMessage(content=f"質問{i}: {long_text}"))
+        messages.append(AIMessage(content=f"回答{i}: {long_text}"))
+
+    # デフォルトのOLLAMA_NUM_CTX(8192、予算約3192トークン)では間引かれる
+    monkeypatch.setattr(setup, "OLLAMA_NUM_CTX", 8192)
+    assert len(app._windowed_history(messages)) < len(messages)
+
+    # OLLAMA_NUM_CTXを大きくして予算(約15000トークン)が会話量を上回れば間引かれない
+    monkeypatch.setattr(setup, "OLLAMA_NUM_CTX", 20000)
+    assert app._windowed_history(messages) == messages
+
+
+def test_windowed_history_uses_fallback_budget_when_provider_is_none(monkeypatch):
+    """異常系/境界値: CURRENT_PROVIDERが未設定(None)の場合、フォールバック予算
+    (_FALLBACK_HISTORY_TOKENS=3000相当、旧固定値MAX_HISTORY_TOKENSと同じ値)が
+    使われ、それを超える会話では従来通り古いメッセージが間引かれる。"""
+    import app
+    import setup
+
+    monkeypatch.setattr(setup, "CURRENT_PROVIDER", None)
+
+    long_text = "あ" * 2000
+    messages = []
+    for i in range(8):
+        messages.append(HumanMessage(content=f"質問{i}: {long_text}"))
+        messages.append(AIMessage(content=f"回答{i}: {long_text}"))
+
+    windowed = app._windowed_history(messages)
+
+    assert len(windowed) < len(messages)
+    assert isinstance(windowed[0], HumanMessage)
+    assert not any("質問0" in m.content for m in windowed)
+    assert any(f"質問{7}" in m.content for m in windowed)
 
 
 # --- 2. チャット処理中の agent.invoke() 呼び出し ---

@@ -51,10 +51,39 @@ st.caption("data/ フォルダにファイルを置くと自動でDBに反映さ
 
 
 # エージェントに送信する会話履歴のトークン予算（概算）。会話が長引くほど1ターンあたりの
-# 送信トークン量が増え続け、setup.OLLAMA_NUM_CTXで明示したコンテキスト長を超えると
-# 古い履歴やretrieve_contextの検索結果が暗黙的に切り捨てられてしまう。ここでは
-# システムプロンプト・検索結果・生成分の余白を残すため、履歴側の予算は控えめに設定する。
-MAX_HISTORY_TOKENS = 3000
+# 送信トークン量が増え続け、実際に使用中のモデルのコンテキスト長を超えると
+# 古い履歴やretrieve_contextの検索結果が暗黙的に切り捨てられてしまう。
+# Ollama利用時はsetup.OLLAMA_NUM_CTXで明示したコンテキスト長自体が小さいため、
+# システムプロンプト・検索結果・生成分の余白を残すため、その分を差し引いた
+# 保守的な値にする。
+_OLLAMA_CONTEXT_MARGIN_TOKENS = 5000
+# 極端に小さいOLLAMA_NUM_CTXが設定された場合でも、直近1往復程度は必ず送れるようにする下限。
+_OLLAMA_MIN_HISTORY_TOKENS = 500
+
+# Anthropic/OpenAI利用時は実際には数十万トークン規模のコンテキストウィンドウを持ち、
+# setup._build_model()もコンテキスト長を制限していないため、Ollamaよりも大きい予算を
+# 使える。ただし無制限にするとAPI利用料・レイテンシが増えるため、現実的な上限を設ける。
+_API_PROVIDER_HISTORY_TOKENS = 50000
+
+# setup.CURRENT_PROVIDERが未設定（想定外のケース）の場合のフォールバック値。
+# どのプロバイダが実際に使われているか判断できないため、安全側（保守的）に倒す。
+_FALLBACK_HISTORY_TOKENS = 3000
+
+
+def _history_token_budget() -> int:
+    """実行時点のsetup.CURRENT_PROVIDERに応じて、会話履歴に割り当てるトークン予算を決める。
+
+    setup._build_model()はOllama利用時のみnum_ctxでコンテキスト長を明示指定しており、
+    Anthropic/OpenAIへのフォールバック時はコンテキスト長を制限していない。そのため
+    プロバイダによって妥当な予算が大きく異なり、固定値では実際に使用中のプロバイダに
+    関わらず一律に会話履歴が切り詰められてしまう。
+    """
+    provider = setup.CURRENT_PROVIDER
+    if provider == "ollama":
+        return max(_OLLAMA_MIN_HISTORY_TOKENS, setup.OLLAMA_NUM_CTX - _OLLAMA_CONTEXT_MARGIN_TOKENS)
+    if provider in ("anthropic", "openai"):
+        return _API_PROVIDER_HISTORY_TOKENS
+    return _FALLBACK_HISTORY_TOKENS
 
 
 def _windowed_history(messages: list) -> list:
@@ -64,12 +93,13 @@ def _windowed_history(messages: list) -> list:
     直近のやりとりに絞り込む。start_on="human" により、絞り込んだ結果の先頭が必ず
     HumanMessageになるようにする（エージェントが要求する会話構造を壊さないため）。
     正確なトークン数ではなく高速な概算カウント（count_tokens_approximately）を使う。
+    予算自体は_history_token_budget()が実際に使用中のプロバイダに応じて動的に決める。
     """
     if not messages:
         return messages
     return trim_messages(
         messages,
-        max_tokens=MAX_HISTORY_TOKENS,
+        max_tokens=_history_token_budget(),
         token_counter="approximate",
         strategy="last",
         start_on="human",
