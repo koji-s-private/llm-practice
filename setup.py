@@ -35,9 +35,8 @@ OLLAMA_PORT = int(os.environ.get("OLLAMA_PORT", "11434"))
 OLLAMA_MODEL = os.environ.get("OLLAMA_MODEL", "llama3.1")
 
 # Ollamaはnum_ctx未指定だと多くのモデルで2048程度という小さいコンテキスト長がデフォルトになり、
-# 会話が数往復続くだけで古い履歴や検索結果（retrieve_context）が暗黙的に切り捨てられてしまう。
-# ここで明示的に大きめの値を指定する。8192は一般的なローカルPC（8GB〜のメモリ）でも
-# 現実的に動かせる範囲で、Ollama公式のデフォルト(2048)より十分な余裕を持たせた値。
+# 会話が数往復続くだけで古い履歴や検索結果が暗黙的に切り捨てられてしまうため明示的に指定する。
+# 8192は一般的なローカルPC（8GB〜のメモリ）でも現実的に動かせる範囲の値。
 OLLAMA_NUM_CTX = int(os.environ.get("OLLAMA_NUM_CTX", "8192"))
 
 # 現在実際に使用しているプロバイダ名（"ollama" / "anthropic" / "openai"）。
@@ -63,8 +62,8 @@ def _ollama_model_pulled() -> bool:
     初めて "model not found" のようなエラーになるため、事前に検出してフォールバックに回す。
     Ollamaのモデル名はタグ付き（例: "llama3.1:latest"）で返るため、OLLAMA_MODELに
     タグが無い場合は暗黙のデフォルトタグ "latest" を補って比較する。
-    APIへの到達自体に失敗した場合は判定不能なだけで「Ollamaが使えない」ことを意味しない
-    ため、過検出を避けて安全側（pull済みとみなしOllamaを使い続ける）に倒す。
+    APIへの到達自体に失敗した場合は判定不能なだけなので、過検出を避け安全側
+    （pull済みとみなしOllamaを使い続ける）に倒す。
     """
     url = f"http://{OLLAMA_HOST}:{OLLAMA_PORT}/api/tags"
     try:
@@ -73,8 +72,7 @@ def _ollama_model_pulled() -> bool:
     except (OSError, urllib.error.URLError, ValueError):
         return True
 
-    # 妥当なJSONでも最上位がオブジェクトでない場合（配列・文字列など）は
-    # スキーマ不一致として同様に判定不能扱いにする。
+    # 最上位がオブジェクトでない場合（配列・文字列など）もスキーマ不一致として判定不能扱いにする。
     if not isinstance(data, dict):
         return True
 
@@ -112,9 +110,8 @@ def _build_model():
 
     openai_key = os.environ.get("OPENAI_API_KEY")
     if not openai_key:
-        # 標準入力がTTYでない非対話環境（CI・Dockerのバックグラウンド起動等）では
-        # getpass()が入力を待ち続けて無限にブロック（環境によってはEOFErrorで異常終了）するため、
-        # その場合は対話入力を試みずに明確なエラーメッセージを出して即座に終了する。
+        # 非対話環境（CI・Dockerのバックグラウンド起動等）ではgetpass()が入力を待ち続けて
+        # 無限にブロックするため、その場合は対話入力を試みずエラーメッセージを出して終了する。
         if not sys.stdin.isatty():
             raise RuntimeError(
                 "Ollamaが起動しておらず、ANTHROPIC_API_KEY も OPENAI_API_KEY も未設定です。"

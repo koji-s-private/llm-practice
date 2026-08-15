@@ -42,8 +42,8 @@ app = FastAPI(
     description="ローカルRAGチャットアプリ「Doclore」のバックエンドAPI",
 )
 
-# Step2以降でVite開発サーバ（デフォルトはlocalhost:5173）から本APIを叩けるようにするための
-# CORS設定。ローカル開発用途のみを想定しており、ここに列挙したポート以外からのアクセスは許可しない。
+# Vite開発サーバ（デフォルトはlocalhost:5173）から本APIを叩けるようにするためのCORS設定。
+# ローカル開発用途のみを想定しており、ここに列挙したポート以外からのアクセスは許可しない。
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["http://localhost:5173", "http://127.0.0.1:5173"],
@@ -61,17 +61,14 @@ def health() -> dict:
 # --- thread_id のバリデーション（パストラバーサル対策） ---
 
 # memory.py の save_conversation() / conversation_count() は thread_id をそのまま
-# `CONVERSATIONS_DIR / thread_id` としてファイルシステムパスに組み込む。これまで
-# thread_id は app.py（Streamlit版）が new_thread_id()（uuid4().hex[:8]）で生成した
-# サーバー内部値のみだったが、本API層ではHTTPリクエストの生の thread_id が直接渡って
-# くるため、絶対パスや `../` を含む値を許可すると data/conversations/ の外への
-# 任意ファイル書き込み・情報漏えいにつながる。ingest.py の safe_upload_dest() と
-# 同様の考え方で、許可する文字種を制限した上で resolve() 後の実パスも念のため検証する。
+# `CONVERSATIONS_DIR / thread_id` としてファイルシステムパスに組み込む。本API層では
+# HTTPリクエストの生の thread_id が直接渡ってくるため、絶対パスや `../` を含む値を
+# 許可すると data/conversations/ の外への任意ファイル書き込み・情報漏えいにつながる。
+# ingest.py の safe_upload_dest() と同様、許可文字種を制限した上でresolve()後の実パスも検証する。
 _THREAD_ID_PATTERN = re.compile(r"^[A-Za-z0-9_-]+$")
 
-# new_thread_id() が生成する値（uuid4().hex[:8]、8文字）に対して十分な余裕を持たせつつ、
+# new_thread_id() が生成する値（uuid4().hex[:8]、8文字）に十分な余裕を持たせつつ、
 # OSのファイル名長制限（一般的に255バイト程度）に触れないよう上限を設ける。
-# 英数字・アンダースコア・ハイフンのみなら1文字1バイトのため、この上限を超えることは無い。
 _THREAD_ID_MAX_LENGTH = 64
 
 
@@ -182,10 +179,9 @@ def _stream_chat_response(thread_id: str, message: str, history: list[ChatMessag
     （app.pyの `_stream_answer` と同じ方針）。
 
     AIMessageChunk.content はプロバイダによって型が異なる（OpenAIは常にstr、
-    Anthropicはtoolsをbindしている場合 [{"type": "text", "text": "..."}] のような
-    content blocksのlistで返る）。BaseMessage.text プロパティはstr/listいずれの形式でも
-    text系ブロックのみを結合した文字列を返してくれるため、素朴なgetattr(chunk, "content", "")
-    ではなくこちらを使い、プロバイダによらず本文（str）のみをSSEで送信する。
+    Anthropicはtoolsをbindしている場合はcontent blocksのlistで返る）ため、
+    str/listいずれの形式でもtext系ブロックのみを結合してくれるBaseMessage.textプロパティを使い、
+    プロバイダによらず本文（str）のみをSSEで送信する。
     """
     sources: list[Document] = []
     try:

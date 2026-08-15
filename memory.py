@@ -23,22 +23,18 @@ CONVERSATIONS_DIR = Path(__file__).parent / "data" / "conversations"
 _QUESTION_HEADER = "## 質問\n\n"
 _ANSWER_HEADER = "\n\n## 回答\n\n"
 
-# save_conversation()が書き込む「質問文字数」「回答文字数」のメタデータ行。
-# 質問・回答本文そのものに"## 質問"や"## 回答"という文字列が偶然含まれていても、
-# 見出しの位置を正規表現でパターンマッチするのではなく、あらかじめ記録しておいた
-# 文字数ぶんだけをそのまま切り出すことで本文の中身に依存せず正確に復元できる。
+# save_conversation()が書き込む「質問文字数」「回答文字数」のメタデータ行。あらかじめ
+# 記録した文字数ぶんだけを切り出すことで、本文に"## 質問"/"## 回答"という文字列が
+# 偶然含まれていても中身に依存せず正確に復元できる。
 _QUESTION_LENGTH_PATTERN = re.compile(r"^- 質問文字数: (\d+)$", re.MULTILINE)
 _ANSWER_LENGTH_PATTERN = re.compile(r"^- 回答文字数: (\d+)$", re.MULTILINE)
 
-# 文字数メタデータが無い旧形式ファイル向けのフォールバック。非貪欲マッチのため、
-# 質問・回答本文に"## 質問"/"## 回答"に類する文字列が含まれる場合は途中で切れうるが、
-# 後方互換のため残す。
+# 文字数メタデータが無い旧形式ファイル向けのフォールバック（非貪欲マッチのため途中で切れうるが後方互換のため残す）。
 _QUESTION_PATTERN = re.compile(r"## 質問\n\n(.*?)\n\n## 回答", re.DOTALL)
 _ANSWER_PATTERN = re.compile(r"## 回答\n\n(.*)", re.DOTALL)
 
 # new_thread_id()が生成するuuid hex文字列を含む、英数字・ハイフン・アンダースコアのみを許可する。
-# "/" や ".." のようなパス区切り・親ディレクトリ参照を含む値を拒否することで、将来thread_idに
-# 外部入力がそのまま渡されるようになってもパストラバーサルが起きないようにする。
+# 将来thread_idに外部入力がそのまま渡されるようになってもパストラバーサルが起きないようにする。
 _THREAD_ID_PATTERN = re.compile(r"^[A-Za-z0-9_-]+$")
 
 
@@ -70,9 +66,8 @@ def save_conversation(question: str, answer: str, thread_id: str, is_fallback: b
 
     is_fallback: ドキュメントに根拠が見つからず一般知識で回答した場合は True を渡す。
     Markdown本文にメタデータ行として書き込んでおき、ingest.sync_data_dir() が
-    チャンクのメタデータ(is_fallback)に反映する。これにより、根拠のない一般知識の
-    回答が以降の検索結果として再ヒットし、あたかもドキュメントの裏付けが
-    あるかのように扱われてしまうことを防ぐ（rag_chain.retrieve_context側で除外する）。
+    チャンクのメタデータ(is_fallback)に反映する。根拠のない回答が検索結果として
+    再ヒットし裏付けがあるかのように扱われることを防ぐ（rag_chain.retrieve_context側で除外）。
 
     戻り値: 保存したファイルのパス。
     呼び出し側で ingest.sync_data_dir() を呼べば、そのままベクトルDBに反映される
@@ -101,9 +96,8 @@ def _extract_qa(content: str) -> tuple[str, str]:
     """会話ログMarkdownの本文から質問・回答を抜き出す。
 
     「質問文字数」「回答文字数」のメタデータがあれば、見出しの直後からその文字数ぶんを
-    そのまま切り出す（質問・回答本文に"## 質問"/"## 回答"のような文字列が含まれていても、
-    正規表現の途中マッチに惑わされず正確に復元できる）。メタデータが無い、または見出しの
-    位置が見つからない場合（旧形式ファイル）は、従来通り正規表現ベースの抽出にフォールバックする。
+    そのまま切り出す。メタデータが無い、または見出しの位置が見つからない場合（旧形式
+    ファイル）は、従来通り正規表現ベースの抽出にフォールバックする。
     """
     q_len_match = _QUESTION_LENGTH_PATTERN.search(content)
     a_len_match = _ANSWER_LENGTH_PATTERN.search(content)
@@ -113,8 +107,8 @@ def _extract_qa(content: str) -> tuple[str, str]:
             q_start += len(_QUESTION_HEADER)
             q_end = q_start + int(q_len_match.group(1))
             a_start = content.find(_ANSWER_HEADER, q_end)
-            # 質問の直後に回答見出しが続かない場合（記録された文字数と本文がズレている等の
-            # 想定外のケース）は、位置がズレたまま切り出さずフォールバックに任せる。
+            # 質問の直後に回答見出しが続かない（記録文字数と本文がズレている等）場合は
+            # 切り出さずフォールバックに任せる。
             if a_start == q_end:
                 a_start += len(_ANSWER_HEADER)
                 a_end = a_start + int(a_len_match.group(1))
