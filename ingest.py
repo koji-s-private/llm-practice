@@ -47,7 +47,7 @@ from langchain_community.document_loaders import PyMuPDFLoader, TextLoader
 from langchain_core.documents import Document
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 
-from rag_chain import COLLECTION_NAME, GLOBAL_THREAD_ID, PERSIST_DIR, get_vectorstore
+from rag_chain import CHUNK_SIZE, COLLECTION_NAME, GLOBAL_THREAD_ID, PERSIST_DIR, get_vectorstore
 
 try:
     from langchain_docling import DoclingLoader
@@ -98,12 +98,12 @@ LOADERS = {
 MIN_CHARS_PER_PAGE_FOR_FAST_PATH = 40
 
 # Doclingフォールバック（export_type=DOC_CHUNKS）が返す細切れのDocumentを、後段の
-# RecursiveCharacterTextSplitter（chunk_size=1000）に渡す前にまとめ直す際の目安文字数。
+# RecursiveCharacterTextSplitter（chunk_size=CHUNK_SIZE）に渡す前にまとめ直す際の目安文字数。
 # DOC_CHUNKSは段落・テーブルセルなど構造単位ごとに小さいDocumentを返すため、そのまま
 # splitterに渡すとほぼ素通しになりチャンクが細かくなりすぎる（後続splitterはDocumentを
 # またいでマージしない）。splitterのchunk_sizeと同じ値にすることで、Docling経由でも
 # 通常経路（PyMuPDF＋文字数ベース分割）に近いチャンク粒度になるようにする。
-DOCLING_CHUNK_MERGE_TARGET_CHARS = 1000
+DOCLING_CHUNK_MERGE_TARGET_CHARS = CHUNK_SIZE
 
 # memory.save_conversation() が会話ログのMarkdownに書き込むメタデータ行を検出する正規表現。
 FALLBACK_METADATA_PATTERN = re.compile(r"^-\s*一般知識フォールバック:\s*true\s*$", re.MULTILINE)
@@ -459,7 +459,7 @@ def _add_single_conversation_file_locked(path: Path) -> str:
     """add_single_conversation_file()の本体（呼び出し元がファイルロックを取得済みであることが前提）。"""
     vector_store = get_vectorstore()
     manifest = _load_manifest()
-    splitter = RecursiveCharacterTextSplitter(chunk_size=1000, chunk_overlap=200)
+    splitter = RecursiveCharacterTextSplitter(chunk_size=CHUNK_SIZE, chunk_overlap=200)
 
     name = str(path.relative_to(DATA_DIR))
     status = _ingest_file(name, path, vector_store, manifest, splitter, verbose=False)
@@ -577,7 +577,7 @@ def _sync_data_dir_locked(verbose: bool) -> dict:
     """sync_data_dir()の本体（呼び出し元がファイルロックを取得済みであることが前提）。"""
     vector_store = get_vectorstore()
     manifest = _load_manifest()
-    splitter = RecursiveCharacterTextSplitter(chunk_size=1000, chunk_overlap=200)
+    splitter = RecursiveCharacterTextSplitter(chunk_size=CHUNK_SIZE, chunk_overlap=200)
 
     # data/ 直下だけでなく、data/conversations/ などのサブフォルダも再帰的に走査する
     current_files = {

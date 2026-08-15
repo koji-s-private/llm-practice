@@ -141,6 +141,83 @@ def test_grade_relevance_parses_fullwidth_colon_answer_prefix(monkeypatch):
     assert rag_chain._grade_relevance("質問", docs) == [0, 2]
 
 
+def test_grade_relevance_includes_content_beyond_300_chars_up_to_chunk_size(monkeypatch):
+    """リグレッションテスト。
+
+    候補文書の先頭300文字だけに切り詰めていると、質問に関連する記述が
+    301文字目以降にあるチャンクを正しく判定材料に使えない。ingest.pyのチャンクサイズ
+    （CHUNK_SIZE=1000）までは切り詰めずにプロンプトへ含めることを確認する。
+    """
+    marker = "ここに関連情報がある"
+    # 先頭300文字は無関係な前置きで埋め、301文字目以降に本当の関連情報を置く
+    content = ("前置き" * 100) + marker
+    assert len(content) > 300
+    docs = [_FakeDocument(content)]
+
+    captured_prompt = {}
+
+    def fake_invoke(prompt):
+        captured_prompt["value"] = prompt
+        return SimpleNamespace(content="回答:1")
+
+    monkeypatch.setattr(rag_chain, "model", SimpleNamespace(invoke=fake_invoke))
+
+    rag_chain._grade_relevance("質問", docs)
+
+    assert marker in captured_prompt["value"]
+
+
+def test_grade_relevance_includes_content_at_exactly_chunk_size_boundary(monkeypatch):
+    """境界値テスト。
+
+    関連情報がちょうど1000文字目（CHUNK_SIZEの末尾）にかかっている場合でも
+    切り詰められずプロンプトに含まれることを確認する。
+    """
+    marker = "末尾の関連情報"
+    padding = "あ" * (rag_chain.CHUNK_SIZE - len(marker))
+    content = padding + marker
+    assert len(content) == rag_chain.CHUNK_SIZE
+    docs = [_FakeDocument(content)]
+
+    captured_prompt = {}
+
+    def fake_invoke(prompt):
+        captured_prompt["value"] = prompt
+        return SimpleNamespace(content="回答:1")
+
+    monkeypatch.setattr(rag_chain, "model", SimpleNamespace(invoke=fake_invoke))
+
+    rag_chain._grade_relevance("質問", docs)
+
+    assert marker in captured_prompt["value"]
+
+
+def test_grade_relevance_truncates_content_beyond_chunk_size(monkeypatch):
+    """境界値テスト。
+
+    CHUNK_SIZE（1000文字）を超えるチャンクは、依然としてCHUNK_SIZEで
+    切り詰められ、それ以降の内容はプロンプトに含まれないことを確認する
+    （切り詰め自体を撤廃したわけではないことのリグレッション確認）。
+    """
+    marker = "1000文字より後ろの情報"
+    padding = "あ" * rag_chain.CHUNK_SIZE
+    content = padding + marker
+    assert len(content) > rag_chain.CHUNK_SIZE
+    docs = [_FakeDocument(content)]
+
+    captured_prompt = {}
+
+    def fake_invoke(prompt):
+        captured_prompt["value"] = prompt
+        return SimpleNamespace(content="回答:1")
+
+    monkeypatch.setattr(rag_chain, "model", SimpleNamespace(invoke=fake_invoke))
+
+    rag_chain._grade_relevance("質問", docs)
+
+    assert marker not in captured_prompt["value"]
+
+
 # --- retrieve_context (build_agent の中で作られる検索ツール) ---
 
 
