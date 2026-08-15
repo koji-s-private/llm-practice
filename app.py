@@ -50,23 +50,16 @@ st.markdown("##### あなたの資料から、迷わず答えへ。")
 st.caption("data/ フォルダにファイルを置くと自動でDBに反映され、AIエージェントが検索しながら回答します。")
 
 
-# エージェントに送信する会話履歴のトークン予算（概算）。会話が長引くほど1ターンあたりの
-# 送信トークン量が増え続け、実際に使用中のモデルのコンテキスト長を超えると
-# 古い履歴やretrieve_contextの検索結果が暗黙的に切り捨てられてしまう。
-# Ollama利用時はsetup.OLLAMA_NUM_CTXで明示したコンテキスト長自体が小さいため、
-# システムプロンプト・検索結果・生成分の余白を残すため、その分を差し引いた
-# 保守的な値にする。
+# 会話履歴の送信トークン予算。Ollamaはsetup.OLLAMA_NUM_CTXでコンテキスト長が小さく
+# 制限されるため、システムプロンプト・検索結果・生成分の余白を差し引いた保守的な値にする。
 _OLLAMA_CONTEXT_MARGIN_TOKENS = 5000
-# 極端に小さいOLLAMA_NUM_CTXが設定された場合でも、直近1往復程度は必ず送れるようにする下限。
 _OLLAMA_MIN_HISTORY_TOKENS = 500
 
-# Anthropic/OpenAI利用時は実際には数十万トークン規模のコンテキストウィンドウを持ち、
-# setup._build_model()もコンテキスト長を制限していないため、Ollamaよりも大きい予算を
-# 使える。ただし無制限にするとAPI利用料・レイテンシが増えるため、現実的な上限を設ける。
+# Anthropic/OpenAIはコンテキスト長を制限していないためOllamaより大きい予算を使えるが、
+# 無制限にするとAPI利用料・レイテンシが増えるため現実的な上限を設ける。
 _API_PROVIDER_HISTORY_TOKENS = 50000
 
-# setup.CURRENT_PROVIDERが未設定（想定外のケース）の場合のフォールバック値。
-# どのプロバイダが実際に使われているか判断できないため、安全側（保守的）に倒す。
+# CURRENT_PROVIDER未設定（想定外のケース）向けの安全側フォールバック値。
 _FALLBACK_HISTORY_TOKENS = 3000
 
 
@@ -160,8 +153,7 @@ def _sync_and_report(spinner_text: str) -> None:
             result = sync_data_dir(verbose=False)
     except Exception as e:
         st.error(f"ドキュメントの同期に失敗しました。時間をおいて再度お試しください。（詳細: {e}）")
-        # 失敗時はシグネチャを更新しない。次回の再実行時もdata/の内容は
-        # 「未同期」のままとみなされ、トップレベルの軽量チェックが再度同期を試みる。
+        # 失敗時はシグネチャを更新しない。次回もトップレベルの軽量チェックが再同期を試みる。
         return
     if any(result.values()):
         st.toast(
@@ -169,19 +161,14 @@ def _sync_and_report(spinner_text: str) -> None:
             f"更新{len(result['updated'])} / 削除{len(result['removed'])}）",
             icon="✅",
         )
-    # 読み込みに失敗したファイル名一覧をセッションに保持しておく。data_dir_signatureは
-    # ファイルが存在する限り変化しないため、この情報がないと警告表示がこの1回の
-    # スクリプト実行でしか出ず、次にユーザーが操作した瞬間に消えてしまう。
+    # data_dir_signatureはファイルが存在する限り変化しないため、失敗ファイル一覧を
+    # セッションに保持しておかないと警告表示がこの1回のスクリプト実行でしか出せない。
     st.session_state.failed_sync_files = result["failed"]
     if result["failed"]:
-        # 失敗ファイルが残っている間はシグネチャを更新しない。これにより
-        # 「data/の内容自体は変化していない」場合でも、トップレベルの軽量チェックが
-        # 引き続き「未同期」と判定し、次回のスクリプト再実行時に自動的に再同期・
-        # 再試行される（対象ファイルが修正・削除されるまでリトライが続く）。
+        # 失敗ファイルが残っている間はシグネチャを更新せず、次回も再同期・再試行させる。
         return
-    # 同期成功後の最新シグネチャを保存しておく。これにより、この直後にトップレベルの
-    # 軽量チェックが再実行されても「変更なし」と判定され、無駄な二重同期が走らない
-    # （手動の再同期ボタン・アップロード時の呼び出しでも共通してこの関数を通るため）。
+    # 手動の再同期ボタン・アップロード時もこの関数を通るため、成功後にシグネチャを
+    # 更新しておくことで直後の軽量チェックによる無駄な二重同期を防ぐ。
     st.session_state.data_dir_signature = data_dir_signature()
 
 
@@ -206,9 +193,8 @@ def _sync_saved_conversation(path: Path) -> None:
         return
     if status == "failed":
         return
-    # このファイル追加でdata/内のファイル数・最新mtimeが変わるため、次回rerun時の
-    # トップレベルの軽量チェックが「変更なし」と判定できるようシグネチャも更新しておく
-    # （更新しないと、次回rerun時に無駄なsync_data_dir()呼び出しがもう一度走ってしまう）。
+    # このファイル追加でdata/の内容が変わるため、次回rerun時に無駄な
+    # sync_data_dir()呼び出しが走らないようシグネチャも更新しておく。
     st.session_state.data_dir_signature = data_dir_signature()
 
 
@@ -342,13 +328,9 @@ def _switch_thread(thread_id: str) -> None:
 if "thread_id" not in st.session_state:
     st.session_state.thread_id = new_thread_id()
 
-# data/ の変更検知: Streamlitはユーザー操作（チャット送信・ボタン押下・
-# トグル操作等）のたびにこのスクリプト全体を再実行する仕様なので、トップレベルで
-# 「ファイル数+最新mtime」だけの軽量シグネチャ（data_dir_signature、内容の読み込みや
-# 埋め込み処理は一切しない）を毎回計算し、前回値と比較する。これにより、
-# 1) ページのリロード時（アプリ外からdata/を直接編集して戻ってきた場合を含む）
-# 2) チャットの往復が続いたタイミング（会話ログの保存でdata/内のファイルが増えるため）
-# の両方を、この1つの仕組みだけで自動検知できる（差分が無ければ何もしない静かなno-op）。
+# Streamlitは操作のたびにスクリプト全体を再実行する仕様なので、軽量シグネチャ
+# （ファイル数+最新mtime、内容は読まない）で前回値と比較し、data/の変更
+# （リロード時の外部編集・会話ログ保存の両方）だけを検知して同期する。
 current_data_dir_signature = data_dir_signature()
 if st.session_state.get("data_dir_signature") != current_data_dir_signature:
     _sync_and_report("data/ をベクトルDBに同期中...")
@@ -370,11 +352,9 @@ if "auto_save_memory" not in st.session_state:
     st.session_state.auto_save_memory = True  # 会話の自動ナレッジ化（デフォルトON）
 
 if "processed_upload_ids" not in st.session_state:
-    # st.file_uploaderの値は、ユーザーがアップロード欄から明示的にファイルを取り除くか
-    # ページをリロードするまでセッション内に保持され続ける仕様のため、無関係な操作で
-    # スクリプトが再実行されるたびにuploaded_filesへ同じファイルが含まれ続ける。
-    # 既に保存・DB反映済みのUploadedFile.file_id（アップロード操作ごとに一意）を
-    # ここに記録し、再実行のたびに毎回保存・再インデックスされないようにする。
+    # st.file_uploaderの値はファイルを明示的に取り除くかリロードするまで保持され続けるため、
+    # 無関係な操作での再実行でも同じファイルが含まれ続ける。保存・DB反映済みのfile_idを
+    # ここに記録し、再実行のたびに重複保存・再インデックスされないようにする。
     st.session_state.processed_upload_ids = set()
 
 with st.sidebar:
@@ -457,10 +437,8 @@ with st.sidebar:
     new_uploaded_files = [f for f in (uploaded_files or []) if f.file_id not in st.session_state.processed_upload_ids]
     if new_uploaded_files:
         DATA_DIR.mkdir(parents=True, exist_ok=True)
-        # data/に同名ファイルが既にある場合、または同一バッチ内に同名ファイルが
-        # 複数含まれる場合に、無警告で上書きされないようにする。
-        # resolve_upload_dest()が連番サフィックス付きの空いているパスを返すので、
-        # 元のファイル名と異なる場合はリネームされたとみなしてまとめて警告表示する。
+        # 同名ファイルが既にある場合はresolve_upload_dest()が連番サフィックス付きの
+        # パスを返すので、元のファイル名と異なる場合はリネームされたとみなし警告表示する。
         saved_paths: set[Path] = set()
         renamed = []
         for f in new_uploaded_files:
@@ -484,7 +462,6 @@ with st.sidebar:
             )
         _sync_and_report("アップロードされたファイルを取り込み中...")
 
-# 過去の会話を再描画
 for message in st.session_state.messages:
     role = "user" if isinstance(message, HumanMessage) else "assistant"
     with st.chat_message(role):
@@ -537,13 +514,10 @@ if user_input:
                 ):
                     if isinstance(chunk, ToolMessage):
                         if getattr(chunk, "artifact", None):
-                            # retrieve_contextが1ターン中に複数回呼ばれた場合、異なる検索クエリが
-                            # 同じチャンクをヒットさせることがある。(source, page, thread_id,
-                            # page_content)をキーに既出のチャンクを除外し、「参照した箇所」への
-                            # 重複表示を防ぐ。page_contentもキーに含めるのは、pageがDocling経由
-                            # （PDF等）でのみ付与されthread_idはファイル単位で同一のため、
-                            # .txt/.mdのようにpageを持たないファイルではsource/thread_idだけでは
-                            # 同一ファイル内の別チャンクまで誤って同一キーになってしまうため。
+                            # 1ターン中に複数回検索されて同じチャンクが重複ヒットすることがあるため、
+                            # 既出チャンクを除外する。page_contentもキーに含めるのは、pageを持たない
+                            # .txt/.md等ではsource/thread_idだけでは同一ファイル内の別チャンクを
+                            # 区別できないため。
                             for doc in chunk.artifact:
                                 key = (
                                     doc.metadata.get("source"),
@@ -575,7 +549,6 @@ if user_input:
             # プレースホルダーが残っていれば消す。
             status_placeholder.empty()
 
-            # ツール呼び出しで取得した参照元ドキュメントを表示
             if sources:
                 with st.expander("参照した箇所を見る"):
                     for i, doc in enumerate(sources, start=1):
@@ -594,12 +567,9 @@ if user_input:
         st.session_state.messages.append(HumanMessage(content=user_input))
         st.session_state.messages.append(AIMessage(content=answer))
 
-        # 会話を自動でナレッジ化（このスレッド専用としてローカル保存）。
-        # 保存した1ファイルだけをadd_single_conversation_file()でその場でDB反映する
-        # （data/配下の全件を再走査するsync_data_dir()は呼ばない。チャット1往復ごとに
-        # 毎回フル同期する実装より軽量）。
-        # sourcesが空＝retrieve_contextが関連文書を1件も見つけられず一般知識で回答した
-        # ケースなので、is_fallbackとして記録し、以降の検索対象から除外できるようにする。
+        # 会話を自動でナレッジ化（このスレッド専用でローカル保存し、全件走査するsync_data_dir()
+        # ではなく保存した1ファイルだけをその場でDB反映）。sourcesが空＝根拠なしの一般知識回答
+        # なのでis_fallbackとして記録し、以降の検索対象から除外できるようにする。
         if st.session_state.auto_save_memory:
             saved_path = save_conversation(user_input, answer, st.session_state.thread_id, is_fallback=not sources)
             _sync_saved_conversation(saved_path)

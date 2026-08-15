@@ -34,9 +34,10 @@ OLLAMA_HOST = os.environ.get("OLLAMA_HOST", "localhost")
 OLLAMA_PORT = int(os.environ.get("OLLAMA_PORT", "11434"))
 OLLAMA_MODEL = os.environ.get("OLLAMA_MODEL", "llama3.1")
 
-# Ollamaはnum_ctx未指定だと多くのモデルで2048程度という小さいコンテキスト長がデフォルトになり、
-# 会話が数往復続くだけで古い履歴や検索結果が暗黙的に切り捨てられてしまうため明示的に指定する。
-# 8192は一般的なローカルPC（8GB〜のメモリ）でも現実的に動かせる範囲の値。
+# Ollamaはnum_ctx未指定だと多くのモデルで2048程度の小さいコンテキスト長がデフォルトになり、
+# 会話が数往復続くだけで古い履歴や検索結果が暗黙的に切り捨てられるため、一般的なローカルPC
+# （8GB〜のメモリ）でも現実的に動かせる範囲でOllama公式デフォルトより十分な余裕を持たせた値を
+# 明示的に指定する。
 OLLAMA_NUM_CTX = int(os.environ.get("OLLAMA_NUM_CTX", "8192"))
 
 # 現在実際に使用しているプロバイダ名（"ollama" / "anthropic" / "openai"）。
