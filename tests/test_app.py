@@ -1393,6 +1393,60 @@ def test_upload_invalid_filename_shows_error_without_warning(tmp_path, monkeypat
     assert at.warning == []
 
 
+def test_upload_not_reprocessed_on_unrelated_new_chat_button_rerun(tmp_path, monkeypatch):
+    """異常系境界値: st.file_uploaderの値はユーザーがアップロード欄を
+    操作するかページをリロードするまでセッションに保持され続けるStreamlitの仕様のため、
+    「🆕 新しい会話を始める」のようなアップロードと無関係な操作で再実行されても、
+    同じファイルが繰り返し保存・再インデックスされない（report (2).txt, report (3).txt ...
+    と無制限に増殖しない）こと。"""
+    data_dir = tmp_path / "data"
+    monkeypatch.setattr(ingest, "DATA_DIR", data_dir)
+
+    at = _run_app()
+    at.file_uploader[0].set_value(("report.txt", b"content", "text/plain"))
+    at = at.run()
+
+    assert at.exception == []
+    assert at.error == []
+    assert at.warning == []
+    assert sorted(p.name for p in data_dir.iterdir()) == ["report.txt"]
+
+    # アップロード欄を操作せず、無関係な操作（新しい会話を始める）で再実行
+    new_chat_button = next(b for b in at.sidebar.button if "新しい会話" in b.label)
+    at = new_chat_button.click().run()
+
+    assert at.exception == []
+    assert at.warning == []
+    assert sorted(p.name for p in data_dir.iterdir()) == ["report.txt"]
+
+    # さらにもう一度、アップロード欄に触れないまま再実行しても増殖しない
+    at = at.run()
+
+    assert at.exception == []
+    assert at.warning == []
+    assert sorted(p.name for p in data_dir.iterdir()) == ["report.txt"]
+
+
+def test_upload_not_reprocessed_on_unrelated_chat_send_rerun(tmp_path, monkeypatch):
+    """異常系境界値: チャット送信によるスクリプト再実行でも、
+    アップロード欄を操作していなければ同じファイルが再保存・再インデックスされない。"""
+    data_dir = tmp_path / "data"
+    monkeypatch.setattr(ingest, "DATA_DIR", data_dir)
+
+    at = _run_app()
+    at.file_uploader[0].set_value(("report.txt", b"content", "text/plain"))
+    at = at.run()
+
+    assert sorted(p.name for p in data_dir.iterdir()) == ["report.txt"]
+
+    # アップロード欄を操作せず、チャット送信（無関係な操作）で再実行
+    at = at.chat_input[0].set_value("質問です").run()
+
+    assert at.exception == []
+    assert at.warning == []
+    assert sorted(p.name for p in data_dir.iterdir()) == ["report.txt"]
+
+
 # --- 8. 読み込み失敗ファイルの警告永続化・自動リトライ ---
 
 

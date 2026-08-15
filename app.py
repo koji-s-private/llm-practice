@@ -369,6 +369,14 @@ if "messages" not in st.session_state:
 if "auto_save_memory" not in st.session_state:
     st.session_state.auto_save_memory = True  # 会話の自動ナレッジ化（デフォルトON）
 
+if "processed_upload_ids" not in st.session_state:
+    # st.file_uploaderの値は、ユーザーがアップロード欄から明示的にファイルを取り除くか
+    # ページをリロードするまでセッション内に保持され続ける仕様のため、無関係な操作で
+    # スクリプトが再実行されるたびにuploaded_filesへ同じファイルが含まれ続ける。
+    # 既に保存・DB反映済みのUploadedFile.file_id（アップロード操作ごとに一意）を
+    # ここに記録し、再実行のたびに毎回保存・再インデックスされないようにする。
+    st.session_state.processed_upload_ids = set()
+
 with st.sidebar:
     if st.button("🆕 新しい会話を始める", use_container_width=True):
         _start_new_chat()
@@ -443,7 +451,11 @@ with st.sidebar:
         accept_multiple_files=True,
         label_visibility="collapsed",
     )
-    if uploaded_files:
+    # 既に保存・DB反映済みのfile_idを持つファイルは除外する。これにより、アップロード欄を
+    # 操作していない再実行（チャット送信・他ボタン押下など）では新規保存対象が0件になり、
+    # 以降の保存処理・_sync_and_report()自体が実質no-opになる。
+    new_uploaded_files = [f for f in (uploaded_files or []) if f.file_id not in st.session_state.processed_upload_ids]
+    if new_uploaded_files:
         DATA_DIR.mkdir(parents=True, exist_ok=True)
         # data/に同名ファイルが既にある場合、または同一バッチ内に同名ファイルが
         # 複数含まれる場合に、無警告で上書きされないようにする。
@@ -451,18 +463,20 @@ with st.sidebar:
         # 元のファイル名と異なる場合はリネームされたとみなしてまとめて警告表示する。
         saved_paths: set[Path] = set()
         renamed = []
-        for f in uploaded_files:
+        for f in new_uploaded_files:
             dest = resolve_upload_dest(f.name, taken_paths=saved_paths)
             # st.file_uploader(type=["pdf", "txt", "md"])はサーバー側でも拡張子を検証するため、
             # 通常この分岐には到達しないが、resolve_upload_dest()自体は汎用関数であり将来
             # 呼び出し元が増える可能性もあるため多重防御として残している。
             if dest is None:
                 st.error(f"不正なファイル名のためスキップしました: {f.name}")
+                st.session_state.processed_upload_ids.add(f.file_id)
                 continue
             if dest.name != f.name:
                 renamed.append((f.name, dest.name))
             dest.write_bytes(f.getvalue())
             saved_paths.add(dest)
+            st.session_state.processed_upload_ids.add(f.file_id)
         if renamed:
             st.warning(
                 "同名のファイルが既に存在したため、既存ファイルを上書きせず別名で保存しました:\n"
