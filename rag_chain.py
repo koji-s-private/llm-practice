@@ -35,6 +35,10 @@ from setup import model
 PERSIST_DIR = Path(__file__).parent / "chroma_db"
 COLLECTION_NAME = "llm_practice_docs"
 
+# ingest.pyがドキュメントを分割する際のチャンクサイズ（文字数）。ingest.py側の
+# RecursiveCharacterTextSplitterもこの値を参照しており、1チャンクは最大でもこの文字数に収まる。
+CHUNK_SIZE = 1000
+
 # 無料・ローカルで動く埋め込みモデル（LangChain公式ドキュメントのデフォルト例と同じ）
 EMBEDDING_MODEL_NAME = "sentence-transformers/all-mpnet-base-v2"
 
@@ -65,12 +69,12 @@ RECALL_DISTANCE_THRESHOLD = 1.3
 # 返す上限件数。narrowedは一次検索（ベクトル類似度）のスコア順に並んでおり、_grade_relevanceは
 # その順序を保ったままインデックスを返す仕様なので、先頭N件を採用すれば類似度が高い順の
 # 上位N件を返すことになる。CANDIDATE_K件（最大8件）すべてが関連ありと判定されると
-# ingest.pyのchunk_size=1000（文字ベース）と相まって検索結果だけで数千トークンに達し得るため、
+# CHUNK_SIZE（文字ベース）と相まって検索結果だけで数千トークンに達し得るため、
 # 会話履歴とは別にコンテキスト長を圧迫しないよう上限を設ける。
 MAX_RETRIEVED_DOCS = 4
 
-# retrieve_contextが返す1件あたりの本文の文字数上限。ingest.pyのchunk_size=1000文字を
-# そのまま含めると1件だけでも数百トークンになるため、要点を掴める範囲で切り詰める。
+# retrieve_contextが返す1件あたりの本文の文字数上限。CHUNK_SIZE文字をそのまま含めると
+# 1件だけでも数百トークンになるため、要点を掴める範囲で切り詰める。
 MAX_DOC_CHARS = 500
 
 SYSTEM_PROMPT = (
@@ -155,7 +159,11 @@ def _grade_relevance(query: str, docs: list) -> list[int]:
     if not docs:
         return []
 
-    listing = "\n\n".join(f"[{i}] {doc.page_content[:300]}" for i, doc in enumerate(docs, start=1))
+    # チャンク全体（最大CHUNK_SIZE文字）を採点対象に含める。短く切り詰めすぎると、
+    # チャンク冒頭が前置きで、質問と本当に関連する記述が後半にある場合に
+    # LLMが「関連なし」と誤判定し、一次検索で正しく拾えていた候補を後段で
+    # 取りこぼしてしまう。
+    listing = "\n\n".join(f"[{i}] {doc.page_content[:CHUNK_SIZE]}" for i, doc in enumerate(docs, start=1))
     prompt = (
         f"質問: {query}\n\n"
         "以下は検索でヒットした候補文書です。質問に実際に答えるのに使える文書の番号を判定してください。\n"
