@@ -76,14 +76,11 @@ DATA_DIR = Path(__file__).parent / "data"
 CONVERSATIONS_DIRNAME = "conversations"
 MANIFEST_PATH = PERSIST_DIR / "manifest.json"
 
-# 同一プロセス内の複数Streamlitセッション（複数タブ）や複数プロセス（app.py/api/main.py の
-# 併用など）からsync_data_dir()が同時に呼ばれた場合の排他制御用ロックファイル。
-# manifest.json読み込み→ベクトルDB更新→manifest.json書き込みの一連の処理を
-# 単一の実行者だけが行うようにし、read-modify-writeの競合（lost update・
-# 同一チャンクの重複登録）を防ぐ。
+# 複数タブ・複数プロセス（app.py/api/main.py併用等）からsync_data_dir()が同時に呼ばれた際の
+# 排他制御用ロックファイル。manifest読み込み〜DB更新〜manifest書き込みを単一の実行者だけが
+# 行うようにし、read-modify-writeの競合（重複登録）を防ぐ。
 SYNC_LOCK_PATH = PERSIST_DIR / "sync.lock"
-# ロック取得を待つ最大秒数。通常の同期処理は数秒〜十数秒で終わるため、
-# それより十分長い待ち時間を設けつつ、無限待機は避ける。
+# 通常の同期は数秒〜十数秒で終わるため、それより十分長い待ち時間を設けつつ無限待機は避ける。
 SYNC_LOCK_TIMEOUT_SECONDS = 60
 
 # 拡張子ごとのローダー対応表（PDFは実際には_load_pdf()で2段構成の判定を行う）
@@ -97,12 +94,9 @@ LOADERS = {
 # （図解・スキャンPDFの疑いがある）」とみなしDoclingでの再解析を試みる。
 MIN_CHARS_PER_PAGE_FOR_FAST_PATH = 40
 
-# Doclingフォールバック（export_type=DOC_CHUNKS）が返す細切れのDocumentを、後段の
-# RecursiveCharacterTextSplitter（chunk_size=CHUNK_SIZE）に渡す前にまとめ直す際の目安文字数。
-# DOC_CHUNKSは段落・テーブルセルなど構造単位ごとに小さいDocumentを返すため、そのまま
-# splitterに渡すとほぼ素通しになりチャンクが細かくなりすぎる（後続splitterはDocumentを
-# またいでマージしない）。splitterのchunk_sizeと同じ値にすることで、Docling経由でも
-# 通常経路（PyMuPDF＋文字数ベース分割）に近いチャンク粒度になるようにする。
+# Doclingフォールバック（DOC_CHUNKS）は段落・テーブルセル単位の細切れDocumentを返し、
+# そのままsplitterに渡すとチャンクが細かくなりすぎる（splitterはDocumentをまたいで
+# マージしない）ため、splitterのchunk_sizeと同じ目安文字数でまとめ直す。
 DOCLING_CHUNK_MERGE_TARGET_CHARS = CHUNK_SIZE
 
 # memory.save_conversation() が会話ログのMarkdownに書き込むメタデータ行を検出する正規表現。
@@ -463,10 +457,7 @@ def _add_single_conversation_file_locked(path: Path) -> str:
 
     name = str(path.relative_to(DATA_DIR))
     status = _ingest_file(name, path, vector_store, manifest, splitter, verbose=False)
-    # _ingest_file()はadded/updated/pending削除解消の場合のみ保存済みだが、
-    # unchanged・failedの場合は保存していないケースがある。manifest.jsonが
-    # まだ存在しない状態のまま終わらないよう、ここで冪等に保存しておく
-    # （sync_data_dir()の最後で行っている保存と同じ意図）。
+    # unchanged・failedの場合は_ingest_file()内で保存されないため、ここで冪等に保存しておく。
     _save_manifest(manifest)
     return status
 
@@ -485,9 +476,7 @@ def _ingest_file(name: str, path: Path, vector_store, manifest: dict, splitter, 
     entry = manifest.get(name)
     unchanged = entry and entry.get("mtime") == fingerprint["mtime"] and entry.get("size") == fingerprint["size"]
     if unchanged:
-        # 内容に変化はなくても、前回同期時にadd_documents()成功後のvector_store.delete()が
-        # 失敗し旧チャンクの削除だけ持ち越しになっている場合は、ここで再試行する
-        # （持ち越しがなければ何もしない、通常のunchanged判定と同じ挙動）。
+        # 内容に変化がなくても、前回の旧チャンク削除が失敗し持ち越しになっている場合はここで再試行する。
         pending_delete_chunk_ids = entry.get("pending_delete_chunk_ids")
         if pending_delete_chunk_ids:
             try:
@@ -512,44 +501,32 @@ def _ingest_file(name: str, path: Path, vector_store, manifest: dict, splitter, 
             docs = loader.load()
         chunks = splitter.split_documents(docs)
     except Exception as e:
-        # 1ファイルの読み込み失敗（破損PDF・パスワード付きPDF・不正なエンコーディング等）で
-        # 他の正常なファイルの同期まで止めないよう、ログに残してスキップする。
-        # manifestには記録しないので、次回同期時に再度リトライされる。
+        # 1ファイルの読み込み失敗で他の正常なファイルの同期まで止めないよう、
+        # ログに残してスキップする（manifestには記録しないので次回リトライされる）。
         logger.warning("%s の読み込みに失敗したためスキップします: %s", name, e)
         return "failed"
 
-    # 会話ログはそのスレッドのみ、それ以外（通常ドキュメント・アップロード）は
-    # 全スレッド共通で検索できるよう、チャンクにthread_idをメタデータとして付与する。
     thread_id = _thread_id_for(name)
-    # 一般知識フォールバック回答の会話ログは、根拠のないままベクトルDBに再学習されると
-    # 以降の検索結果として再ヒットし、あたかもドキュメントの裏付けがあるかのように
-    # 扱われてしまう。全チャンクに一貫してis_fallbackキーを持たせることで、
-    # rag_chain.retrieve_context側のメタデータフィルタが確実に効くようにする。
+    # 根拠のない一般知識フォールバック回答がそのまま再学習され「裏付けのある回答」として
+    # 再ヒットしないよう、全チャンクにis_fallbackを付与しretrieve_context側で除外させる。
     is_fallback = _is_fallback_conversation(docs)
     for chunk in chunks:
         chunk.metadata["thread_id"] = thread_id
         chunk.metadata["is_fallback"] = is_fallback
 
-    # 新チャンクの追加を先に行い、成功してから旧チャンクを削除する（delete→addの逆順）。
-    # delete→addの順だと、削除成功後にadd_documents()が失敗した場合、旧チャンクは
-    # 消えたのに新チャンクも登録されない「データが検索対象から消える」状態になり、
-    # manifestも更新されないため次回同期でも気づかれず放置されてしまう。
-    # add→deleteの順なら、追加が失敗しても旧チャンクがそのまま残るため安全
-    # （追加成功〜削除完了までの一瞬だけ新旧チャンクが両方検索にヒットしうるが、
-    # データが消えるより十分マシな許容範囲の副作用とする）。
+    # 新チャンクの追加を先に行い、成功してから旧チャンクを削除する。delete→addの順だと
+    # 追加失敗時に「旧チャンクが消えたのに新チャンクも無い」データ消失状態になりうるため、
+    # add→deleteの逆順にして追加失敗時は旧チャンクが残る方（安全側）に倒す。
     try:
         chunk_ids = vector_store.add_documents(documents=chunks) if chunks else []
     except Exception as e:
         logger.warning("%s のベクトルストアへの追加に失敗したためスキップします: %s", name, e)
         return "failed"
 
-    # add_documents()成功後にdelete()自体が失敗するケース（ネットワーク瞬断・
-    # ベクトルストア内部エラー等）に備える。ここで例外を握りつぶして先に進めてしまうと、
-    # manifestは新内容で更新されるため次回同期はunchanged判定になり、旧チャンクの削除が
-    # 二度と試みられず重複したまま残り続けてしまう。そこで削除失敗時は旧chunk_idsを
-    # pending_delete_chunk_idsとしてmanifestに持ち越し、以後のunchanged判定時に再試行する。
-    # 前回同期時点で未解消のpending_delete_chunk_idsが残っている場合は、それも
-    # 引き継がないと二度と削除が試みられなくなるため、今回分と合算して持ち越す。
+    # 旧チャンクのdelete()が失敗した場合、そのまま握りつぶすとmanifestが新内容で
+    # 更新されて次回unchanged判定になり、削除が二度と再試行されず重複が残り続ける。
+    # 失敗時は旧chunk_idsをpending_delete_chunk_idsとして持ち越し、unchanged判定時に
+    # 再試行する（前回分の持ち越しが残っていれば今回分と合算する）。
     pending_delete_chunk_ids = set(entry.get("pending_delete_chunk_ids") or []) if entry else set()
     if entry and entry.get("chunk_ids"):
         try:
@@ -565,10 +542,8 @@ def _ingest_file(name: str, path: Path, vector_store, manifest: dict, splitter, 
     action = "更新" if entry else "追加"
     _log_progress(verbose, "%s: %s（%dチャンク）", action, name, len(chunks))
 
-    # ファイル1件ごとにmanifestを保存する。全件処理後にまとめて保存する設計だと、
-    # add_documents()でDBへの追加が完了した後・保存前にプロセスが中断した場合、
-    # DBには反映済みなのにmanifestには記録されない状態になり、次回同期時に
-    # 同じ内容のチャンクが重複登録されてしまう。都度保存すればその不整合を防げる。
+    # 全件処理後にまとめて保存すると、DB追加後・保存前にプロセスが中断した場合に
+    # DBには反映済みなのにmanifest未記録の不整合（重複登録の原因）が起きるため都度保存する。
     _save_manifest(manifest)
     return status
 
@@ -586,28 +561,22 @@ def _sync_data_dir_locked(verbose: bool) -> dict:
 
     result = {"added": [], "updated": [], "removed": [], "failed": []}
 
-    # 追加 or 変更されたファイルを取り込む
     for name, path in current_files.items():
         status = _ingest_file(name, path, vector_store, manifest, splitter, verbose=verbose)
         if status in ("added", "updated", "failed"):
             result[status].append(name)
 
-    # data/ から削除されたファイルをDBからも削除
     for name in list(manifest.keys()):
         if name not in current_files:
             entry = manifest[name]
-            # 保留中だった旧チャンク（pending_delete_chunk_ids）も、現行のchunk_idsと
-            # 合わせて削除対象にする。ここを見落とすと、ファイルごとmanifestエントリが
-            # 消えるため以後二度と再試行されず、旧チャンクがベクトルストアに残り続ける。
+            # manifestエントリごと消すと再試行の機会を失うため、保留中の旧チャンクも
+            # 現行のchunk_idsと合わせて削除対象にする。
             ids_to_delete = set(entry.get("chunk_ids") or []) | set(entry.get("pending_delete_chunk_ids") or [])
             if ids_to_delete:
                 try:
                     vector_store.delete(ids=sorted(ids_to_delete))
                 except Exception as e:
-                    # 削除に失敗した場合は、黙って重複を残さないようmanifestエントリを
-                    # pending_delete_chunk_idsだけ残した状態で維持する。ファイルは
-                    # current_filesに存在しないままなので、次回同期時もこのループで
-                    # 再試行される。
+                    # 削除失敗時はpending_delete_chunk_idsだけ残し、次回同期時にこのループで再試行する。
                     logger.warning(
                         "%s の削除処理中に旧チャンク削除に失敗しました（次回同期時に再試行します）: %s",
                         name,
@@ -716,11 +685,9 @@ def main():
         print_status()
         return
 
-    # sync_data_dir(verbose=True)（デフォルト）が出す進捗ログ（logger.info）をCLI実行時に
-    # コンソールへ表示するためのハンドラ設定。app.py/api経由（verbose=False）ではこの設定は
-    # 行われず、ファイル読み込み失敗時のlogger.warning()のみがPythonの既定動作で表示される。
-    # stream=sys.stdoutにするのは、同じmain()内の他のprint()出力との表示順序を揃えるため
-    # （logging標準のデフォルトはstderrで、print()と混在すると出力順序が入れ替わりうる）。
+    # sync_data_dir()の進捗ログ（logger.info）をCLI実行時にコンソールへ表示するための設定。
+    # stream=sys.stdoutにするのは、同じmain()内のprint()出力と表示順序を揃えるため
+    # （logging標準のデフォルトはstderrで、print()と混在すると順序が入れ替わりうる）。
     logging.basicConfig(level=logging.INFO, format="%(message)s", stream=sys.stdout)
 
     print("data/ をベクトルDBに同期しています...")
