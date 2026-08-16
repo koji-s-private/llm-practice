@@ -47,7 +47,7 @@ GitHub Actions上で動くAIチームによって定期的にメンテナンス�
   `docs/tech-stack.md` のような別ファイルに切り出し、ルートの `README.md` 側にはリンクのみを残す
   （`data/README.md` / `tests/README.md` などの既存の「詳細は別ファイル」構成にならう）
 - コード内コメントは日本語で記載する（新規追加・既存修正のいずれも）。ただし
-  `extract_text.py` / `models_and_prompts.py` などLangChain公式チュートリアル由来の
+  `examples/extract_text.py` / `examples/models_and_prompts.py` などLangChain公式チュートリアル由来の
   学習用スクリプトは対象外とする
 - コード内コメント・docstringに「〇〇からの指示」「Issue #XXで発覚/指摘/対応」のような
   由来・経緯（いつ・誰の指示で・どのIssueで）を書き込まない。コメントは「いま何が起きているか・
