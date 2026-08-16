@@ -97,16 +97,21 @@ class _ExcelLoader:
         import openpyxl
 
         workbook = openpyxl.load_workbook(self.file_path, data_only=True, read_only=True)
-        docs = []
-        for sheet in workbook.worksheets:
-            lines = [
-                "\t".join("" if cell is None else str(cell) for cell in row)
-                for row in sheet.iter_rows(values_only=True)
-            ]
-            text = "\n".join(lines).strip()
-            if text:
-                docs.append(Document(page_content=text, metadata={"source": self.file_path, "sheet": sheet.title}))
-        return docs
+        try:
+            docs = []
+            for sheet in workbook.worksheets:
+                lines = [
+                    "\t".join("" if cell is None else str(cell) for cell in row)
+                    for row in sheet.iter_rows(values_only=True)
+                ]
+                text = "\n".join(lines).strip()
+                if text:
+                    docs.append(Document(page_content=text, metadata={"source": self.file_path, "sheet": sheet.title}))
+            return docs
+        finally:
+            # read_only=Trueのワークブックは参照サイクルを持ち、GCが回るまでfdが解放されない
+            # ことがあるため、明示的にclose()してsync_data_dir()の全件走査時のfd枯渇を防ぐ。
+            workbook.close()
 
 
 class _PowerPointLoader:
