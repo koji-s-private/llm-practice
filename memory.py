@@ -66,13 +66,12 @@ def save_conversation(question: str, answer: str, thread_id: str, is_fallback: b
     """1回分の質問・回答を Markdown ファイルとして data/conversations/<thread_id>/ に保存する。
 
     is_fallback: ドキュメントに根拠が見つからず一般知識で回答した場合は True を渡す。
-    Markdown本文にメタデータ行として書き込んでおき、ingest.sync_data_dir() が
-    チャンクのメタデータ(is_fallback)に反映する。根拠のない回答が検索結果として
-    再ヒットし裏付けがあるかのように扱われることを防ぐ（rag_chain.retrieve_context側で除外）。
+    Markdown本文にメタデータ行として書き込み、ingest.sync_data_dir() がチャンクの
+    メタデータ(is_fallback)に反映する。これにより、根拠のない回答が以降の検索結果に
+    再ヒットして裏付けありのように扱われることを防ぐ（rag_chain.retrieve_context側で除外）。
 
-    戻り値: 保存したファイルのパス。
-    呼び出し側で ingest.sync_data_dir() を呼べば、そのままベクトルDBに反映される
-    （このスレッド専用のナレッジとして、他のスレッドからは検索されない）。
+    戻り値: 保存したファイルのパス。呼び出し側が ingest.sync_data_dir() を呼べば
+    ベクトルDBに反映される。
     """
     thread_dir = CONVERSATIONS_DIR / _validate_thread_id(thread_id)
     thread_dir.mkdir(parents=True, exist_ok=True)
@@ -96,9 +95,9 @@ def save_conversation(question: str, answer: str, thread_id: str, is_fallback: b
 def _extract_qa(content: str) -> tuple[str, str]:
     """会話ログMarkdownの本文から質問・回答を抜き出す。
 
-    「質問文字数」「回答文字数」のメタデータがあれば、見出しの直後からその文字数ぶんを
-    そのまま切り出す。メタデータが無い、または見出しの位置が見つからない場合（旧形式
-    ファイル）は、従来通り正規表現ベースの抽出にフォールバックする。
+    文字数メタデータがあれば見出し直後からその文字数ぶんをそのまま切り出す（本文に
+    "## 質問"/"## 回答"に類する文字列が含まれていても誤って途中で切れないようにするため）。
+    メタデータが無い旧形式ファイルは正規表現ベースの抽出にフォールバックする。
     """
     q_len_match = _QUESTION_LENGTH_PATTERN.search(content)
     a_len_match = _ANSWER_LENGTH_PATTERN.search(content)

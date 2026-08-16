@@ -92,8 +92,8 @@ GLOBAL_THREAD_ID = "global"
 def get_embeddings() -> HuggingFaceEmbeddings:
     """ローカル埋め込みモデルを返す（APIキー不要、初回はモデルを自動ダウンロード）。
 
-    初期化はモデルのロードを伴い軽くないため、lru_cacheでプロセス内に1つだけ保持し
-    再ロードを防ぐ（Streamlitに依存しないため、CLIやテストからの利用でも同様に効く）。
+    モデルのロードは軽くないため、lru_cacheでプロセス内に1つだけ保持し
+    再ロードを防ぐ（Streamlitに依存しないモジュールレベルのキャッシュ）。
     """
     return HuggingFaceEmbeddings(
         model_name=EMBEDDING_MODEL_NAME,
@@ -108,15 +108,11 @@ def get_vectorstore() -> Chroma:
     get_embeddings()と同様にlru_cacheでプロセス内に1つだけ保持する。永続化先・
     コレクション名は固定のため、インスタンスを使い回しても読み書きの一貫性に問題はない。
 
-    セキュリティ上の注意:
-    本実装はChromaDBをローカル永続化モード（persist_directory）のみで使用しており、
-    ChromaDBのHTTPサーバーAPI（/api/v2/...）を一切起動・公開していない。
-    そのため、CVE-2026-45829 / PYSEC-2026-311（chromadbの
-    /api/v2/tenants/{tenant}/databases/{db}/collections エンドポイントに対する
-    pre-authentication code injection脆弱性。1.0.0以降の全バージョンが対象で、
-    本記載時点では修正版は未リリース）の攻撃経路は現状存在しない。
-    将来的にChromaDBをサーバーモードで動かす（例: Docker化、別プロセスとしての公開など）
-    実装変更を行う際は、この脆弱性の修正状況を必ず再確認すること。
+    セキュリティ上の注意: 本実装はChromaDBをローカル永続化モード（persist_directory）
+    のみで使用し、HTTPサーバーAPI（/api/v2/...）を一切起動・公開していないため、
+    CVE-2026-45829 / PYSEC-2026-311（同APIのpre-authentication code injection脆弱性、
+    本記載時点で修正版未リリース）の攻撃経路は現状存在しない。将来サーバーモードに
+    変更する際は、この脆弱性の修正状況を必ず再確認すること。
     """
     return Chroma(
         collection_name=COLLECTION_NAME,
@@ -126,16 +122,12 @@ def get_vectorstore() -> Chroma:
 
 
 def _grade_relevance(query: str, docs: list) -> list[int]:
-    r"""候補文書をLLMに採点させ、質問に実際に使えるものだけのインデックス一覧を返す。
+    r"""候補文書をLLMに採点させ、質問に実際に使えるものだけのインデックス一覧を返す（reranking相当）。
 
-    ベクトル類似度だけだと「単語は近いが意味的には無関係」な文書を弾けないため、
-    ここでLLM自身に関連性を判定させて絞り込む（reranking相当）。
-
-    応答全体を re.findall(r"\d+", text) で無差別にスキャンすると、LLMが自由文で答えた
-    場合に本文中の無関係な数字まで関連文書番号として誤って拾ってしまう。そのため
-    LLMには「回答:」から始まる1行だけに判定結果を書くよう厳密なフォーマットを強制し、
-    パース処理もその行だけを対象にする。その行が出力されなかった場合は、誤って
-    関連文書を拾うより安全なので全除外（空リスト）にフォールバックする。
+    応答全体を re.findall(r"\d+", text) で無差別にスキャンすると、LLMが指示に厳密に
+    従わず自由文で答えた場合に本文中の無関係な数字まで拾ってしまう。そのため「回答:」
+    から始まる1行だけに判定結果を書くようフォーマットを強制し、その行が無ければ
+    誤って関連文書を拾うより安全な全除外（空リスト）にフォールバックする。
     """
     if not docs:
         return []
@@ -166,18 +158,14 @@ def _grade_relevance(query: str, docs: list) -> list[int]:
 def build_agent(thread_id: str = GLOBAL_THREAD_ID):
     """検索ツール付きのRAGエージェントを構築して返す。
 
-    thread_id: 現在の会話スレッドのID。指定すると、検索対象は
-      1) 共通ナレッジ（data/直下のファイルやアップロードファイル。thread_id="global"）
-      2) このスレッド自身の会話ログ（data/conversations/<thread_id>/...）
-      の2種類だけに絞られ、他の会話スレッドのログは検索結果に混ざらない。
+    thread_id を指定すると、検索対象は共通ナレッジ（thread_id="global"）と
+    このスレッド自身の会話ログ（data/conversations/<thread_id>/...）だけに絞られ、
+    他スレッドのログは検索結果に混ざらない。
 
     使い方:
         agent = build_agent(thread_id="abc123")
         result = agent.invoke({"messages": [{"role": "user", "content": "質問"}]})
         answer = result["messages"][-1].content
-
-    注意: app.py はエージェントを構築する前に ingest.sync_data_dir() を呼び、
-    data/ の内容を自動でDBに反映してから呼び出す想定です。
     """
     vector_store = get_vectorstore()
     allowed_thread_ids = list({GLOBAL_THREAD_ID, thread_id})

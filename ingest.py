@@ -63,11 +63,8 @@ logger = logging.getLogger(__name__)
 def _log_progress(verbose: bool, message: str, *args) -> None:
     """同期処理の進捗メッセージをloggerに出力する（print()による二重出力を避けるための一本化窓口）。
 
-    verbose=Trueならinfoレベル、Falseならdebugレベルで出力する。実際にコンソールへ
-    表示されるかどうかはロガーの設定次第（例: CLIのmain()がlogging.basicConfig()で
-    INFOレベルのコンソールハンドラを設定していればverbose時のみ表示される）。
-    読み込み失敗などの警告は本関数を使わず、常に logger.warning() を直接呼ぶ
-    （verboseの値に関わらず常に見えるべき情報のため）。
+    verbose=Trueならinfoレベル、Falseならdebugレベルで出力する。読み込み失敗などの警告は
+    本関数を使わず、常に見えるべき情報として logger.warning() を直接呼ぶ。
     """
     logger.log(logging.INFO if verbose else logging.DEBUG, message, *args)
 
@@ -106,14 +103,9 @@ FALLBACK_METADATA_PATTERN = re.compile(r"^-\s*一般知識フォールバック:
 def safe_upload_dest(filename: str) -> Path | None:
     """アップロードされたファイル名を DATA_DIR 配下の安全な書き込み先パスに変換する。
 
-    ディレクトリ部分（`../` 等）を除いた素のファイル名のみを使い、
-    resolve() 後に DATA_DIR 配下から外れていないかを最終チェックする。
-    DATA_DIR の外を指す場合（パストラバーサルの疑いがある場合）は None を返す。
-    同名ファイルが既に存在するかどうかはチェックしない（呼び出し元が
-    resolve_upload_dest() で別途重複を扱う）。
-    app.py の st.file_uploader(type=[...]) 経由の呼び出しでは拡張子制限により
-    None が返るケースはほぼ発生しないが、任意のファイル名を渡しうる汎用関数
-    として多重防御の意味で None チェックを維持している。
+    ディレクトリ部分（`../` 等）を除いた素のファイル名のみを使い、resolve() 後に
+    DATA_DIR 配下から外れていないか（パストラバーサルの疑いがないか）を最終チェックする。
+    外れる場合は None を返す。同名ファイルの重複チェックは呼び出し元の責務。
     """
     dest = (DATA_DIR / Path(filename).name).resolve()
     if dest.parent != DATA_DIR.resolve():
@@ -124,10 +116,9 @@ def safe_upload_dest(filename: str) -> Path | None:
 def safe_relative_dest(relative_path: str) -> Path | None:
     """既知の相対パス（サブフォルダを含みうる）を DATA_DIR 配下の安全な実パスに変換する。
 
-    list_indexed_files() が返す相対パス（例: "manuals/spec.pdf"）をそのまま解決する用途で、
-    safe_upload_dest() と異なりディレクトリ部分を切り捨てない（サブフォルダ構造を保ったまま
-    対象ファイルを一意に特定する）。resolve() 後に DATA_DIR 配下から外れていないかを
-    最終チェックし、外れる場合（`../` によるパストラバーサルの疑いがある場合）は None を返す。
+    safe_upload_dest() と異なりディレクトリ部分を切り捨てない（サブフォルダ構造を
+    保ったまま対象ファイルを一意に特定する）。DATA_DIR 配下から外れる場合
+    （`../` によるパストラバーサルの疑いがある場合）は None を返す。
     """
     data_dir_resolved = DATA_DIR.resolve()
     dest = (DATA_DIR / relative_path).resolve()
@@ -139,13 +130,10 @@ def safe_relative_dest(relative_path: str) -> Path | None:
 def resolve_upload_dest(filename: str, taken_paths: set[Path] | None = None) -> Path | None:
     """アップロードされたファイル名から、上書きを避けた実際の書き込み先パスを求める。
 
-    safe_upload_dest() が返すパスに既にファイルが存在する場合（＝同名ファイルの
-    アップロード）、または同一アップロードバッチ内で既に使用済みのパスの場合
-    （taken_paths、同じバッチ内の同名ファイル対策）は、無警告での上書きを避けるため
-    "name (2).ext" のように連番サフィックスを付けた空いているパスを返す。
-    呼び出し元は、戻り値のファイル名が元のファイル名と異なっていた場合に
-    ユーザーへ警告を表示することを想定している。
-    パストラバーサルの疑いがある場合は safe_upload_dest() と同様に None を返す。
+    同名ファイルが既に存在する場合（taken_pathsも含め同一バッチ内の重複も対象）、
+    無警告での上書きを避けるため "name (2).ext" のように連番サフィックスを付けた
+    空いているパスを返す。呼び出し元は戻り値のファイル名が元と異なる場合に警告表示する
+    想定。パストラバーサルの疑いがある場合は safe_upload_dest() と同様に None を返す。
     """
     dest = safe_upload_dest(filename)
     if dest is None:
@@ -244,12 +232,10 @@ def _load_pdf(path: Path, verbose: bool = True) -> list:
 def _load_pdf_with_docling(path: Path, verbose: bool = True) -> list:
     """Doclingでの再解析を試みる。失敗した場合は空リストを返す（例外は送出しない）。
 
-    export_type=DOC_CHUNKS を使うことで、PyMuPDFLoaderと同様にDocumentごとに
-    ページ番号相当のメタデータ（page）を付与できる。ファイル全体を1つのMarkdown文書として
-    返す export_type=MARKDOWN では、Docling内部のHybridChunkerによるチャンク分割を経ないため
-    dl_meta（ページ等のprovenance情報）自体が付与されず、ページ境界の情報が失われてしまう。
+    export_type=DOC_CHUNKS を使うのは、PyMuPDFLoaderと同様にページ番号相当のメタデータ
+    （page）を付与できるため（export_type=MARKDOWNではページ境界の情報が失われる）。
     DOC_CHUNKSが返す個々のDocumentは段落・テーブルセル単位と細かいため、後段の
-    RecursiveCharacterTextSplitterに渡す前に_merge_docling_chunks()である程度まとめておく。
+    splitterに渡す前に_merge_docling_chunks()である程度まとめておく。
     """
     try:
         docling_docs = DoclingLoader(file_path=str(path), export_type=ExportType.DOC_CHUNKS).load()
@@ -264,13 +250,10 @@ def _load_pdf_with_docling(path: Path, verbose: bool = True) -> list:
 def _merge_docling_chunks(docling_docs: list, target_chars: int = DOCLING_CHUNK_MERGE_TARGET_CHARS) -> list[Document]:
     """DOC_CHUNKSが返す細切れのDocumentを、target_chars程度になるまで隣接結合する。
 
-    先頭から順にDocumentのpage_contentを"\\n\\n"で連結していき、次のDocumentを加えると
-    target_charsを超える場合はそこで区切り、新しいグループを開始する（構造的な区切りは
-    考慮せず、文字数のみで区切る単純な方式。後段のRecursiveCharacterTextSplitterが
-    最終的な文単位の分割を担うため、ここでは粒度を揃えることだけを目的とする）。
-    各グループのpageメタデータは、グループ内に含まれる各Documentの元のページ番号
-    （_extract_docling_page()の結果）のうち最小値（最初に登場したページ）を採用する。
-    グループ内に有効なページ番号が1つも無い場合はpageメタデータを付与しない。
+    構造的な区切りは考慮せず文字数のみで区切る単純な方式（最終的な文単位の分割は
+    後段のRecursiveCharacterTextSplitterが担うため、ここでは粒度を揃えるだけでよい）。
+    各グループのpageメタデータは、含まれる各Documentの元ページ番号の最小値を採用し、
+    有効なページ番号が1つも無い場合は付与しない。
     """
     merged_docs: list[Document] = []
     source = docling_docs[0].metadata.get("source") if docling_docs else None
@@ -306,12 +289,9 @@ def _merge_docling_chunks(docling_docs: list, target_chars: int = DOCLING_CHUNK_
 def _extract_docling_page(metadata: dict) -> int | None:
     """DoclingLoader(export_type=DOC_CHUNKS)が付与するdl_metaから代表ページ番号を取り出す。
 
-    dl_meta["doc_items"]の各要素はprov（ページ番号・座標などのprovenance情報）のリストを持ち、
-    1チャンクが複数ページにまたがることもある。ここでは表示用に最小のpage_no（最初のページ）を
-    代表値として採用する。Doclingのpage_noは1始まりのため、PyMuPDFLoaderが付与するpage
-    （0始まり、app.pyの_format_source_label()が+1して表示する）と揃うよう1引いて返す。
-    dl_metaやdoc_items・provが存在しない、page_noが1未満（想定外の値）、または想定外の形式の
-    場合はNoneを返す（呼び出し元はpageメタデータを付与せず、ページ番号非表示のまま扱う）。
+    1チャンクが複数ページにまたがりうるため、表示用に最小のpage_no（最初のページ）を採用する。
+    Doclingのpage_noは1始まりのため、PyMuPDFLoaderが付与するpage（0始まり）と揃うよう
+    1引いて返す。想定外の形式・値の場合はNoneを返す。
     """
     dl_meta = metadata.get("dl_meta")
     if not isinstance(dl_meta, dict):
@@ -346,8 +326,7 @@ def _is_fallback_conversation(docs: list) -> bool:
     """分割前の生ドキュメントの本文から、一般知識フォールバック回答の会話ログかどうかを判定する。
 
     memory.save_conversation() が書き込む「- 一般知識フォールバック: true」という
-    メタデータ行を正規表現で検出する。通常のドキュメント・アップロードファイルなど
-    該当行が無いものは False になる。
+    メタデータ行を正規表現で検出する。
     """
     return any(FALLBACK_METADATA_PATTERN.search(doc.page_content) for doc in docs)
 
@@ -355,13 +334,10 @@ def _is_fallback_conversation(docs: list) -> bool:
 def data_dir_signature() -> tuple[int, float]:
     """data/ の変更有無を、内容を読まずにstat()だけで軽量に判定するためのシグネチャを返す。
 
-    sync_data_dir()が対象とするのと同じファイル集合（拡張子がLOADERSに含まれるもの）に対し、
-    (ファイル数, 最新mtime) のタプルを返す。ファイルの読み込み・分割・埋め込み・
-    ベクトルストア接続・manifest.jsonの読み書きは一切行わない
-    （それらの重い処理を避けるための、あくまで近似的な変更検知）。
-    app.py側はStreamlitが再実行されるたびにこの関数を呼び、前回値と比較することで、
-    「data/に変更があった場合だけ」本格的な sync_data_dir() を呼び出す。
-    DATA_DIRが存在しない、または対象ファイルが1つもない場合は (0, 0.0) を返す。
+    sync_data_dir()が対象とするのと同じファイル集合に対し (ファイル数, 最新mtime) の
+    タプルを返す（あくまで近似的な変更検知で、読み込み・埋め込み等の重い処理は行わない）。
+    app.py側は再実行のたびにこれを前回値と比較し、変更があった場合だけ本格的な
+    sync_data_dir() を呼び出す。対象ファイルが1つも無い場合は (0, 0.0) を返す。
     """
     if not DATA_DIR.exists():
         return (0, 0.0)
@@ -376,29 +352,18 @@ def sync_data_dir(verbose: bool = True) -> dict:
     """data/ の内容とベクトルDBを同期する。
 
     戻り値: {"added": [...], "updated": [...], "removed": [...], "failed": [...]}
-    変更がなければ全て空リストになる（＝差分がなければ何もしない）。
-    読み込み・分割に失敗したファイルは "failed" に積まれ、manifestには記録されない
-    （＝次回同期時に再度リトライされる）。他のファイルの同期は継続される。
+    （変更がなければ全て空リスト）。読み込み・分割に失敗したファイルは"failed"に積まれ
+    manifestには記録されない（次回同期時にリトライされる。他ファイルの同期は継続する）。
 
-    manifestの保存はファイル1件ごとに行う（全件処理後にまとめて保存はしない）。
-    ベクトルDBへの追加・削除が完了するたびに都度manifestを保存することで、
-    途中でプロセスが中断（クラッシュ・強制終了など）してもmanifestには
-    「実際にDBへ反映済みのファイル」だけが記録された状態を保ち、次回同期時に
-    同じ内容のチャンクが重複登録されるのを防ぐ。
+    manifestはプロセス中断時の重複登録を防ぐためファイル1件ごとに保存する。また、
+    既存ファイル更新時の旧チャンクdelete()が失敗した場合は旧chunk_idsを
+    pending_delete_chunk_idsとしてmanifestに持ち越し、以降unchanged判定になっても
+    削除だけは再試行する（さもないと新旧チャンクが重複したまま残り続けるため）。
 
-    既存ファイル更新時はadd_documents()成功後にvector_store.delete()で旧チャンクを
-    削除するが、このdelete()自体が失敗した場合は旧chunk_idsをmanifestの
-    pending_delete_chunk_idsに持ち越す。持ち越しがあるファイルは、内容に変化がなく
-    unchanged判定になった場合でも削除の再試行だけは行われる（さもないと新旧チャンクが
-    重複したままベクトルストアに残り続けてしまうため）。
-
-    同一プロセス内の複数Streamlitセッション（複数タブ）や複数プロセスから同時に
-    呼ばれても安全なよう、manifest.json読み込み〜ベクトルDB更新〜manifest.json書き込みの
-    一連の処理全体をファイルロック（SYNC_LOCK_PATH）で排他制御する。先に実行している
-    処理が終わるまで後発の呼び出しはブロックされ、順番に処理される。
+    複数タブ・複数プロセスから同時に呼ばれても安全なよう、manifest読み込み〜DB更新〜
+    manifest書き込みをファイルロック（SYNC_LOCK_PATH）で排他制御する。
     SYNC_LOCK_TIMEOUT_SECONDS以内にロックを獲得できなかった場合は
-    `filelock.Timeout` をそのまま送出する（呼び出し元のapp.py/api/main.py側で
-    他の例外と同様にエラーとして扱われる）。
+    `filelock.Timeout` をそのまま送出する。
     """
     DATA_DIR.mkdir(parents=True, exist_ok=True)
     PERSIST_DIR.mkdir(parents=True, exist_ok=True)
@@ -417,23 +382,15 @@ def sync_data_dir(verbose: bool = True) -> dict:
 def add_single_conversation_file(path: Path) -> str:
     """会話ログ1件だけを、data/ 全件を走査せずにその場でベクトルDBへ反映する軽量な経路。
 
-    app.py はチャット1往復ごとに会話ログを1ファイル追加保存するが、そのたびに
-    sync_data_dir()（DATA_DIR.rglob("*")による全件列挙＋全ファイルのstat比較）を
-    呼ぶと、data/配下のファイル数に比例して毎ターンの処理コストが増え続けてしまう。
-    本関数は対象ファイル1件分の「読み込み→分割→チャンクへのメタデータ付与→
-    vector_store.add_documents()→manifest更新」だけを行い、DATA_DIR.rglob("*")による
-    全件列挙は一切行わない（manifestの読み込み・保存自体は必要なため行う）。
+    sync_data_dir()はDATA_DIR.rglob("*")による全件列挙を伴うため、チャット1往復ごとに
+    毎回呼ぶとdata/配下のファイル数に比例して処理コストが増え続けてしまう。本関数は
+    対象ファイル1件分の読み込み〜manifest更新だけを行い、全件列挙は行わない。
 
-    sync_data_dir()と同じSYNC_LOCK_PATHのファイルロックで処理全体を排他制御し、
-    複数タブ・複数プロセスからの同時書き込みによるmanifestの競合を防ぐ。
+    sync_data_dir()と同じSYNC_LOCK_PATHのファイルロックで排他制御する。
 
     戻り値: "added" / "updated" / "unchanged" / "failed" のいずれか
-    （_ingest_file()の戻り値をそのまま返す）。"failed"の場合、対象ファイルは
-    ログに残してスキップされ、manifestには記録されない（sync_data_dir()と同様、
-    次回の同期時に再試行される）。
-    ロック取得がSYNC_LOCK_TIMEOUT_SECONDS以内に完了しなかった場合は
-    `filelock.Timeout` をそのまま送出する（呼び出し元がsync_data_dir()と
-    同様の例外処理を行う想定）。
+    （_ingest_file()の戻り値をそのまま返す）。ロック取得がタイムアウトした場合は
+    `filelock.Timeout` をそのまま送出する。
     """
     DATA_DIR.mkdir(parents=True, exist_ok=True)
     PERSIST_DIR.mkdir(parents=True, exist_ok=True)
@@ -466,9 +423,8 @@ def _ingest_file(name: str, path: Path, vector_store, manifest: dict, splitter, 
     """1ファイル分の追加・更新判定と、必要な場合のベクトルDBへの反映を行う。
 
     sync_data_dir()の全件差分検出、add_single_conversation_file()の単一ファイル追加の
-    両方から呼ばれる共通処理。manifestの読み込み・保存自体は呼び出し元の責務とし、
-    ここでは受け取ったmanifest辞書をその場で書き換えるだけ（必要な保存タイミングでの
-    _save_manifest()呼び出しはこの関数内で行う）。
+    両方から呼ばれる共通処理。manifestの読み込み自体は呼び出し元の責務とし、
+    ここでは受け取ったmanifest辞書をその場で書き換える。
 
     戻り値: "added" / "updated" / "unchanged" / "failed" のいずれか。
     """
@@ -604,13 +560,10 @@ def _sync_data_dir_locked(verbose: bool) -> dict:
 def list_indexed_files() -> list[dict]:
     """サイドバーの一覧表示用に、インデックス済みファイルの情報をmanifestから取得する。
 
-    会話ログ（data/conversations/配下）はユーザーがアップロード・削除で管理する対象ではないため
-    除外し、data/直下のドキュメントのみを返す。戻り値はファイル名昇順のリストで、各要素は
-    {"name": ファイル名, "chunk_count": チャンク数} の辞書。
-
+    会話ログ（data/conversations/配下）は除外し、data/直下のドキュメントのみを返す。
+    戻り値はファイル名昇順のリストで、各要素は {"name": ファイル名, "chunk_count": チャンク数}。
     delete()失敗時にpending_delete_chunk_idsだけを持ち越した「ゴーストエントリ」
-    （"chunk_ids"キー自体を持たないエントリ）は、data/上は既に削除済みでバックグラウンドの
-    再試行を待っているだけの内部状態のため、ユーザー向けの一覧には含めない。
+    （"chunk_ids"キーを持たないエントリ）は内部状態のため一覧には含めない。
     """
     manifest = _load_manifest()
     return [
@@ -624,13 +577,9 @@ def delete_indexed_file(name: str) -> bool:
     """インデックス済みファイルをdata/から削除する。
 
     ここではmanifest・ベクトルDBの更新は行わない。呼び出し元がこの後sync_data_dir()を
-    呼ぶことで、data/にファイルが存在しなくなったことが検知され、DB・manifestから
-    自動的に除外される（sync_data_dir()の既存の削除検知ロジックをそのまま利用する）。
-    list_indexed_files()が返す相対パスはdata/直下だけでなくサブフォルダ（例:
-    "manuals/spec.pdf"）を含みうるため、safe_upload_dest()（ファイル名のみを受け取り
-    ディレクトリ部分を切り捨てる、アップロード保存先解決用）ではなくsafe_relative_dest()
-    （サブフォルダ構造を保ったままDATA_DIR配下かどうかを検証する）でパスを解決する。
-    対象ファイルが存在しない場合は何もせずFalseを返す。
+    呼ぶことで、ファイル消失が検知されDB・manifestから自動的に除外される。
+    相対パスはサブフォルダ（例: "manuals/spec.pdf"）を含みうるため、safe_upload_dest()
+    ではなくsafe_relative_dest()でパスを解決する。対象が存在しない場合はFalseを返す。
     """
     path = safe_relative_dest(name)
     if path is None or not path.exists():
