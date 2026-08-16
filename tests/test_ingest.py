@@ -1036,7 +1036,7 @@ def test_add_documents_failure_for_one_file_does_not_block_other_files(fake_env,
     assert "bad.txt" not in manifest
 
 
-# --- .docx / .csv 対応（Issue #170） ---
+# --- .docx / .csv の取り込みテスト ---
 
 
 def _minimal_docx_bytes(paragraphs: list[str]) -> bytes:
