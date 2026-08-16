@@ -67,10 +67,8 @@ _FALLBACK_HISTORY_TOKENS = 3000
 def _history_token_budget() -> int:
     """実行時点のsetup.CURRENT_PROVIDERに応じて、会話履歴に割り当てるトークン予算を決める。
 
-    setup._build_model()はOllama利用時のみnum_ctxでコンテキスト長を明示指定しており、
-    Anthropic/OpenAIへのフォールバック時はコンテキスト長を制限していない。そのため
-    プロバイダによって妥当な予算が大きく異なり、固定値では実際に使用中のプロバイダに
-    関わらず一律に会話履歴が切り詰められてしまう。
+    Ollamaのみnum_ctxでコンテキスト長を制限しており、Anthropic/OpenAIは制限が無いため、
+    固定値ではなくプロバイダに応じて動的に決める。
     """
     provider = setup.CURRENT_PROVIDER
     if provider == "ollama":
@@ -86,8 +84,6 @@ def _windowed_history(messages: list) -> list:
     画面表示用の st.session_state.messages はそのまま保持しつつ、LLMへの送信直前だけ
     直近のやりとりに絞り込む。start_on="human" により、絞り込んだ結果の先頭が必ず
     HumanMessageになるようにする（エージェントが要求する会話構造を壊さないため）。
-    正確なトークン数ではなく高速な概算カウント（count_tokens_approximately）を使う。
-    予算自体は_history_token_budget()が実際に使用中のプロバイダに応じて動的に決める。
     """
     if not messages:
         return messages
@@ -103,12 +99,8 @@ def _windowed_history(messages: list) -> list:
 def _format_snippet(text: str, limit: int = 300) -> str:
     """参照元プレビュー用に本文を整形する。
 
-    単純に先頭limit文字で切ると、文や単語の途中で不自然に切れてしまい、
-    limit未満の短いテキストにまで"..."が付いてしまう問題があった。
-    - limit文字以内に収まる場合はそのまま返し、"..."は付けない。
-    - limitを超える場合は、句点・改行などの区切り文字のうち最も末尾に近いものを探し、
-      そこで区切る（区切り位置が手前すぎる場合は意味が無いのでlimitの半分より
-      後ろにある場合のみ採用し、見つからなければ直近の空白で単語の途中を避けて切る）。
+    limitを超える場合、単語・文の途中で不自然に切れないよう句点・改行などの区切り文字
+    （見つからなければ空白）のうち末尾に近いものを探して区切る。
     """
     stripped = text.strip()
     if len(stripped) <= limit:
@@ -151,11 +143,9 @@ def _format_source_label(metadata: dict) -> str:
 def _sync_and_report(spinner_text: str, warning_slot: DeltaGenerator | None = None) -> None:
     """data/全体を差分同期し、結果をトースト・警告バナーに反映する。
 
-    warning_slot（トップレベルで確保済みのst.empty()）を渡すと、この関数内での
-    failed_sync_files更新を、次のスクリプト再実行を待たずに同じターン内で
-    警告バナーへ即時反映できる。サイドバー再同期ボタン・アップロード時のように
-    トップレベルの初回描画（_show_failed_sync_files_warning呼び出し）より後で
-    呼ばれる場合に必要（起動時の呼び出しではスロット確保前のため渡さない）。
+    warning_slot（トップレベルで確保済みのst.empty()）を渡すと、次のスクリプト再実行を
+    待たずに同じターン内で警告バナーへ即時反映できる（起動時の呼び出しではスロット確保前
+    のため渡さない）。
     """
     try:
         with st.spinner(spinner_text):
@@ -186,18 +176,9 @@ def _sync_and_report(spinner_text: str, warning_slot: DeltaGenerator | None = No
 def _sync_saved_conversation(path: Path, warning_slot: DeltaGenerator | None = None) -> None:
     """保存したばかりの会話ログ1件だけを、data/全件を走査せずその場で軽量にDB反映する。
 
-    次回のスクリプト再実行を待ってトップレベルの軽量シグネチャチェック
-    （data_dir_signature → _sync_and_report → sync_data_dir）に反映を委ねると、
-    data/配下のファイル数に比例して毎ターンの走査コストが増え続けてしまう。
-    add_single_conversation_file()は保存済みの対象1件だけを処理するため、
-    data/内のファイル数に依存しない一定コストでDB反映が完了する。
-
-    読み込み・埋め込み失敗時はエラー表示のみ行い、シグネチャは更新しない。
-    これにより次回のトップレベルの軽量チェックが「data/に未反映の変更あり」と
-    判定し続け、通常の全件差分同期（sync_data_dir）が改めてこのファイルを試行する。
-    失敗ファイル一覧はここで即座にセッションへ反映した上で、warning_slot（トップレベルで
-    確保済みのst.empty()）へ再描画することで、次のスクリプト再実行を待たずに警告バナーを
-    表示する。同じスロットへ上書きするため、トップレベルで表示済みの警告と重複しない。
+    トップレベルの軽量シグネチャチェック（sync_data_dir）に任せると、data/配下の
+    ファイル数に比例して毎ターンの走査コストが増え続けるため、add_single_conversation_file()で
+    対象1件だけを処理する。失敗時はシグネチャを更新せず、次回の全件差分同期に再試行を委ねる。
     """
     try:
         status = add_single_conversation_file(path)
@@ -223,16 +204,9 @@ def _sync_saved_conversation(path: Path, warning_slot: DeltaGenerator | None = N
 def _show_failed_sync_files_warning(container: DeltaGenerator | None = None) -> None:
     """読み込みに失敗したファイルの警告を、同期が成功するまで毎回のスクリプト実行で表示し続ける。
 
-    st.warningはそのスクリプト実行の描画にしか残らないため、_sync_and_report()内で
-    一度呼ぶだけでは次の画面操作（別のチャット送信・ボタン押下等）で消えてしまう。
-    ここでセッションに保持した失敗ファイル一覧を毎回参照して描画することで、
-    ユーザーがファイルを修正・削除して同期が成功するまで警告が残り続けるようにする。
-
-    containerを渡すと（st.empty()のプレースホルダーなど）、st全体ではなくそのスロットに
-    描画する。同一スロットへの再描画は上書きになるため、_sync_saved_conversation()や
-    _sync_and_report()からスクリプト実行の後半で呼び直しても、トップレベルの表示と
-    重複して並ばない。containerを渡した状態で失敗ファイルが0件になった場合は、
-    container.empty()でスロットをクリアし、直前に表示済みの古い警告が残らないようにする。
+    st.warningはそのスクリプト実行の描画にしか残らないため、セッションに保持した
+    失敗ファイル一覧を毎回参照して描画する。containerを渡すとそのスロットへ上書き描画し、
+    失敗ファイルが0件になった場合はcontainer.empty()で古い警告をクリアする。
     """
     target = container if container is not None else st
     failed = st.session_state.get("failed_sync_files")
@@ -251,9 +225,8 @@ def _format_invoke_error_message(e: Exception) -> str:
     """agent.invoke()/agent.stream()失敗時のエラーメッセージを、実際に使用中のプロバイダに応じて出し分ける。
 
     setup.py の _build_model() はOllama→Anthropic→OpenAIの順にフォールバックするため、
-    Claude/OpenAIで動作しているセッションでは「Ollamaサーバーに接続できません」という
-    固定メッセージは原因と食い違い、ユーザーを誤った方向（Ollamaの起動確認）に
-    誘導してしまう。setup.CURRENT_PROVIDER を参照し、実際の使用プロバイダに即した文言にする。
+    setup.CURRENT_PROVIDER を見ずに固定メッセージにすると、実際とは異なるプロバイダの
+    トラブルシューティングにユーザーを誤誘導してしまう。
     """
     if setup.CURRENT_PROVIDER == "ollama":
         message = str(e).lower()
@@ -530,16 +503,10 @@ if user_input:
             def _stream_answer():
                 """agentのストリーミング出力を逐次yieldしつつ、参照元ドキュメントをsourcesへ蓄積する。
 
-                stream_mode="messages" は (メッセージチャンク, メタデータ) のタプルを順に返す。
-                ToolMessage（検索ツールの実行結果）のcontentはツールの生の検索結果テキストであり、
-                回答本文として表示すべきではないため除外し、artifact（取得ドキュメント）だけを
-                sourcesに蓄積する。回答本文（AIMessageChunk）のテキストのみをyieldする。
-
-                AIMessageChunk.content はプロバイダによって型が異なる（OpenAIは常にstr、
-                Anthropicはtoolsをbindしている場合 [{"type": "text", "text": "..."}] のような
-                content blocksのlistで返る）。BaseMessage.text プロパティはstr/listいずれの形式でも
-                text系ブロックのみを結合した文字列を返してくれるため、素朴なisinstance(content, str)判定
-                ではなくこちらを使い、プロバイダによらず本文を取りこぼさないようにする。
+                ToolMessage（検索ツールの実行結果）は回答本文ではないため除外し、artifactだけを
+                sourcesに蓄積する。AIMessageChunk.content はプロバイダによって型が異なる
+                （str、またはAnthropicのcontent blocks list）ため、素朴なisinstance判定ではなく
+                text系ブロックを結合済みの .text プロパティでテキストを取り出す。
                 """
                 first_token = True
                 seen_source_keys: set = set()

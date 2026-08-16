@@ -58,12 +58,10 @@ def _ollama_available() -> bool:
 def _ollama_model_pulled() -> bool:
     """OLLAMA_MODELがOllamaに実際にpull済みかを `/api/tags` で確認する。
 
-    サーバー自体は起動していてもモデルが未pullだと、モデル呼び出し時になって
-    初めて "model not found" のようなエラーになるため、事前に検出してフォールバックに回す。
+    未pullだとモデル呼び出し時に初めて"model not found"エラーになるため事前検出する。
     Ollamaのモデル名はタグ付き（例: "llama3.1:latest"）で返るため、OLLAMA_MODELに
-    タグが無い場合は暗黙のデフォルトタグ "latest" を補って比較する。
-    APIへの到達自体に失敗した場合は判定不能なだけで「Ollamaが使えない」ことを意味しない
-    ため、過検出を避けて安全側（pull済みとみなしOllamaを使い続ける）に倒す。
+    タグが無い場合は暗黙のデフォルトタグ "latest" を補って比較する。APIへの到達自体に
+    失敗した場合は判定不能なだけなので、安全側（pull済みとみなす）に倒す。
     """
     url = f"http://{OLLAMA_HOST}:{OLLAMA_PORT}/api/tags"
     try:

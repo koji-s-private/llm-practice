@@ -135,11 +135,7 @@ def _format_source_label(metadata: dict) -> str:
 
 
 def _format_snippet(text: str, limit: int = 300) -> str:
-    """参照元プレビュー用に本文を整形する（app.pyの同名関数と同じ方針）。
-
-    limit文字を超える場合は句点・改行などの区切り文字のうち末尾に近いものを探して
-    区切り、見つからなければ直近の空白で単語の途中を避けて切る。
-    """
+    """参照元プレビュー用に本文を整形する（app.pyの同名関数と同じ方針）。"""
     stripped = text.strip()
     if len(stripped) <= limit:
         return stripped
@@ -167,22 +163,12 @@ def _serialize_sources(sources: list[Document]) -> list[dict]:
 def _stream_chat_response(thread_id: str, message: str, history: list[ChatMessage]) -> Generator[str, None, None]:
     """agentの回答をSSE形式（`data: <json>\\n\\n`）のテキストとして順次yieldする。
 
-    `create_agent` が返すエージェントは `.stream(input, stream_mode="messages")` で
-    LLMのトークン単位のストリーミングに対応している（LangGraphの標準的なストリーミング
-    インターフェース）。各要素は `(メッセージチャンク, メタデータ)` のタプルで、
-    ツール呼び出し中の内部メッセージにはcontentが空文字のものも含まれるため、
-    contentがあるものだけをクライアントに送る。
-
-    ToolMessage（retrieve_contextツールの実行結果）はcontentが検索結果の生テキストで
-    回答本文ではないため送信対象から除外し、代わりにartifact（取得ドキュメント）を
-    蓄積しておき、ストリーム終了後に `sources` イベントとしてまとめて送信する
-    （app.pyの `_stream_answer` と同じ方針）。
-
-    AIMessageChunk.content はプロバイダによって型が異なる（OpenAIは常にstr、
-    Anthropicはtoolsをbindしている場合 [{"type": "text", "text": "..."}] のような
-    content blocksのlistで返る）。BaseMessage.text プロパティはstr/listいずれの形式でも
-    text系ブロックのみを結合した文字列を返してくれるため、素朴なgetattr(chunk, "content", "")
-    ではなくこちらを使い、プロバイダによらず本文（str）のみをSSEで送信する。
+    ToolMessage（retrieve_contextツールの実行結果）は回答本文ではないため送信対象から
+    除外し、代わりにartifact（取得ドキュメント）を蓄積してストリーム終了後に`sources`
+    イベントとしてまとめて送信する（app.pyの `_stream_answer` と同じ方針）。
+    AIMessageChunk.content はプロバイダによって型が異なる（str、またはAnthropicの
+    content blocks list）ため、getattr(chunk, "content", "") ではなく text系ブロックを
+    結合済みの .text プロパティで本文を取り出す。
     """
     sources: list[Document] = []
     try:
@@ -211,10 +197,6 @@ def _stream_chat_response(thread_id: str, message: str, history: list[ChatMessag
 @app.post("/api/chat")
 def chat(request: ChatRequest) -> StreamingResponse:
     """チャット応答をSSE（Server-Sent Events）でストリーミング返却する。
-
-    現行Streamlit版（app.py）の `agent.invoke()` による一括回答表示と異なり、
-    トークンが生成され次第クライアントに送信するため、フロントエンド側で
-    逐次表示（タイプライター表示）を実現できる。
 
     thread_id はファイルパスには使われない（Chromaのメタデータフィルタとしてのみ使用）が、
     クライアントからの直接入力である点は他のエンドポイントと同じなので、一貫性のため
@@ -279,8 +261,7 @@ class SaveConversationRequest(BaseModel):
     """POST /api/conversations/save のリクエストボディ。
 
     is_fallback: ドキュメントに根拠が見つからず一般知識で回答した場合に True を渡す
-    （app.pyの `save_conversation(..., is_fallback=not sources)` 相当）。省略時は
-    既存動作を壊さないよう False（根拠ありとして扱う）とする。
+    （app.pyの `save_conversation(..., is_fallback=not sources)` 相当）。
     """
 
     question: str
