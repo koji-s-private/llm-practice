@@ -5,11 +5,13 @@
 に基づく差分判定だけを検証する（ドキュメントローダー・チャンク分割は実物を使う）。
 """
 
+import io
 import json
 import logging
 import os
 import threading
 import time
+import zipfile
 
 import pytest
 from filelock import FileLock, Timeout
@@ -1032,6 +1034,115 @@ def test_add_documents_failure_for_one_file_does_not_block_other_files(fake_env,
     manifest = json.loads(ingest.MANIFEST_PATH.read_text(encoding="utf-8"))
     assert "good.txt" in manifest
     assert "bad.txt" not in manifest
+
+
+# --- .docx / .csv 対応（Issue #170） ---
+
+
+def _minimal_docx_bytes(paragraphs: list[str]) -> bytes:
+    """docx2txtが実際に参照するword/document.xmlだけを含む最小限の.docxファイルを組み立てる。
+
+    python-docx等の外部ライブラリに頼らず標準の zipfile だけで組み立てることで、
+    テスト用フィクスチャの依存を増やさない。
+    """
+    body = "".join(f"<w:p><w:r><w:t>{text}</w:t></w:r></w:p>" for text in paragraphs)
+    document_xml = (
+        '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+        '<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">'
+        f"<w:body>{body}</w:body></w:document>"
+    )
+    buffer = io.BytesIO()
+    with zipfile.ZipFile(buffer, "w") as zf:
+        zf.writestr("word/document.xml", document_xml)
+    return buffer.getvalue()
+
+
+def _write_bytes(data_dir, rel_path, data: bytes):
+    path = data_dir / rel_path
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_bytes(data)
+    return path
+
+
+def test_docx_file_is_loaded_and_added(fake_env):
+    data_dir, store = fake_env
+    _write_bytes(
+        data_dir,
+        "report.docx",
+        _minimal_docx_bytes(["これはWord文書の本文です。" * 3, "2つ目の段落です。" * 3]),
+    )
+
+    result = ingest.sync_data_dir(verbose=False)
+
+    assert result == {"added": ["report.docx"], "updated": [], "removed": [], "failed": []}
+    contents = [doc.page_content for doc in store.docs_by_id.values()]
+    assert any("これはWord文書の本文です。" in c for c in contents)
+    assert any("2つ目の段落です。" in c for c in contents)
+
+
+def test_csv_file_is_loaded_and_added(fake_env):
+    data_dir, store = fake_env
+    _write(data_dir, "members.csv", "name,age\nAlice,30\nBob,25\n")
+
+    result = ingest.sync_data_dir(verbose=False)
+
+    assert result == {"added": ["members.csv"], "updated": [], "removed": [], "failed": []}
+    contents = [doc.page_content for doc in store.docs_by_id.values()]
+    assert any("Alice" in c and "30" in c for c in contents)
+    assert any("Bob" in c and "25" in c for c in contents)
+
+
+def test_empty_csv_file_is_added_with_zero_chunks(fake_env):
+    # 境界値: ヘッダー行すら無い0バイトのCSVはCSVLoaderが0件のDocumentを返すが、
+    # 例外にはならず"added"（チャンク数0）として記録される
+    data_dir, store = fake_env
+    _write_bytes(data_dir, "empty.csv", b"")
+
+    result = ingest.sync_data_dir(verbose=False)
+
+    assert result == {"added": ["empty.csv"], "updated": [], "removed": [], "failed": []}
+    assert store.docs_by_id == {}
+    manifest = json.loads(ingest.MANIFEST_PATH.read_text(encoding="utf-8"))
+    assert manifest["empty.csv"]["chunk_ids"] == []
+
+
+def test_corrupt_docx_file_is_recorded_as_failed_without_blocking_others(fake_env):
+    # 異常系: zip形式ですらない壊れた.docxファイルは読み込みに失敗しfailedに記録され、
+    # 他の正常なファイルの同期はブロックされない（既存の異常系テストと同じパターン）
+    data_dir, store = fake_env
+    _write_bytes(data_dir, "broken.docx", b"not a real docx file")
+    _write(data_dir, "good.txt", "正常に読み込めるテキストです。" * 5)
+
+    result = ingest.sync_data_dir(verbose=False)
+
+    assert result == {"added": ["good.txt"], "updated": [], "removed": [], "failed": ["broken.docx"]}
+    sources = {doc.metadata.get("source") for doc in store.docs_by_id.values()}
+    assert any("good.txt" in (s or "") for s in sources)
+
+
+def test_corrupt_csv_file_is_recorded_as_failed_without_blocking_others(fake_env):
+    # 異常系: デコード不能なバイト列の.csvファイルは読み込みに失敗しfailedに記録される
+    data_dir, store = fake_env
+    _write_bytes(data_dir, "broken.csv", b"\xff\xfe\x00\x01\x02")
+    _write(data_dir, "good.txt", "正常に読み込めるテキストです。" * 5)
+
+    result = ingest.sync_data_dir(verbose=False)
+
+    assert result == {"added": ["good.txt"], "updated": [], "removed": [], "failed": ["broken.csv"]}
+
+
+def test_docx_loader_raises_for_nonexistent_file():
+    # 境界値: 存在しないファイルパスを渡した場合、.docx用ローダーは例外を送出する
+    # （sync_data_dir()側は実在するファイルのみ列挙するため通常到達しないが、
+    # ローダー自体の異常系挙動として確認しておく）
+    with pytest.raises(Exception):
+        ingest.LOADERS[".docx"]("/no/such/path.docx").load()
+
+
+def test_csv_loader_raises_for_nonexistent_file():
+    # 境界値: 存在しないファイルパスを渡した場合、.csv用ローダーは例外を送出する
+    with pytest.raises(Exception):
+        ingest.LOADERS[".csv"]("/no/such/path.csv").load()
 
 
 def test_unsupported_extension_is_ignored(fake_env):
