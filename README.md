@@ -66,7 +66,7 @@ cp .env.example .env
 # → 課金なしで使いたい場合は下記「無料で使う（Ollama）」を先に設定
 #    課金APIでよければ .env に ANTHROPIC_API_KEY または OPENAI_API_KEY を設定
 
-# 3. data/ に質問したいファイル(.pdf / .txt / .md)を置く
+# 3. data/ に質問したいファイル(.pdf / .txt / .md / .docx / .csv)を置く
 #    （サンプルとして data/sample.txt を同梱済み）
 
 # 4. チャットアプリを起動（起動時に data/ の内容が自動でDBに反映されます）
@@ -220,9 +220,10 @@ HTTP API層を提供する。
 
 | ライブラリ | 役割 | このプロジェクトでの使用箇所 |
 |---|---|---|
-| `langchain-community` | PDF/テキストファイルをLangChainのDocument形式で読み込むローダー群を提供（2026年6月にsunset済み、詳細は下記注意点を参照） | `ingest.py`（`PyMuPDFLoader` / `TextLoader`） |
+| `langchain-community` | PDF/テキスト/Word/CSVファイルをLangChainのDocument形式で読み込むローダー群を提供（2026年6月にsunset済み、詳細は下記注意点を参照） | `ingest.py`（`PyMuPDFLoader` / `TextLoader` / `Docx2txtLoader` / `CSVLoader`） |
 | `pymupdf` | PDFからテキストを高速抽出するエンジン（`PyMuPDFLoader`が内部で使用） | `ingest.py`の`_load_pdf()`（1段目の高速抽出） |
 | `cryptography` | 暗号化（パスワード付き）PDFの復号に必要 | `pymupdf`によるPDF読み込み時に内部的に使用（`ingest.py`） |
+| `docx2txt` | Word（`.docx`）ファイルからテキストを抽出するエンジン（`Docx2txtLoader`が内部で使用） | `ingest.py`の`LOADERS`（`.docx`ファイルの読み込み） |
 | `docling` / `langchain-docling`（任意インストール） | レイアウト認識・表構造認識・OCRに対応した高精度なドキュメント解析ライブラリ | `ingest.py`の`_load_pdf()`。PyMuPDFでの抽出文字数が極端に少ない（図解・スキャンPDFの疑いがある）場合のみフォールバックとして使用。未インストールでも動作する |
 
 ### その他

@@ -1,5 +1,5 @@
 """
-data/ 配下のドキュメント（.pdf / .txt / .md）を Chroma ベクトルDBに同期するモジュール。
+data/ 配下のドキュメント（.pdf / .txt / .md / .docx / .csv）を Chroma ベクトルDBに同期するモジュール。
 
 - ライブラリとして: `from ingest import sync_data_dir` を app.py から呼び出し、
   起動時に自動でDBを最新状態に同期する。
@@ -43,7 +43,7 @@ import sys
 from pathlib import Path
 
 from filelock import FileLock, Timeout
-from langchain_community.document_loaders import PyMuPDFLoader, TextLoader
+from langchain_community.document_loaders import CSVLoader, Docx2txtLoader, PyMuPDFLoader, TextLoader
 from langchain_core.documents import Document
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 
@@ -85,6 +85,8 @@ LOADERS = {
     ".pdf": PyMuPDFLoader,
     ".txt": TextLoader,
     ".md": TextLoader,
+    ".docx": Docx2txtLoader,
+    ".csv": CSVLoader,
 }
 
 # 1ページあたりの抽出文字数がこれ未満の場合、「うまくテキスト抽出できていない

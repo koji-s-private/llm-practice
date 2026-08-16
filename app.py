@@ -435,7 +435,7 @@ with st.sidebar:
     st.caption("ファイルをアップロードすると自動で data/ に保存・DB反映されます。")
     uploaded_files = st.file_uploader(
         "ファイルを追加",
-        type=["pdf", "txt", "md"],
+        type=["pdf", "txt", "md", "docx", "csv"],
         accept_multiple_files=True,
         label_visibility="collapsed",
     )
@@ -451,7 +451,7 @@ with st.sidebar:
         renamed = []
         for f in new_uploaded_files:
             dest = resolve_upload_dest(f.name, taken_paths=saved_paths)
-            # st.file_uploader(type=["pdf", "txt", "md"])はサーバー側でも拡張子を検証するため、
+            # st.file_uploader(type=[...])はサーバー側でも拡張子を検証するため、
             # 通常この分岐には到達しないが、resolve_upload_dest()自体は汎用関数であり将来
             # 呼び出し元が増える可能性もあるため多重防御として残している。
             if dest is None:

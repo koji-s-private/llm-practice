@@ -1036,7 +1036,7 @@ def test_add_documents_failure_for_one_file_does_not_block_other_files(fake_env,
 
 def test_unsupported_extension_is_ignored(fake_env):
     data_dir, store = fake_env
-    _write(data_dir, "notes.docx", "対応していない拡張子")
+    _write(data_dir, "notes.xlsx", "対応していない拡張子")
 
     result = ingest.sync_data_dir(verbose=False)
 
@@ -1348,7 +1348,7 @@ def test_data_dir_signature_ignores_unsupported_extension(fake_env):
     data_dir, _store = fake_env
     path = _write(data_dir, "a.txt", "対象ファイルです。")
     os.utime(path, (1_700_000_000, 1_700_000_000))
-    unsupported = _write(data_dir, "notes.docx", "対応していない拡張子です。")
+    unsupported = _write(data_dir, "notes.xlsx", "対応していない拡張子です。")
     os.utime(unsupported, (1_800_000_000, 1_800_000_000))  # より新しいmtimeでも無視される
 
     assert ingest.data_dir_signature() == (1, 1_700_000_000.0)
