@@ -595,12 +595,21 @@ class TestConversationCountThreadIdValidation:
         with pytest.raises(ValueError):
             memory.conversation_count("../../etc/passwd")
 
-    def test_empty_string_thread_id_is_treated_as_no_thread_id_specified(self, tmp_path, monkeypatch):
-        """境界値: 空文字列はPythonのif文でFalsyと判定されるため、
-        `if thread_id else CONVERSATIONS_DIR` の分岐で全体カウントの経路に入り、
-        _validate_thread_id() を通らない（save_conversation/load_conversationとは異なる挙動）。"""
+    def test_rejects_empty_thread_id(self, tmp_path, monkeypatch):
+        """境界値: 空文字列はNoneとは区別され、save_conversation/load_conversationと同様に
+        _validate_thread_id() を通ってValueErrorになる（全体カウントにはならない）。"""
         monkeypatch.setattr(memory, "CONVERSATIONS_DIR", tmp_path)
         memory.save_conversation("Q1", "A1", thread_id="thread-a")
         memory.save_conversation("Q2", "A2", thread_id="thread-b")
 
-        assert memory.conversation_count("") == 2
+        with pytest.raises(ValueError):
+            memory.conversation_count("")
+
+    def test_none_thread_id_returns_overall_count(self, tmp_path, monkeypatch):
+        """正常系: thread_idにNone（省略時のデフォルト）を渡した場合は全スレッド合計を返す。"""
+        monkeypatch.setattr(memory, "CONVERSATIONS_DIR", tmp_path)
+        memory.save_conversation("Q1", "A1", thread_id="thread-a")
+        memory.save_conversation("Q2", "A2", thread_id="thread-b")
+
+        assert memory.conversation_count(None) == 2
+        assert memory.conversation_count() == 2
