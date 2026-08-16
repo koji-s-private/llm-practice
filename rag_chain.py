@@ -35,8 +35,7 @@ from setup import model
 PERSIST_DIR = Path(__file__).parent / "chroma_db"
 COLLECTION_NAME = "llm_practice_docs"
 
-# ingest.pyがドキュメントを分割する際のチャンクサイズ（文字数）。ingest.py側の
-# RecursiveCharacterTextSplitterもこの値を参照しており、1チャンクは最大でもこの文字数に収まる。
+# ingest.py側のRecursiveCharacterTextSplitterもこの値を参照しており、1チャンクは最大でもこの文字数に収まる。
 CHUNK_SIZE = 1000
 
 # 無料・ローカルで動く埋め込みモデル（LangChain公式ドキュメントのデフォルト例と同じ）
@@ -93,10 +92,8 @@ GLOBAL_THREAD_ID = "global"
 def get_embeddings() -> HuggingFaceEmbeddings:
     """ローカル埋め込みモデルを返す（APIキー不要、初回はモデルを自動ダウンロード）。
 
-    HuggingFaceEmbeddingsの初期化はモデルのロードを伴い軽くないため、
-    lru_cacheでプロセス内に1つだけ保持し、呼び出しのたびの再ロードを防ぐ
-    （Streamlitに依存しないモジュールレベルのキャッシュ。CLIやテストからの
-    利用でも同様に効く）。
+    初期化はモデルのロードを伴い軽くないため、lru_cacheでプロセス内に1つだけ保持し
+    再ロードを防ぐ（Streamlitに依存しないため、CLIやテストからの利用でも同様に効く）。
     """
     return HuggingFaceEmbeddings(
         model_name=EMBEDDING_MODEL_NAME,
@@ -108,9 +105,8 @@ def get_embeddings() -> HuggingFaceEmbeddings:
 def get_vectorstore() -> Chroma:
     """ローカル永続化されたChromaベクトルストアを返す（ingest.py と共通で使用）。
 
-    get_embeddings()と同様にlru_cacheでプロセス内に1つだけ保持する。Chromaの
-    永続化先（PERSIST_DIR）・コレクション名（COLLECTION_NAME）は固定のため、
-    インスタンスを使い回しても読み書きの一貫性に問題はない。
+    get_embeddings()と同様にlru_cacheでプロセス内に1つだけ保持する。永続化先・
+    コレクション名は固定のため、インスタンスを使い回しても読み書きの一貫性に問題はない。
 
     セキュリティ上の注意:
     本実装はChromaDBをローカル永続化モード（persist_directory）のみで使用しており、
@@ -132,25 +128,20 @@ def get_vectorstore() -> Chroma:
 def _grade_relevance(query: str, docs: list) -> list[int]:
     r"""候補文書をLLMに採点させ、質問に実際に使えるものだけのインデックス一覧を返す。
 
-    ベクトル類似度だけだと「単語は近いが意味的には無関係」な文書（例:
-    人体骨格の一覧表が無関係な質問にヒットする等）を弾けないため、
+    ベクトル類似度だけだと「単語は近いが意味的には無関係」な文書を弾けないため、
     ここでLLM自身に関連性を判定させて絞り込む（reranking相当）。
 
-    応答全体を re.findall(r"\d+", text) で無差別にスキャンする方式だと、LLMが指示に
-    厳密に従わず「文書1は2024年の話で関連しません。文書3が関連しています。」のような
-    自由文で答えた場合、本文中の無関係な数字（1, 2024）まで関連文書番号として誤って
-    拾ってしまう。そのため、LLMには「回答:」から始まる1行だけに
-    判定結果を書くよう厳密なフォーマットを強制し、パース処理もその行だけを対象にする。
-    LLMがフォーマットを完全に無視して「回答:」行を出力しなかった場合は、
-    誤って関連文書を拾うより安全なので、全除外（空リスト）にフォールバックする。
+    応答全体を re.findall(r"\d+", text) で無差別にスキャンすると、LLMが自由文で答えた
+    場合に本文中の無関係な数字まで関連文書番号として誤って拾ってしまう。そのため
+    LLMには「回答:」から始まる1行だけに判定結果を書くよう厳密なフォーマットを強制し、
+    パース処理もその行だけを対象にする。その行が出力されなかった場合は、誤って
+    関連文書を拾うより安全なので全除外（空リスト）にフォールバックする。
     """
     if not docs:
         return []
 
-    # チャンク全体（最大CHUNK_SIZE文字）を採点対象に含める。短く切り詰めすぎると、
-    # チャンク冒頭が前置きで、質問と本当に関連する記述が後半にある場合に
-    # LLMが「関連なし」と誤判定し、一次検索で正しく拾えていた候補を後段で
-    # 取りこぼしてしまう。
+    # チャンク冒頭が前置きで、質問と本当に関連する記述が後半にある場合に誤判定しないよう、
+    # チャンク全体（最大CHUNK_SIZE文字）を採点対象に含める。
     listing = "\n\n".join(f"[{i}] {doc.page_content[:CHUNK_SIZE]}" for i, doc in enumerate(docs, start=1))
     prompt = (
         f"質問: {query}\n\n"
@@ -199,8 +190,10 @@ def build_agent(thread_id: str = GLOBAL_THREAD_ID):
         絞り込む（reranking）。見つからない場合は、質問を言い換えて再度呼び出してよい。
         """
         # スコアはChromaのL2距離（小さいほど類似、正規化済み埋め込みのため0〜2の範囲）。
+        # RECALL_DISTANCE_THRESHOLD未満を「候補」として粗く間引くだけで、最終判定は_grade_relevanceに任せる。
         # is_fallback=Trueの会話ログ（一般知識フォールバック回答）は、根拠のない回答が
-        # 以降の検索で再ヒットしないよう除外する。{"is_fallback": False}ではなく
+        # 以降の検索で再ヒットしてドキュメントの裏付けがあるかのように扱われる
+        # （ハルシネーションの自己増幅）ことを防ぐため除外する。{"is_fallback": False}ではなく
         # {"$ne": True}にするのは、フィルタ導入前の既存チャンク（メタデータ無し）を
         # 誤って除外しないため。
         candidates = vector_store.similarity_search_with_score(
