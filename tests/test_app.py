@@ -253,6 +253,90 @@ def test_resync_button_failure_shows_error(monkeypatch):
     assert "resync fail" in at.error[0].value
 
 
+def test_resync_button_failed_files_shows_warning_immediately(monkeypatch):
+    """異常系: サイドバーの再同期ボタン押下で同期が"failed"を返した場合、次のスクリプト
+    再実行（rerun）を待たずに、このボタン押下のturn内でfailed_sync_filesが更新され
+    警告バナーが即座に表示される（warning_slot経由で_show_failed_sync_files_warningが
+    呼ばれることの確認）。"""
+    call_count = {"n": 0}
+
+    def flaky_sync(verbose=False):
+        call_count["n"] += 1
+        if call_count["n"] == 1:
+            return {"added": [], "updated": [], "removed": [], "failed": []}
+        return {"added": [], "updated": [], "removed": [], "failed": ["bad.pdf"]}
+
+    monkeypatch.setattr(ingest, "sync_data_dir", flaky_sync)
+
+    at = _run_app()
+    assert at.warning == []
+
+    resync_button = next(b for b in at.sidebar.button if "再同期" in b.label)
+    at = resync_button.click().run()
+
+    assert at.exception == []
+    # 次のrerunを待たず、このボタン押下のturn内でfailed_sync_filesと警告バナーの
+    # 両方が反映される。
+    assert at.session_state["failed_sync_files"] == ["bad.pdf"]
+    assert len(at.warning) == 1
+    assert "bad.pdf" in at.warning[0].value
+
+
+def test_resync_button_recovery_clears_warning_immediately(monkeypatch):
+    """異常系境界値: 前回までの同期で残っていた失敗ファイルが、再同期ボタンの押下で
+    0件（復旧）になった場合、warning_slotが同じturn内でクリアされ、古い警告が
+    居残らない（_show_failed_sync_files_warningのcontainer.empty()呼び出しの確認）。"""
+    call_count = {"n": 0}
+
+    def flaky_sync(verbose=False):
+        call_count["n"] += 1
+        if call_count["n"] == 1:
+            return {"added": [], "updated": [], "removed": [], "failed": []}
+        if call_count["n"] == 2:
+            return {"added": [], "updated": [], "removed": [], "failed": ["bad.pdf"]}
+        return {"added": ["bad.pdf"], "updated": [], "removed": [], "failed": []}
+
+    monkeypatch.setattr(ingest, "sync_data_dir", flaky_sync)
+
+    at = _run_app()
+    assert at.warning == []
+
+    resync_button = next(b for b in at.sidebar.button if "再同期" in b.label)
+    at = resync_button.click().run()
+    assert len(at.warning) == 1
+    assert "bad.pdf" in at.warning[0].value
+
+    resync_button = next(b for b in at.sidebar.button if "再同期" in b.label)
+    at = resync_button.click().run()
+
+    assert at.exception == []
+    assert at.session_state["failed_sync_files"] == []
+    # 復旧した今回のボタン押下のturn内で、warning_slotがクリアされ古い警告が残らない。
+    assert at.warning == []
+
+
+def test_resync_button_success_shows_no_warning(monkeypatch):
+    """正常系: 再同期ボタン押下で失敗ファイルが無い場合、warning_slotを渡すようにした
+    変更後も、従来通り警告は表示されずエラーも出ない。"""
+    call_count = {"n": 0}
+
+    def counting_sync(verbose=False):
+        call_count["n"] += 1
+        return {"added": ["ok.txt"], "updated": [], "removed": [], "failed": []}
+
+    monkeypatch.setattr(ingest, "sync_data_dir", counting_sync)
+
+    at = _run_app()
+    resync_button = next(b for b in at.sidebar.button if "再同期" in b.label)
+    at = resync_button.click().run()
+
+    assert at.exception == []
+    assert at.error == []
+    assert at.warning == []
+    assert at.session_state["failed_sync_files"] == []
+    assert call_count["n"] == 2
+
+
 # --- 1b. 会話履歴のウィンドウイング（長い会話でのコンテキスト長超過対策） ---
 
 
@@ -1528,6 +1612,40 @@ def test_upload_not_reprocessed_on_unrelated_chat_send_rerun(tmp_path, monkeypat
     assert at.exception == []
     assert at.warning == []
     assert sorted(p.name for p in data_dir.iterdir()) == ["report.txt"]
+
+
+def test_upload_failed_sync_shows_warning_immediately(tmp_path, monkeypatch):
+    """異常系: ファイルアップロード時の同期（_sync_and_report経由）が"failed"を
+    返した場合も、再同期ボタンと同様に、このアップロード処理のturn内で
+    failed_sync_filesが更新され警告バナーが即座に表示される（次のrerunを待たない）。"""
+    data_dir = tmp_path / "data"
+    monkeypatch.setattr(ingest, "DATA_DIR", data_dir)
+
+    call_count = {"n": 0}
+
+    def flaky_sync(verbose=False):
+        call_count["n"] += 1
+        if call_count["n"] == 1:
+            return {"added": [], "updated": [], "removed": [], "failed": []}
+        return {"added": [], "updated": [], "removed": [], "failed": ["broken.pdf"]}
+
+    monkeypatch.setattr(ingest, "sync_data_dir", flaky_sync)
+
+    at = _run_app()
+    assert at.warning == []
+
+    at.file_uploader[0].set_value(("broken.pdf", b"content", "application/pdf"))
+    at = at.run()
+
+    assert at.exception == []
+    # アップロードされたファイル自体は正常に保存されている（同期対象の判定はモック側の
+    # 都合上、必ずしもアップロードしたファイル名と一致しない）。
+    assert (data_dir / "broken.pdf").exists()
+    # 次のrerunを待たず、このアップロード処理のturn内でfailed_sync_filesと
+    # 警告バナーの両方が反映される。
+    assert at.session_state["failed_sync_files"] == ["broken.pdf"]
+    assert len(at.warning) == 1
+    assert "broken.pdf" in at.warning[0].value
 
 
 # --- 8. 読み込み失敗ファイルの警告永続化・自動リトライ ---

@@ -148,7 +148,15 @@ def _format_source_label(metadata: dict) -> str:
     return label
 
 
-def _sync_and_report(spinner_text: str) -> None:
+def _sync_and_report(spinner_text: str, warning_slot: DeltaGenerator | None = None) -> None:
+    """data/全体を差分同期し、結果をトースト・警告バナーに反映する。
+
+    warning_slot（トップレベルで確保済みのst.empty()）を渡すと、この関数内での
+    failed_sync_files更新を、次のスクリプト再実行を待たずに同じターン内で
+    警告バナーへ即時反映できる。サイドバー再同期ボタン・アップロード時のように
+    トップレベルの初回描画（_show_failed_sync_files_warning呼び出し）より後で
+    呼ばれる場合に必要（起動時の呼び出しではスロット確保前のため渡さない）。
+    """
     try:
         with st.spinner(spinner_text):
             result = sync_data_dir(verbose=False)
@@ -165,6 +173,8 @@ def _sync_and_report(spinner_text: str) -> None:
     # data_dir_signatureはファイルが存在する限り変化しないため、失敗ファイル一覧を
     # セッションに保持しておかないと警告表示がこの1回のスクリプト実行でしか出せない。
     st.session_state.failed_sync_files = result["failed"]
+    if warning_slot is not None:
+        _show_failed_sync_files_warning(warning_slot)
     if result["failed"]:
         # 失敗ファイルが残っている間はシグネチャを更新せず、次回も再同期・再試行させる。
         return
@@ -219,12 +229,16 @@ def _show_failed_sync_files_warning(container: DeltaGenerator | None = None) -> 
     ユーザーがファイルを修正・削除して同期が成功するまで警告が残り続けるようにする。
 
     containerを渡すと（st.empty()のプレースホルダーなど）、st全体ではなくそのスロットに
-    描画する。同一スロットへの再描画は上書きになるため、_sync_saved_conversation()から
-    スクリプト実行の後半で呼び直しても、トップレベルの表示と重複して並ばない。
+    描画する。同一スロットへの再描画は上書きになるため、_sync_saved_conversation()や
+    _sync_and_report()からスクリプト実行の後半で呼び直しても、トップレベルの表示と
+    重複して並ばない。containerを渡した状態で失敗ファイルが0件になった場合は、
+    container.empty()でスロットをクリアし、直前に表示済みの古い警告が残らないようにする。
     """
     target = container if container is not None else st
     failed = st.session_state.get("failed_sync_files")
     if not failed:
+        if container is not None:
+            container.empty()
         return
     target.warning(
         "以下のファイルは読み込みに失敗したため、DBへの反映がスキップされています"
@@ -354,8 +368,9 @@ if st.session_state.get("data_dir_signature") != current_data_dir_signature:
 
 # 前回までの同期で読み込みに失敗したファイルが残っている場合、このスクリプト実行でも
 # 警告を表示し続ける（同期が呼ばれなかった場合でも、直前の失敗状態を毎回描画するため）。
-# プレースホルダーとして確保しておくことで、この後の会話保存（_sync_saved_conversation）が
-# 同じターン中に失敗した場合も、新規要素を追加せずこのスロットへ上書きで反映できる。
+# プレースホルダーとして確保しておくことで、この後の会話保存（_sync_saved_conversation）・
+# 再同期ボタン・アップロード時（いずれも_sync_and_report経由）が同じターン中に成功/失敗
+# しても、新規要素を追加せずこのスロットへ上書きで即座に反映できる。
 failed_sync_warning_slot = st.empty()
 _show_failed_sync_files_warning(failed_sync_warning_slot)
 
@@ -442,7 +457,7 @@ with st.sidebar:
     # 即時性・確実性が必要な場合のフォールバック手段として、目立たない場所に残しておく。
     with st.expander("今すぐ強制的に再同期したい場合"):
         if st.button("🔄 data/ を再同期"):
-            _sync_and_report("再同期中...")
+            _sync_and_report("再同期中...", failed_sync_warning_slot)
 
     st.caption("ファイルをアップロードすると自動で data/ に保存・DB反映されます。")
     uploaded_files = st.file_uploader(
@@ -480,7 +495,7 @@ with st.sidebar:
                 "同名のファイルが既に存在したため、既存ファイルを上書きせず別名で保存しました:\n"
                 + "\n".join(f"- {old} → {new}" for old, new in renamed)
             )
-        _sync_and_report("アップロードされたファイルを取り込み中...")
+        _sync_and_report("アップロードされたファイルを取り込み中...", failed_sync_warning_slot)
 
 for message in st.session_state.messages:
     role = "user" if isinstance(message, HumanMessage) else "assistant"
