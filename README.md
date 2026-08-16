@@ -68,6 +68,8 @@ cp .env.example .env
 
 # 3. data/ に質問したいファイル(.pdf / .txt / .md / .docx / .csv / .xlsx / .xls / .pptx / .html / .htm)を置く
 #    （サンプルとして data/sample.txt を同梱済み）
+#    Googleスプレッドシート/ドキュメント/スライドは、Googleドライブの「ダウンロード」機能で
+#    それぞれ .xlsx / .docx / .pptx としてエクスポートしてから data/ に置けば同様に取り込めます
 
 # 4. チャットアプリを起動（起動時に data/ の内容が自動でDBに反映されます）
 python -m streamlit run app.py
