@@ -35,8 +35,7 @@ from setup import model
 PERSIST_DIR = Path(__file__).parent / "chroma_db"
 COLLECTION_NAME = "llm_practice_docs"
 
-# ingest.pyがドキュメントを分割する際のチャンクサイズ（文字数）。ingest.py側の
-# RecursiveCharacterTextSplitterもこの値を参照しており、1チャンクは最大でもこの文字数に収まる。
+# ingest.py側のRecursiveCharacterTextSplitterもこの値を参照しており、1チャンクは最大でもこの文字数に収まる。
 CHUNK_SIZE = 1000
 
 # 無料・ローカルで動く埋め込みモデル（LangChain公式ドキュメントのデフォルト例と同じ）
@@ -133,10 +132,8 @@ def _grade_relevance(query: str, docs: list) -> list[int]:
     if not docs:
         return []
 
-    # チャンク全体（最大CHUNK_SIZE文字）を採点対象に含める。短く切り詰めすぎると、
-    # チャンク冒頭が前置きで、質問と本当に関連する記述が後半にある場合に
-    # LLMが「関連なし」と誤判定し、一次検索で正しく拾えていた候補を後段で
-    # 取りこぼしてしまう。
+    # チャンク冒頭が前置きで、質問と本当に関連する記述が後半にある場合に誤判定しないよう、
+    # チャンク全体（最大CHUNK_SIZE文字）を採点対象に含める。
     listing = "\n\n".join(f"[{i}] {doc.page_content[:CHUNK_SIZE]}" for i, doc in enumerate(docs, start=1))
     prompt = (
         f"質問: {query}\n\n"
@@ -181,8 +178,10 @@ def build_agent(thread_id: str = GLOBAL_THREAD_ID):
         絞り込む（reranking）。見つからない場合は、質問を言い換えて再度呼び出してよい。
         """
         # スコアはChromaのL2距離（小さいほど類似、正規化済み埋め込みのため0〜2の範囲）。
+        # RECALL_DISTANCE_THRESHOLD未満を「候補」として粗く間引くだけで、最終判定は_grade_relevanceに任せる。
         # is_fallback=Trueの会話ログ（一般知識フォールバック回答）は、根拠のない回答が
-        # 以降の検索で再ヒットしないよう除外する。{"is_fallback": False}ではなく
+        # 以降の検索で再ヒットしてドキュメントの裏付けがあるかのように扱われる
+        # （ハルシネーションの自己増幅）ことを防ぐため除外する。{"is_fallback": False}ではなく
         # {"$ne": True}にするのは、フィルタ導入前の既存チャンク（メタデータ無し）を
         # 誤って除外しないため。
         candidates = vector_store.similarity_search_with_score(

@@ -42,8 +42,8 @@ app = FastAPI(
     description="ローカルRAGチャットアプリ「Doclore」のバックエンドAPI",
 )
 
-# Step2以降でVite開発サーバ（デフォルトはlocalhost:5173）から本APIを叩けるようにするための
-# CORS設定。ローカル開発用途のみを想定しており、ここに列挙したポート以外からのアクセスは許可しない。
+# Vite開発サーバ（デフォルトはlocalhost:5173）から本APIを叩けるようにするためのCORS設定。
+# ローカル開発用途のみを想定しており、ここに列挙したポート以外からのアクセスは許可しない。
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["http://localhost:5173", "http://127.0.0.1:5173"],
@@ -62,13 +62,12 @@ def health() -> dict:
 
 # memory.py は thread_id をそのまま `CONVERSATIONS_DIR / thread_id` としてパスに組み込む。
 # 本API層ではHTTPリクエストの生のthread_idが直接渡ってくるため、絶対パスや`../`を含む値を
-# 許可するとdata/conversations/の外への任意ファイル書き込みにつながる。ingest.pyの
+# 許可するとdata/conversations/の外への任意ファイル書き込み・情報漏えいにつながる。ingest.pyの
 # safe_upload_dest()と同様に、許可文字種を制限した上でresolve()後の実パスも検証する。
 _THREAD_ID_PATTERN = re.compile(r"^[A-Za-z0-9_-]+$")
 
-# new_thread_id() が生成する値（uuid4().hex[:8]、8文字）に対して十分な余裕を持たせつつ、
+# new_thread_id() が生成する値（uuid4().hex[:8]、8文字）に十分な余裕を持たせつつ、
 # OSのファイル名長制限（一般的に255バイト程度）に触れないよう上限を設ける。
-# 英数字・アンダースコア・ハイフンのみなら1文字1バイトのため、この上限を超えることは無い。
 _THREAD_ID_MAX_LENGTH = 64
 
 
@@ -163,9 +162,11 @@ def _serialize_sources(sources: list[Document]) -> list[dict]:
 def _stream_chat_response(thread_id: str, message: str, history: list[ChatMessage]) -> Generator[str, None, None]:
     """agentの回答をSSE形式（`data: <json>\\n\\n`）のテキストとして順次yieldする。
 
-    ToolMessage（retrieve_contextツールの実行結果）は回答本文ではないため送信対象から
-    除外し、代わりにartifact（取得ドキュメント）を蓄積してストリーム終了後に`sources`
-    イベントとしてまとめて送信する（app.pyの `_stream_answer` と同じ方針）。
+    `create_agent` が返すエージェントは `.stream(input, stream_mode="messages")` で
+    LLMのトークン単位のストリーミングに対応している。ToolMessage（retrieve_contextツールの
+    実行結果）は回答本文ではないため送信対象から除外し、代わりにartifact（取得ドキュメント）を
+    蓄積してストリーム終了後に`sources`イベントとしてまとめて送信する
+    （app.pyの `_stream_answer` と同じ方針）。
     AIMessageChunk.content はプロバイダによって型が異なる（str、またはAnthropicの
     content blocks list）ため、getattr(chunk, "content", "") ではなく text系ブロックを
     結合済みの .text プロパティで本文を取り出す。

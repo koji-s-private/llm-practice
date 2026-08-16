@@ -35,8 +35,9 @@ OLLAMA_PORT = int(os.environ.get("OLLAMA_PORT", "11434"))
 OLLAMA_MODEL = os.environ.get("OLLAMA_MODEL", "llama3.1")
 
 # Ollamaはnum_ctx未指定だと多くのモデルで2048程度の小さいコンテキスト長がデフォルトになり、
-# 会話が数往復続くだけで古い履歴や検索結果が暗黙的に切り捨てられるため、一般的なローカルPCでも
-# 現実的に動かせる範囲でOllama公式デフォルトより十分な余裕を持たせた値を明示的に指定する。
+# 会話が数往復続くだけで古い履歴や検索結果が暗黙的に切り捨てられるため、一般的なローカルPC
+# （8GB〜のメモリ）でも現実的に動かせる範囲でOllama公式デフォルトより十分な余裕を持たせた値を
+# 明示的に指定する。
 OLLAMA_NUM_CTX = int(os.environ.get("OLLAMA_NUM_CTX", "8192"))
 
 # 現在実際に使用しているプロバイダ名（"ollama" / "anthropic" / "openai"）。
@@ -70,8 +71,7 @@ def _ollama_model_pulled() -> bool:
     except (OSError, urllib.error.URLError, ValueError):
         return True
 
-    # 妥当なJSONでも最上位がオブジェクトでない場合（配列・文字列など）は
-    # スキーマ不一致として同様に判定不能扱いにする。
+    # 最上位がオブジェクトでない場合（配列・文字列など）もスキーマ不一致として判定不能扱いにする。
     if not isinstance(data, dict):
         return True
 
@@ -109,9 +109,8 @@ def _build_model():
 
     openai_key = os.environ.get("OPENAI_API_KEY")
     if not openai_key:
-        # 標準入力がTTYでない非対話環境（CI・Dockerのバックグラウンド起動等）では
-        # getpass()が入力を待ち続けて無限にブロック（環境によってはEOFErrorで異常終了）するため、
-        # その場合は対話入力を試みずに明確なエラーメッセージを出して即座に終了する。
+        # 非対話環境（CI・Dockerのバックグラウンド起動等）ではgetpass()が入力を待ち続けて
+        # 無限にブロックするため、その場合は対話入力を試みずエラーメッセージを出して終了する。
         if not sys.stdin.isatty():
             raise RuntimeError(
                 "Ollamaが起動しておらず、ANTHROPIC_API_KEY も OPENAI_API_KEY も未設定です。"

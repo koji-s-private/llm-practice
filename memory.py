@@ -35,8 +35,7 @@ _QUESTION_PATTERN = re.compile(r"## 質問\n\n(.*?)\n\n## 回答", re.DOTALL)
 _ANSWER_PATTERN = re.compile(r"## 回答\n\n(.*)", re.DOTALL)
 
 # new_thread_id()が生成するuuid hex文字列を含む、英数字・ハイフン・アンダースコアのみを許可する。
-# "/" や ".." のようなパス区切り・親ディレクトリ参照を含む値を拒否することで、将来thread_idに
-# 外部入力がそのまま渡されるようになってもパストラバーサルが起きないようにする。
+# 将来thread_idに外部入力がそのまま渡されるようになってもパストラバーサルが起きないようにする。
 _THREAD_ID_PATTERN = re.compile(r"^[A-Za-z0-9_-]+$")
 
 
@@ -69,7 +68,7 @@ def save_conversation(question: str, answer: str, thread_id: str, is_fallback: b
     is_fallback: ドキュメントに根拠が見つからず一般知識で回答した場合は True を渡す。
     Markdown本文にメタデータ行として書き込み、ingest.sync_data_dir() がチャンクの
     メタデータ(is_fallback)に反映する。これにより、根拠のない回答が以降の検索結果に
-    再ヒットして裏付けありのように扱われることを防ぐ（rag_chain側で除外する）。
+    再ヒットして裏付けありのように扱われることを防ぐ（rag_chain.retrieve_context側で除外）。
 
     戻り値: 保存したファイルのパス。呼び出し側が ingest.sync_data_dir() を呼べば
     ベクトルDBに反映される。
@@ -108,8 +107,8 @@ def _extract_qa(content: str) -> tuple[str, str]:
             q_start += len(_QUESTION_HEADER)
             q_end = q_start + int(q_len_match.group(1))
             a_start = content.find(_ANSWER_HEADER, q_end)
-            # 質問の直後に回答見出しが続かない場合（記録された文字数と本文がズレている等の
-            # 想定外のケース）は、位置がズレたまま切り出さずフォールバックに任せる。
+            # 質問の直後に回答見出しが続かない（記録文字数と本文がズレている等）場合は
+            # 切り出さずフォールバックに任せる。
             if a_start == q_end:
                 a_start += len(_ANSWER_HEADER)
                 a_end = a_start + int(a_len_match.group(1))
