@@ -1062,6 +1062,89 @@ def test_post_chat_add_single_conversation_file_status_failed_shows_no_error_and
     assert sync_calls["n"] == 2  # 起動時の1回 + このrerunでの再試行1回
 
 
+def test_post_chat_add_single_conversation_file_failed_shows_warning_immediately(monkeypatch):
+    """異常系: add_single_conversation_file が"failed"を返した場合、次のスクリプト再実行
+    （rerun）を待たずに、この同じturn内でfailed_sync_filesが更新され警告バナーが表示される。"""
+    fake_agent = _FakeAgent(answer="回答")
+    monkeypatch.setattr(rag_chain, "build_agent", lambda thread_id=None: fake_agent)
+
+    saved_path = Path("/tmp/data/conversations/t/x.md")
+    monkeypatch.setattr(memory, "save_conversation", lambda *a, **k: saved_path)
+    monkeypatch.setattr(ingest, "add_single_conversation_file", lambda path: "failed")
+
+    at = _run_app()
+    assert at.warning == []
+
+    at = at.chat_input[0].set_value("質問です").run()
+
+    assert at.exception == []
+    # 次のrerunを待たず、このturn内でfailed_sync_filesと警告バナーの両方が反映される。
+    assert at.session_state["failed_sync_files"] == [str(saved_path)]
+    assert len(at.warning) == 1
+    assert str(saved_path) in at.warning[0].value
+
+
+def test_post_chat_add_single_conversation_file_failed_merges_without_duplicate_warning(monkeypatch):
+    """異常系境界値: 起動時の全件同期で既に失敗ファイルが残っている状態で、同じturn中に
+    会話ログの単一ファイル同期も失敗した場合、failed_sync_filesは重複なくマージされ、
+    警告バナーも新規に並ばず既存のプレースホルダーが更新される（1個のまま）。"""
+    fake_agent = _FakeAgent(answer="回答")
+    monkeypatch.setattr(rag_chain, "build_agent", lambda thread_id=None: fake_agent)
+
+    saved_path = Path("/tmp/data/conversations/t/x.md")
+    monkeypatch.setattr(memory, "save_conversation", lambda *a, **k: saved_path)
+    monkeypatch.setattr(ingest, "add_single_conversation_file", lambda path: "failed")
+
+    # data/自体は変化しない想定で、起動時のsync_data_dirがすでに別ファイルの
+    # 失敗を検知済みという状況を再現する。
+    sig_holder = {"value": (1, 100.0)}
+    monkeypatch.setattr(ingest, "data_dir_signature", lambda: sig_holder["value"])
+    monkeypatch.setattr(
+        ingest,
+        "sync_data_dir",
+        lambda verbose=False: {"added": [], "updated": [], "removed": [], "failed": ["broken.pdf"]},
+    )
+
+    at = _run_app()
+    assert len(at.warning) == 1
+    assert at.session_state["failed_sync_files"] == ["broken.pdf"]
+
+    at = at.chat_input[0].set_value("質問です").run()
+
+    assert at.exception == []
+    # 起動時の失敗（broken.pdf）と今回の失敗（saved_path）がどちらも保持され、重複もない。
+    assert at.session_state["failed_sync_files"] == ["broken.pdf", str(saved_path)]
+    # 同じプレースホルダーへ上書きするため、警告バナーは1個のまま増えない。
+    assert len(at.warning) == 1
+    assert "broken.pdf" in at.warning[0].value
+    assert str(saved_path) in at.warning[0].value
+
+
+def test_post_chat_add_single_conversation_file_failed_uses_path_relative_to_data_dir(tmp_path, monkeypatch):
+    """境界値: 保存先パスが実際にDATA_DIR配下にある場合、failed_sync_filesおよび警告バナーには
+    絶対パスではなくDATA_DIRからの相対パス文字列が使われる（sync_data_dirの失敗ファイル表記と
+    形式を揃えるため）。"""
+    fake_agent = _FakeAgent(answer="回答")
+    monkeypatch.setattr(rag_chain, "build_agent", lambda thread_id=None: fake_agent)
+
+    data_dir = tmp_path / "data"
+    monkeypatch.setattr(ingest, "DATA_DIR", data_dir)
+    saved_path = data_dir / "conversations" / "t" / "x.md"
+    monkeypatch.setattr(memory, "save_conversation", lambda *a, **k: saved_path)
+    monkeypatch.setattr(ingest, "add_single_conversation_file", lambda path: "failed")
+
+    at = _run_app()
+    at = at.chat_input[0].set_value("質問です").run()
+
+    assert at.exception == []
+    relative_name = str(saved_path.relative_to(data_dir))
+    assert at.session_state["failed_sync_files"] == [relative_name]
+    assert len(at.warning) == 1
+    assert relative_name in at.warning[0].value
+    # 絶対パスそのままでは表示されない（相対パスに正規化されていることの確認）。
+    assert str(saved_path) not in at.warning[0].value
+
+
 def test_post_chat_add_single_conversation_file_exception_shows_error_and_skips_signature_update(monkeypatch):
     """異常系: add_single_conversation_file が例外を送出した場合（ロックタイムアウト等）、
     st.errorが表示され、シグネチャも更新されない。チャット応答自体はクラッシュしない。"""

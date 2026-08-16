@@ -25,6 +25,7 @@ from pathlib import Path
 
 import streamlit as st
 from langchain_core.messages import AIMessage, HumanMessage, ToolMessage, trim_messages
+from streamlit.delta_generator import DeltaGenerator
 
 import setup
 from ingest import (
@@ -172,7 +173,7 @@ def _sync_and_report(spinner_text: str) -> None:
     st.session_state.data_dir_signature = data_dir_signature()
 
 
-def _sync_saved_conversation(path: Path) -> None:
+def _sync_saved_conversation(path: Path, warning_slot: DeltaGenerator | None = None) -> None:
     """保存したばかりの会話ログ1件だけを、data/全件を走査せずその場で軽量にDB反映する。
 
     次回のスクリプト再実行を待ってトップレベルの軽量シグネチャチェック
@@ -183,8 +184,10 @@ def _sync_saved_conversation(path: Path) -> None:
 
     読み込み・埋め込み失敗時はエラー表示のみ行い、シグネチャは更新しない。
     これにより次回のトップレベルの軽量チェックが「data/に未反映の変更あり」と
-    判定し続け、通常の全件差分同期（sync_data_dir）が改めてこのファイルを試行する
-    （失敗ファイルの警告表示は_show_failed_sync_files_warning()の仕組みに委ねる）。
+    判定し続け、通常の全件差分同期（sync_data_dir）が改めてこのファイルを試行する。
+    失敗ファイル一覧はここで即座にセッションへ反映した上で、warning_slot（トップレベルで
+    確保済みのst.empty()）へ再描画することで、次のスクリプト再実行を待たずに警告バナーを
+    表示する。同じスロットへ上書きするため、トップレベルで表示済みの警告と重複しない。
     """
     try:
         status = add_single_conversation_file(path)
@@ -192,24 +195,38 @@ def _sync_saved_conversation(path: Path) -> None:
         st.error(f"会話ログの保存処理でDBへの反映に失敗しました。（詳細: {e}）")
         return
     if status == "failed":
+        try:
+            name = str(path.relative_to(DATA_DIR))
+        except ValueError:
+            # DATA_DIR配下でないパス（テスト用のフェイクパス等）でもクラッシュしないための保険。
+            name = str(path)
+        failed_sync_files = st.session_state.get("failed_sync_files") or []
+        if name not in failed_sync_files:
+            st.session_state.failed_sync_files = [*failed_sync_files, name]
+        _show_failed_sync_files_warning(warning_slot)
         return
     # このファイル追加でdata/の内容が変わるため、次回rerun時に無駄な
     # sync_data_dir()呼び出しが走らないようシグネチャも更新しておく。
     st.session_state.data_dir_signature = data_dir_signature()
 
 
-def _show_failed_sync_files_warning() -> None:
+def _show_failed_sync_files_warning(container: DeltaGenerator | None = None) -> None:
     """読み込みに失敗したファイルの警告を、同期が成功するまで毎回のスクリプト実行で表示し続ける。
 
     st.warningはそのスクリプト実行の描画にしか残らないため、_sync_and_report()内で
     一度呼ぶだけでは次の画面操作（別のチャット送信・ボタン押下等）で消えてしまう。
     ここでセッションに保持した失敗ファイル一覧を毎回参照して描画することで、
     ユーザーがファイルを修正・削除して同期が成功するまで警告が残り続けるようにする。
+
+    containerを渡すと（st.empty()のプレースホルダーなど）、st全体ではなくそのスロットに
+    描画する。同一スロットへの再描画は上書きになるため、_sync_saved_conversation()から
+    スクリプト実行の後半で呼び直しても、トップレベルの表示と重複して並ばない。
     """
+    target = container if container is not None else st
     failed = st.session_state.get("failed_sync_files")
     if not failed:
         return
-    st.warning(
+    target.warning(
         "以下のファイルは読み込みに失敗したため、DBへの反映がスキップされています"
         "（破損・パスワード付き・不正なエンコーディング等の可能性があります）。"
         "data/ から修正・削除すると自動的に再試行されます:\n" + "\n".join(f"- {name}" for name in failed)
@@ -337,7 +354,10 @@ if st.session_state.get("data_dir_signature") != current_data_dir_signature:
 
 # 前回までの同期で読み込みに失敗したファイルが残っている場合、このスクリプト実行でも
 # 警告を表示し続ける（同期が呼ばれなかった場合でも、直前の失敗状態を毎回描画するため）。
-_show_failed_sync_files_warning()
+# プレースホルダーとして確保しておくことで、この後の会話保存（_sync_saved_conversation）が
+# 同じターン中に失敗した場合も、新規要素を追加せずこのスロットへ上書きで反映できる。
+failed_sync_warning_slot = st.empty()
+_show_failed_sync_files_warning(failed_sync_warning_slot)
 
 # エージェント自体はdata/の変更とは独立して一度だけ構築すればよい
 # （検索ツールはベクトルストアを都度クエリするため、同期結果は再構築なしで自動的に反映される）。
@@ -572,4 +592,4 @@ if user_input:
         # なのでis_fallbackとして記録し、以降の検索対象から除外できるようにする。
         if st.session_state.auto_save_memory:
             saved_path = save_conversation(user_input, answer, st.session_state.thread_id, is_fallback=not sources)
-            _sync_saved_conversation(saved_path)
+            _sync_saved_conversation(saved_path, failed_sync_warning_slot)
