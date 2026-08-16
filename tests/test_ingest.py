@@ -5,11 +5,13 @@
 に基づく差分判定だけを検証する（ドキュメントローダー・チャンク分割は実物を使う）。
 """
 
+import io
 import json
 import logging
 import os
 import threading
 import time
+import zipfile
 
 import pytest
 from filelock import FileLock, Timeout
@@ -1034,9 +1036,343 @@ def test_add_documents_failure_for_one_file_does_not_block_other_files(fake_env,
     assert "bad.txt" not in manifest
 
 
+# --- .docx / .csv の取り込みテスト ---
+
+
+def _minimal_docx_bytes(paragraphs: list[str]) -> bytes:
+    """docx2txtが実際に参照するword/document.xmlだけを含む最小限の.docxファイルを組み立てる。
+
+    python-docx等の外部ライブラリに頼らず標準の zipfile だけで組み立てることで、
+    テスト用フィクスチャの依存を増やさない。
+    """
+    body = "".join(f"<w:p><w:r><w:t>{text}</w:t></w:r></w:p>" for text in paragraphs)
+    document_xml = (
+        '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+        '<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">'
+        f"<w:body>{body}</w:body></w:document>"
+    )
+    buffer = io.BytesIO()
+    with zipfile.ZipFile(buffer, "w") as zf:
+        zf.writestr("word/document.xml", document_xml)
+    return buffer.getvalue()
+
+
+def _write_bytes(data_dir, rel_path, data: bytes):
+    path = data_dir / rel_path
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_bytes(data)
+    return path
+
+
+def test_docx_file_is_loaded_and_added(fake_env):
+    data_dir, store = fake_env
+    _write_bytes(
+        data_dir,
+        "report.docx",
+        _minimal_docx_bytes(["これはWord文書の本文です。" * 3, "2つ目の段落です。" * 3]),
+    )
+
+    result = ingest.sync_data_dir(verbose=False)
+
+    assert result == {"added": ["report.docx"], "updated": [], "removed": [], "failed": []}
+    contents = [doc.page_content for doc in store.docs_by_id.values()]
+    assert any("これはWord文書の本文です。" in c for c in contents)
+    assert any("2つ目の段落です。" in c for c in contents)
+
+
+def test_csv_file_is_loaded_and_added(fake_env):
+    data_dir, store = fake_env
+    _write(data_dir, "members.csv", "name,age\nAlice,30\nBob,25\n")
+
+    result = ingest.sync_data_dir(verbose=False)
+
+    assert result == {"added": ["members.csv"], "updated": [], "removed": [], "failed": []}
+    contents = [doc.page_content for doc in store.docs_by_id.values()]
+    assert any("Alice" in c and "30" in c for c in contents)
+    assert any("Bob" in c and "25" in c for c in contents)
+
+
+def test_empty_csv_file_is_added_with_zero_chunks(fake_env):
+    # 境界値: ヘッダー行すら無い0バイトのCSVはCSVLoaderが0件のDocumentを返すが、
+    # 例外にはならず"added"（チャンク数0）として記録される
+    data_dir, store = fake_env
+    _write_bytes(data_dir, "empty.csv", b"")
+
+    result = ingest.sync_data_dir(verbose=False)
+
+    assert result == {"added": ["empty.csv"], "updated": [], "removed": [], "failed": []}
+    assert store.docs_by_id == {}
+    manifest = json.loads(ingest.MANIFEST_PATH.read_text(encoding="utf-8"))
+    assert manifest["empty.csv"]["chunk_ids"] == []
+
+
+def test_corrupt_docx_file_is_recorded_as_failed_without_blocking_others(fake_env):
+    # 異常系: zip形式ですらない壊れた.docxファイルは読み込みに失敗しfailedに記録され、
+    # 他の正常なファイルの同期はブロックされない（既存の異常系テストと同じパターン）
+    data_dir, store = fake_env
+    _write_bytes(data_dir, "broken.docx", b"not a real docx file")
+    _write(data_dir, "good.txt", "正常に読み込めるテキストです。" * 5)
+
+    result = ingest.sync_data_dir(verbose=False)
+
+    assert result == {"added": ["good.txt"], "updated": [], "removed": [], "failed": ["broken.docx"]}
+    sources = {doc.metadata.get("source") for doc in store.docs_by_id.values()}
+    assert any("good.txt" in (s or "") for s in sources)
+
+
+def test_corrupt_csv_file_is_recorded_as_failed_without_blocking_others(fake_env):
+    # 異常系: デコード不能なバイト列の.csvファイルは読み込みに失敗しfailedに記録される
+    data_dir, store = fake_env
+    _write_bytes(data_dir, "broken.csv", b"\xff\xfe\x00\x01\x02")
+    _write(data_dir, "good.txt", "正常に読み込めるテキストです。" * 5)
+
+    result = ingest.sync_data_dir(verbose=False)
+
+    assert result == {"added": ["good.txt"], "updated": [], "removed": [], "failed": ["broken.csv"]}
+
+
+def test_docx_loader_raises_for_nonexistent_file():
+    # 境界値: 存在しないファイルパスを渡した場合、.docx用ローダーは例外を送出する
+    # （sync_data_dir()側は実在するファイルのみ列挙するため通常到達しないが、
+    # ローダー自体の異常系挙動として確認しておく）
+    with pytest.raises(Exception):
+        ingest.LOADERS[".docx"]("/no/such/path.docx").load()
+
+
+def test_csv_loader_raises_for_nonexistent_file():
+    # 境界値: 存在しないファイルパスを渡した場合、.csv用ローダーは例外を送出する
+    with pytest.raises(Exception):
+        ingest.LOADERS[".csv"]("/no/such/path.csv").load()
+
+
+# --- .xlsx / .pptx / .html の取り込みテスト ---
+
+
+def _write_xlsx(data_dir, rel_path, rows: list[list]):
+    import openpyxl
+
+    workbook = openpyxl.Workbook()
+    sheet = workbook.active
+    for row in rows:
+        sheet.append(row)
+    path = data_dir / rel_path
+    path.parent.mkdir(parents=True, exist_ok=True)
+    workbook.save(path)
+    return path
+
+
+def _write_pptx(data_dir, rel_path, slide_texts: list[str]):
+    from pptx import Presentation
+    from pptx.util import Inches
+
+    presentation = Presentation()
+    blank_layout = presentation.slide_layouts[6]
+    for text in slide_texts:
+        slide = presentation.slides.add_slide(blank_layout)
+        textbox = slide.shapes.add_textbox(Inches(1), Inches(1), Inches(4), Inches(2))
+        textbox.text_frame.text = text
+    path = data_dir / rel_path
+    path.parent.mkdir(parents=True, exist_ok=True)
+    presentation.save(path)
+    return path
+
+
+def test_xlsx_file_is_loaded_and_added(fake_env):
+    data_dir, store = fake_env
+    _write_xlsx(data_dir, "members.xlsx", [["name", "age"], ["Alice", 30], ["Bob", 25]])
+
+    result = ingest.sync_data_dir(verbose=False)
+
+    assert result == {"added": ["members.xlsx"], "updated": [], "removed": [], "failed": []}
+    contents = [doc.page_content for doc in store.docs_by_id.values()]
+    assert any("Alice" in c and "30" in c for c in contents)
+    assert any("Bob" in c and "25" in c for c in contents)
+
+
+def test_empty_xlsx_file_is_added_with_zero_chunks(fake_env):
+    # 境界値: データ行のない（新規作成直後の）xlsxはopenpyxlが空のシートを返すが、
+    # 例外にはならず"added"（チャンク数0）として記録される
+    data_dir, store = fake_env
+    _write_xlsx(data_dir, "empty.xlsx", [])
+
+    result = ingest.sync_data_dir(verbose=False)
+
+    assert result == {"added": ["empty.xlsx"], "updated": [], "removed": [], "failed": []}
+    assert store.docs_by_id == {}
+    manifest = json.loads(ingest.MANIFEST_PATH.read_text(encoding="utf-8"))
+    assert manifest["empty.xlsx"]["chunk_ids"] == []
+
+
+def test_corrupt_xlsx_file_is_recorded_as_failed_without_blocking_others(fake_env):
+    # 異常系: zip形式ですらない壊れた.xlsxファイルは読み込みに失敗しfailedに記録され、
+    # 他の正常なファイルの同期はブロックされない
+    data_dir, store = fake_env
+    _write_bytes(data_dir, "broken.xlsx", b"not a real xlsx file")
+    _write(data_dir, "good.txt", "正常に読み込めるテキストです。" * 5)
+
+    result = ingest.sync_data_dir(verbose=False)
+
+    assert result == {"added": ["good.txt"], "updated": [], "removed": [], "failed": ["broken.xlsx"]}
+    sources = {doc.metadata.get("source") for doc in store.docs_by_id.values()}
+    assert any("good.txt" in (s or "") for s in sources)
+
+
+def test_xlsx_loader_raises_for_nonexistent_file():
+    # 境界値: 存在しないファイルパスを渡した場合、.xlsx用ローダーは例外を送出する
+    with pytest.raises(Exception):
+        ingest.LOADERS[".xlsx"]("/no/such/path.xlsx").load()
+
+
+def _write_xls(data_dir, rel_path, rows: list[list]):
+    import xlwt
+
+    workbook = xlwt.Workbook()
+    sheet = workbook.add_sheet("Sheet1")
+    for row_idx, row in enumerate(rows):
+        for col_idx, value in enumerate(row):
+            sheet.write(row_idx, col_idx, value)
+    path = data_dir / rel_path
+    path.parent.mkdir(parents=True, exist_ok=True)
+    workbook.save(path)
+    return path
+
+
+def test_xls_file_is_loaded_and_added(fake_env):
+    data_dir, store = fake_env
+    _write_xls(data_dir, "members.xls", [["name", "age"], ["Alice", 30], ["Bob", 25]])
+
+    result = ingest.sync_data_dir(verbose=False)
+
+    assert result == {"added": ["members.xls"], "updated": [], "removed": [], "failed": []}
+    contents = [doc.page_content for doc in store.docs_by_id.values()]
+    assert any("Alice" in c and "30" in c for c in contents)
+    assert any("Bob" in c and "25" in c for c in contents)
+
+
+def test_empty_xls_file_is_added_with_zero_chunks(fake_env):
+    # 境界値: データ行のない（新規作成直後の）xlsはxlrdが空のシートを返すが、
+    # 例外にはならず"added"（チャンク数0）として記録される
+    data_dir, store = fake_env
+    _write_xls(data_dir, "empty.xls", [])
+
+    result = ingest.sync_data_dir(verbose=False)
+
+    assert result == {"added": ["empty.xls"], "updated": [], "removed": [], "failed": []}
+    assert store.docs_by_id == {}
+    manifest = json.loads(ingest.MANIFEST_PATH.read_text(encoding="utf-8"))
+    assert manifest["empty.xls"]["chunk_ids"] == []
+
+
+def test_corrupt_xls_file_is_recorded_as_failed_without_blocking_others(fake_env):
+    # 異常系: BIFF形式ですらない壊れた.xlsファイルは読み込みに失敗しfailedに記録され、
+    # 他の正常なファイルの同期はブロックされない
+    data_dir, store = fake_env
+    _write_bytes(data_dir, "broken.xls", b"not a real xls file")
+    _write(data_dir, "good.txt", "正常に読み込めるテキストです。" * 5)
+
+    result = ingest.sync_data_dir(verbose=False)
+
+    assert result == {"added": ["good.txt"], "updated": [], "removed": [], "failed": ["broken.xls"]}
+    sources = {doc.metadata.get("source") for doc in store.docs_by_id.values()}
+    assert any("good.txt" in (s or "") for s in sources)
+
+
+def test_xls_loader_raises_for_nonexistent_file():
+    # 境界値: 存在しないファイルパスを渡した場合、.xls用ローダーは例外を送出する
+    with pytest.raises(Exception):
+        ingest.LOADERS[".xls"]("/no/such/path.xls").load()
+
+
+def test_pptx_file_is_loaded_and_added(fake_env):
+    data_dir, store = fake_env
+    _write_pptx(data_dir, "deck.pptx", ["1枚目のスライドです。" * 3, "2枚目のスライドです。" * 3])
+
+    result = ingest.sync_data_dir(verbose=False)
+
+    assert result == {"added": ["deck.pptx"], "updated": [], "removed": [], "failed": []}
+    contents = [doc.page_content for doc in store.docs_by_id.values()]
+    assert any("1枚目のスライドです。" in c for c in contents)
+    assert any("2枚目のスライドです。" in c for c in contents)
+
+
+def test_empty_pptx_file_is_added_with_zero_chunks(fake_env):
+    # 境界値: スライドが1枚もないpptxはpython-pptxが空のスライド一覧を返すが、
+    # 例外にはならず"added"（チャンク数0）として記録される
+    data_dir, store = fake_env
+    _write_pptx(data_dir, "empty.pptx", [])
+
+    result = ingest.sync_data_dir(verbose=False)
+
+    assert result == {"added": ["empty.pptx"], "updated": [], "removed": [], "failed": []}
+    assert store.docs_by_id == {}
+    manifest = json.loads(ingest.MANIFEST_PATH.read_text(encoding="utf-8"))
+    assert manifest["empty.pptx"]["chunk_ids"] == []
+
+
+def test_corrupt_pptx_file_is_recorded_as_failed_without_blocking_others(fake_env):
+    # 異常系: zip形式ですらない壊れた.pptxファイルは読み込みに失敗しfailedに記録される
+    data_dir, store = fake_env
+    _write_bytes(data_dir, "broken.pptx", b"not a real pptx file")
+    _write(data_dir, "good.txt", "正常に読み込めるテキストです。" * 5)
+
+    result = ingest.sync_data_dir(verbose=False)
+
+    assert result == {"added": ["good.txt"], "updated": [], "removed": [], "failed": ["broken.pptx"]}
+
+
+def test_pptx_loader_raises_for_nonexistent_file():
+    # 境界値: 存在しないファイルパスを渡した場合、.pptx用ローダーは例外を送出する
+    with pytest.raises(Exception):
+        ingest.LOADERS[".pptx"]("/no/such/path.pptx").load()
+
+
+def test_html_file_is_loaded_and_added(fake_env):
+    data_dir, store = fake_env
+    _write(
+        data_dir,
+        "page.html",
+        "<html><head><title>サンプル</title></head><body><p>HTMLファイルの本文です。</p></body></html>",
+    )
+
+    result = ingest.sync_data_dir(verbose=False)
+
+    assert result == {"added": ["page.html"], "updated": [], "removed": [], "failed": []}
+    contents = [doc.page_content for doc in store.docs_by_id.values()]
+    assert any("HTMLファイルの本文です。" in c for c in contents)
+
+
+def test_htm_extension_is_also_loaded(fake_env):
+    # .htmlだけでなく.htm拡張子も同じローダー(BSHTMLLoader)で取り込まれる
+    data_dir, store = fake_env
+    _write(data_dir, "page.htm", "<html><body><p>htm拡張子の本文です。</p></body></html>")
+
+    result = ingest.sync_data_dir(verbose=False)
+
+    assert result == {"added": ["page.htm"], "updated": [], "removed": [], "failed": []}
+    contents = [doc.page_content for doc in store.docs_by_id.values()]
+    assert any("htm拡張子の本文です。" in c for c in contents)
+
+
+def test_corrupt_html_file_is_recorded_as_failed_without_blocking_others(fake_env):
+    # 異常系: デコード不能なバイト列の.htmlファイルは読み込みに失敗しfailedに記録される
+    data_dir, store = fake_env
+    _write_bytes(data_dir, "broken.html", b"\xff\xfe\x00\x01\x02")
+    _write(data_dir, "good.txt", "正常に読み込めるテキストです。" * 5)
+
+    result = ingest.sync_data_dir(verbose=False)
+
+    assert result == {"added": ["good.txt"], "updated": [], "removed": [], "failed": ["broken.html"]}
+
+
+def test_html_loader_raises_for_nonexistent_file():
+    # 境界値: 存在しないファイルパスを渡した場合、.html用ローダーは例外を送出する
+    with pytest.raises(Exception):
+        ingest.LOADERS[".html"]("/no/such/path.html").load()
+
+
 def test_unsupported_extension_is_ignored(fake_env):
     data_dir, store = fake_env
-    _write(data_dir, "notes.docx", "対応していない拡張子")
+    _write(data_dir, "notes.rtf", "対応していない拡張子")
 
     result = ingest.sync_data_dir(verbose=False)
 
@@ -1348,7 +1684,7 @@ def test_data_dir_signature_ignores_unsupported_extension(fake_env):
     data_dir, _store = fake_env
     path = _write(data_dir, "a.txt", "対象ファイルです。")
     os.utime(path, (1_700_000_000, 1_700_000_000))
-    unsupported = _write(data_dir, "notes.docx", "対応していない拡張子です。")
+    unsupported = _write(data_dir, "notes.rtf", "対応していない拡張子です。")
     os.utime(unsupported, (1_800_000_000, 1_800_000_000))  # より新しいmtimeでも無視される
 
     assert ingest.data_dir_signature() == (1, 1_700_000_000.0)
