@@ -66,7 +66,7 @@ cp .env.example .env
 # → 課金なしで使いたい場合は下記「無料で使う（Ollama）」を先に設定
 #    課金APIでよければ .env に ANTHROPIC_API_KEY または OPENAI_API_KEY を設定
 
-# 3. data/ に質問したいファイル(.pdf / .txt / .md / .docx / .csv)を置く
+# 3. data/ に質問したいファイル(.pdf / .txt / .md / .docx / .csv / .xlsx / .pptx / .html / .htm)を置く
 #    （サンプルとして data/sample.txt を同梱済み）
 
 # 4. チャットアプリを起動（起動時に data/ の内容が自動でDBに反映されます）
@@ -142,8 +142,8 @@ Streamlit版（`app.py`）と本APIは同じ `data/` / `chroma_db/` を参照す
 
 `data/` フォルダを直接触らなくても、ブラウザ上の操作だけでナレッジを増やせます。
 
-- **ファイルアップロード**: サイドバーの「ファイルを追加」からPDF/txt/mdをドラッグ＆ドロップすると、
-  自動的に `data/` に保存され、DBにも即座に反映されます。
+- **ファイルアップロード**: サイドバーの「ファイルを追加」からPDF/txt/md/docx/csv/xlsx/pptx/html/htmを
+  ドラッグ＆ドロップすると、自動的に `data/` に保存され、DBにも即座に反映されます。
 - **会話の自動ナレッジ化**: サイドバーの「🧠 記憶設定」を開くと「今の会話を記憶として保存する」
   トグルがあります（デフォルトON）。ONのとき、チャットでのやりとりが `data/conversations/<会話ID>/`
   に自動保存され、**同じ会話の中でだけ**、以降の質問の回答材料として使われます。
@@ -220,10 +220,14 @@ HTTP API層を提供する。
 
 | ライブラリ | 役割 | このプロジェクトでの使用箇所 |
 |---|---|---|
-| `langchain-community` | PDF/テキスト/Word/CSVファイルをLangChainのDocument形式で読み込むローダー群を提供（2026年6月にsunset済み、詳細は下記注意点を参照） | `ingest.py`（`PyMuPDFLoader` / `TextLoader` / `Docx2txtLoader` / `CSVLoader`） |
+| `langchain-community` | PDF/テキスト/Word/CSV/HTMLファイルをLangChainのDocument形式で読み込むローダー群を提供（2026年6月にsunset済み、詳細は下記注意点を参照） | `ingest.py`（`PyMuPDFLoader` / `TextLoader` / `Docx2txtLoader` / `CSVLoader` / `BSHTMLLoader`） |
 | `pymupdf` | PDFからテキストを高速抽出するエンジン（`PyMuPDFLoader`が内部で使用） | `ingest.py`の`_load_pdf()`（1段目の高速抽出） |
 | `cryptography` | 暗号化（パスワード付き）PDFの復号に必要 | `pymupdf`によるPDF読み込み時に内部的に使用（`ingest.py`） |
 | `docx2txt` | Word（`.docx`）ファイルからテキストを抽出するエンジン（`Docx2txtLoader`が内部で使用） | `ingest.py`の`LOADERS`（`.docx`ファイルの読み込み） |
+| `openpyxl` | Excel（`.xlsx`）ファイルを読み書きするライブラリ | `ingest.py`の`_ExcelLoader`（シートごとに1つのDocumentとして読み込む自前ローダー。依存が重い`unstructured`パッケージを避けるため自前実装にしている） |
+| `python-pptx` | PowerPoint（`.pptx`）ファイルを読み書きするライブラリ | `ingest.py`の`_PowerPointLoader`（スライドごとに1つのDocumentとして読み込む自前ローダー。openpyxlと同じ理由で自前実装） |
+| `beautifulsoup4` | HTMLをパースするライブラリ | `ingest.py`の`LOADERS`（`BSHTMLLoader`が内部で使用し、`.html`/`.htm`ファイルからテキストを抽出） |
+| `lxml` | 高速なHTML/XMLパーサー | `BSHTMLLoader`がデフォルトで使用するパーサーエンジン |
 | `docling` / `langchain-docling`（任意インストール） | レイアウト認識・表構造認識・OCRに対応した高精度なドキュメント解析ライブラリ | `ingest.py`の`_load_pdf()`。PyMuPDFでの抽出文字数が極端に少ない（図解・スキャンPDFの疑いがある）場合のみフォールバックとして使用。未インストールでも動作する |
 
 ### その他

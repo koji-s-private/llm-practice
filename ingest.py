@@ -1,5 +1,6 @@
 """
-data/ 配下のドキュメント（.pdf / .txt / .md / .docx / .csv）を Chroma ベクトルDBに同期するモジュール。
+data/ 配下のドキュメント（.pdf / .txt / .md / .docx / .csv / .xlsx / .pptx / .html / .htm）を
+Chroma ベクトルDBに同期するモジュール。
 
 - ライブラリとして: `from ingest import sync_data_dir` を app.py から呼び出し、
   起動時に自動でDBを最新状態に同期する。
@@ -43,7 +44,7 @@ import sys
 from pathlib import Path
 
 from filelock import FileLock, Timeout
-from langchain_community.document_loaders import CSVLoader, Docx2txtLoader, PyMuPDFLoader, TextLoader
+from langchain_community.document_loaders import BSHTMLLoader, CSVLoader, Docx2txtLoader, PyMuPDFLoader, TextLoader
 from langchain_core.documents import Document
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 
@@ -80,6 +81,61 @@ SYNC_LOCK_PATH = PERSIST_DIR / "sync.lock"
 # 通常の同期は数秒〜十数秒で終わるため、それより十分長い待ち時間を設けつつ無限待機は避ける。
 SYNC_LOCK_TIMEOUT_SECONDS = 60
 
+
+class _ExcelLoader:
+    """openpyxlでExcel(.xlsx)を読み込む軽量ローダー。
+
+    langchain_communityのUnstructuredExcelLoaderは`unstructured`パッケージ（spacy等を
+    含み依存が重い）を必要とするため、openpyxlのみで完結する自前実装にしている。
+    シートごとに1つのDocumentを作り、各行をタブ区切りテキストとして連結する。
+    """
+
+    def __init__(self, file_path: str):
+        self.file_path = file_path
+
+    def load(self) -> list[Document]:
+        import openpyxl
+
+        workbook = openpyxl.load_workbook(self.file_path, data_only=True, read_only=True)
+        docs = []
+        for sheet in workbook.worksheets:
+            lines = [
+                "\t".join("" if cell is None else str(cell) for cell in row)
+                for row in sheet.iter_rows(values_only=True)
+            ]
+            text = "\n".join(lines).strip()
+            if text:
+                docs.append(Document(page_content=text, metadata={"source": self.file_path, "sheet": sheet.title}))
+        return docs
+
+
+class _PowerPointLoader:
+    """python-pptxでPowerPoint(.pptx)を読み込む軽量ローダー。
+
+    _ExcelLoaderと同様、依存の重い`unstructured`パッケージを避けるための自前実装。
+    スライドごとに1つのDocumentを作り、スライド内のテキストフレームを連結する。
+    """
+
+    def __init__(self, file_path: str):
+        self.file_path = file_path
+
+    def load(self) -> list[Document]:
+        from pptx import Presentation
+
+        presentation = Presentation(self.file_path)
+        docs = []
+        for index, slide in enumerate(presentation.slides, start=1):
+            texts = [
+                shape.text_frame.text
+                for shape in slide.shapes
+                if shape.has_text_frame and shape.text_frame.text.strip()
+            ]
+            text = "\n".join(texts).strip()
+            if text:
+                docs.append(Document(page_content=text, metadata={"source": self.file_path, "slide": index}))
+        return docs
+
+
 # 拡張子ごとのローダー対応表（PDFは実際には_load_pdf()で2段構成の判定を行う）
 LOADERS = {
     ".pdf": PyMuPDFLoader,
@@ -87,6 +143,10 @@ LOADERS = {
     ".md": TextLoader,
     ".docx": Docx2txtLoader,
     ".csv": CSVLoader,
+    ".xlsx": _ExcelLoader,
+    ".pptx": _PowerPointLoader,
+    ".html": BSHTMLLoader,
+    ".htm": BSHTMLLoader,
 }
 
 # 1ページあたりの抽出文字数がこれ未満の場合、「うまくテキスト抽出できていない

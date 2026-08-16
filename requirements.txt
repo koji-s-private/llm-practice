@@ -15,6 +15,10 @@ sentence-transformers==5.7.0     # HuggingFace埋め込みの実行エンジン
 pymupdf==1.28.2                  # PDF読み込み（高速な一次抽出。pypdfより文字化けに強い）
 cryptography==50.0.0             # 暗号化されたPDF（AES）を読むために必要
 docx2txt==0.9                    # Word(.docx)読み込み（langchain_communityのDocx2txtLoaderが内部で使用）
+openpyxl==3.1.5                  # Excel(.xlsx)読み込み（ingest.pyの自前_ExcelLoaderが内部で使用）
+python-pptx==1.0.2                # PowerPoint(.pptx)読み込み（ingest.pyの自前_PowerPointLoaderが内部で使用）
+beautifulsoup4==4.15.0            # HTML(.html/.htm)読み込み（langchain_communityのBSHTMLLoaderが内部で使用）
+lxml==6.1.1                      # BSHTMLLoaderのデフォルトHTMLパーサー
 filelock==3.32.2                 # 複数セッション（複数タブ等）からのsync_data_dir()同時実行を排他制御
 
 # 図解・スキャンPDFの高品質フォールバック解析（任意インストール）

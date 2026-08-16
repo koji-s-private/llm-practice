@@ -435,7 +435,7 @@ with st.sidebar:
     st.caption("ファイルをアップロードすると自動で data/ に保存・DB反映されます。")
     uploaded_files = st.file_uploader(
         "ファイルを追加",
-        type=["pdf", "txt", "md", "docx", "csv"],
+        type=["pdf", "txt", "md", "docx", "csv", "xlsx", "pptx", "html", "htm"],
         accept_multiple_files=True,
         label_visibility="collapsed",
     )
