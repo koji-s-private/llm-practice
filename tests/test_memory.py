@@ -613,3 +613,19 @@ class TestConversationCountThreadIdValidation:
 
         assert memory.conversation_count(None) == 2
         assert memory.conversation_count() == 2
+
+    def test_valid_format_but_nonexistent_thread_id_returns_zero(self, tmp_path, monkeypatch):
+        """境界値: 形式は正当だが会話ログが1件も無いthread_id（存在しないスレッド）を
+        指定した場合、他スレッドの件数を巻き込まず0を返す。"""
+        monkeypatch.setattr(memory, "CONVERSATIONS_DIR", tmp_path)
+        memory.save_conversation("Q1", "A1", thread_id="thread-a")
+
+        assert memory.conversation_count("thread-does-not-exist") == 0
+
+    def test_rejects_dot_containing_thread_id(self, tmp_path, monkeypatch):
+        """異常系: _validate_thread_id() が禁止するドットを含む値もconversation_count()側で
+        ValueErrorになる（save_conversation/load_conversationと同じ検証を共有していることの確認）。"""
+        monkeypatch.setattr(memory, "CONVERSATIONS_DIR", tmp_path)
+
+        with pytest.raises(ValueError):
+            memory.conversation_count("thread.a")
