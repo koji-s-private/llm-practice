@@ -1223,6 +1223,66 @@ def test_xlsx_loader_raises_for_nonexistent_file():
         ingest.LOADERS[".xlsx"]("/no/such/path.xlsx").load()
 
 
+def _write_xls(data_dir, rel_path, rows: list[list]):
+    import xlwt
+
+    workbook = xlwt.Workbook()
+    sheet = workbook.add_sheet("Sheet1")
+    for row_idx, row in enumerate(rows):
+        for col_idx, value in enumerate(row):
+            sheet.write(row_idx, col_idx, value)
+    path = data_dir / rel_path
+    path.parent.mkdir(parents=True, exist_ok=True)
+    workbook.save(path)
+    return path
+
+
+def test_xls_file_is_loaded_and_added(fake_env):
+    data_dir, store = fake_env
+    _write_xls(data_dir, "members.xls", [["name", "age"], ["Alice", 30], ["Bob", 25]])
+
+    result = ingest.sync_data_dir(verbose=False)
+
+    assert result == {"added": ["members.xls"], "updated": [], "removed": [], "failed": []}
+    contents = [doc.page_content for doc in store.docs_by_id.values()]
+    assert any("Alice" in c and "30" in c for c in contents)
+    assert any("Bob" in c and "25" in c for c in contents)
+
+
+def test_empty_xls_file_is_added_with_zero_chunks(fake_env):
+    # 境界値: データ行のない（新規作成直後の）xlsはxlrdが空のシートを返すが、
+    # 例外にはならず"added"（チャンク数0）として記録される
+    data_dir, store = fake_env
+    _write_xls(data_dir, "empty.xls", [])
+
+    result = ingest.sync_data_dir(verbose=False)
+
+    assert result == {"added": ["empty.xls"], "updated": [], "removed": [], "failed": []}
+    assert store.docs_by_id == {}
+    manifest = json.loads(ingest.MANIFEST_PATH.read_text(encoding="utf-8"))
+    assert manifest["empty.xls"]["chunk_ids"] == []
+
+
+def test_corrupt_xls_file_is_recorded_as_failed_without_blocking_others(fake_env):
+    # 異常系: BIFF形式ですらない壊れた.xlsファイルは読み込みに失敗しfailedに記録され、
+    # 他の正常なファイルの同期はブロックされない
+    data_dir, store = fake_env
+    _write_bytes(data_dir, "broken.xls", b"not a real xls file")
+    _write(data_dir, "good.txt", "正常に読み込めるテキストです。" * 5)
+
+    result = ingest.sync_data_dir(verbose=False)
+
+    assert result == {"added": ["good.txt"], "updated": [], "removed": [], "failed": ["broken.xls"]}
+    sources = {doc.metadata.get("source") for doc in store.docs_by_id.values()}
+    assert any("good.txt" in (s or "") for s in sources)
+
+
+def test_xls_loader_raises_for_nonexistent_file():
+    # 境界値: 存在しないファイルパスを渡した場合、.xls用ローダーは例外を送出する
+    with pytest.raises(Exception):
+        ingest.LOADERS[".xls"]("/no/such/path.xls").load()
+
+
 def test_pptx_file_is_loaded_and_added(fake_env):
     data_dir, store = fake_env
     _write_pptx(data_dir, "deck.pptx", ["1枚目のスライドです。" * 3, "2枚目のスライドです。" * 3])

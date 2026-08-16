@@ -16,6 +16,7 @@ pymupdf==1.28.2                  # PDF読み込み（高速な一次抽出。pyp
 cryptography==50.0.0             # 暗号化されたPDF（AES）を読むために必要
 docx2txt==0.9                    # Word(.docx)読み込み（langchain_communityのDocx2txtLoaderが内部で使用）
 openpyxl==3.1.5                  # Excel(.xlsx)読み込み（ingest.pyの自前_ExcelLoaderが内部で使用）
+xlrd==2.0.2                      # Excel(.xls、旧バイナリ形式)読み込み（ingest.pyの自前_LegacyExcelLoaderが内部で使用）
 python-pptx==1.0.2                # PowerPoint(.pptx)読み込み（ingest.pyの自前_PowerPointLoaderが内部で使用）
 beautifulsoup4==4.15.0            # HTML(.html/.htm)読み込み（langchain_communityのBSHTMLLoaderが内部で使用）
 lxml==6.1.1                      # BSHTMLLoaderのデフォルトHTMLパーサー
@@ -40,6 +41,7 @@ python-dotenv==1.2.2
 # テスト用
 pytest==9.1.1
 PyYAML==6.0.3                    # CI設定ファイル(YAML)のパース用（tests/test_ci_config.py等）。他パッケージの推移的依存に頼らず明示化
+xlwt==1.3.0                      # テスト用に.xls(旧バイナリ形式)のフィクスチャファイルを生成する（tests/test_ingest.py）。読み込み側(xlrd)とは別ライブラリ
 
 # lint・フォーマット用（CIでruff check / ruff format --checkを実行）
 ruff==0.16.1

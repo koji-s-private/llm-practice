@@ -1,5 +1,5 @@
 """
-data/ 配下のドキュメント（.pdf / .txt / .md / .docx / .csv / .xlsx / .pptx / .html / .htm）を
+data/ 配下のドキュメント（.pdf / .txt / .md / .docx / .csv / .xlsx / .xls / .pptx / .html / .htm）を
 Chroma ベクトルDBに同期するモジュール。
 
 - ライブラリとして: `from ingest import sync_data_dir` を app.py から呼び出し、
@@ -114,6 +114,30 @@ class _ExcelLoader:
             workbook.close()
 
 
+class _LegacyExcelLoader:
+    """xlrdで旧形式Excel(.xls)を読み込む軽量ローダー。
+
+    xlrd 2.x以降は.xls専用（.xlsxサポートは廃止済み）で、_ExcelLoaderが使うopenpyxlは
+    逆に.xlsを読めないため、拡張子ごとにライブラリを使い分けている。出力形式は
+    _ExcelLoaderと揃え、シートごとに1つのDocumentを作りタブ区切りテキストとして連結する。
+    """
+
+    def __init__(self, file_path: str):
+        self.file_path = file_path
+
+    def load(self) -> list[Document]:
+        import xlrd
+
+        workbook = xlrd.open_workbook(self.file_path)
+        docs = []
+        for sheet in workbook.sheets():
+            lines = ["\t".join(str(cell) for cell in sheet.row_values(row_idx)) for row_idx in range(sheet.nrows)]
+            text = "\n".join(lines).strip()
+            if text:
+                docs.append(Document(page_content=text, metadata={"source": self.file_path, "sheet": sheet.name}))
+        return docs
+
+
 class _PowerPointLoader:
     """python-pptxでPowerPoint(.pptx)を読み込む軽量ローダー。
 
@@ -149,6 +173,7 @@ LOADERS = {
     ".docx": Docx2txtLoader,
     ".csv": CSVLoader,
     ".xlsx": _ExcelLoader,
+    ".xls": _LegacyExcelLoader,
     ".pptx": _PowerPointLoader,
     ".html": BSHTMLLoader,
     ".htm": BSHTMLLoader,

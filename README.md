@@ -66,7 +66,7 @@ cp .env.example .env
 # → 課金なしで使いたい場合は下記「無料で使う（Ollama）」を先に設定
 #    課金APIでよければ .env に ANTHROPIC_API_KEY または OPENAI_API_KEY を設定
 
-# 3. data/ に質問したいファイル(.pdf / .txt / .md / .docx / .csv / .xlsx / .pptx / .html / .htm)を置く
+# 3. data/ に質問したいファイル(.pdf / .txt / .md / .docx / .csv / .xlsx / .xls / .pptx / .html / .htm)を置く
 #    （サンプルとして data/sample.txt を同梱済み）
 
 # 4. チャットアプリを起動（起動時に data/ の内容が自動でDBに反映されます）
@@ -142,7 +142,7 @@ Streamlit版（`app.py`）と本APIは同じ `data/` / `chroma_db/` を参照す
 
 `data/` フォルダを直接触らなくても、ブラウザ上の操作だけでナレッジを増やせます。
 
-- **ファイルアップロード**: サイドバーの「ファイルを追加」からPDF/txt/md/docx/csv/xlsx/pptx/html/htmを
+- **ファイルアップロード**: サイドバーの「ファイルを追加」からPDF/txt/md/docx/csv/xlsx/xls/pptx/html/htmを
   ドラッグ＆ドロップすると、自動的に `data/` に保存され、DBにも即座に反映されます。
 - **会話の自動ナレッジ化**: サイドバーの「🧠 記憶設定」を開くと「今の会話を記憶として保存する」
   トグルがあります（デフォルトON）。ONのとき、チャットでのやりとりが `data/conversations/<会話ID>/`
@@ -225,6 +225,7 @@ HTTP API層を提供する。
 | `cryptography` | 暗号化（パスワード付き）PDFの復号に必要 | `pymupdf`によるPDF読み込み時に内部的に使用（`ingest.py`） |
 | `docx2txt` | Word（`.docx`）ファイルからテキストを抽出するエンジン（`Docx2txtLoader`が内部で使用） | `ingest.py`の`LOADERS`（`.docx`ファイルの読み込み） |
 | `openpyxl` | Excel（`.xlsx`）ファイルを読み書きするライブラリ | `ingest.py`の`_ExcelLoader`（シートごとに1つのDocumentとして読み込む自前ローダー。依存が重い`unstructured`パッケージを避けるため自前実装にしている） |
+| `xlrd` | 旧バイナリ形式Excel（`.xls`）ファイルを読み込むライブラリ（`openpyxl`は`.xlsx`専用で`.xls`は読めないため別ライブラリが必要） | `ingest.py`の`_LegacyExcelLoader`（`_ExcelLoader`と同じ出力形式の自前ローダー） |
 | `python-pptx` | PowerPoint（`.pptx`）ファイルを読み書きするライブラリ | `ingest.py`の`_PowerPointLoader`（スライドごとに1つのDocumentとして読み込む自前ローダー。openpyxlと同じ理由で自前実装） |
 | `beautifulsoup4` | HTMLをパースするライブラリ | `ingest.py`の`LOADERS`（`BSHTMLLoader`が内部で使用し、`.html`/`.htm`ファイルからテキストを抽出） |
 | `lxml` | 高速なHTML/XMLパーサー | `BSHTMLLoader`がデフォルトで使用するパーサーエンジン |
@@ -237,6 +238,7 @@ HTTP API層を提供する。
 | `python-dotenv` | `.env`ファイルから環境変数を読み込む | `setup.py`（`load_dotenv()`）。`ANTHROPIC_API_KEY`等のAPIキーやOllama関連の設定を読み込む |
 | `pytest` | テストフレームワーク | `tests/`配下の自動テスト一式（実行方法は下記「[テスト](#テスト)」を参照） |
 | `PyYAML` | YAMLファイルのパース | `tests/test_ci_config.py` / `tests/test_ci_failure_guard_config.py`。GitHub Actionsのワークフロー定義（YAML）を読み込んで内容を検証するために使用（従来は他パッケージの推移的依存として導入されていたが、明示的に固定） |
+| `xlwt` | 旧バイナリ形式Excel（`.xls`）ファイルを書き出すライブラリ | `tests/test_ingest.py`で`.xls`取り込みテスト用のフィクスチャファイルを生成するためだけに使用（読み込み側の`xlrd`とは別ライブラリ） |
 | [ruff](https://docs.astral.sh/ruff/) | lint（静的解析）・コードフォーマットを1ツールでカバーするツール | `pyproject.toml`の`[tool.ruff]`でルールセットを設定。[.github/workflows/ci.yml](.github/workflows/ci.yml)がpush/PR時に`ruff check`・`ruff format --check`を自動実行 |
 
 > **README肥大化時の分割方針**: このセクションが今後さらに大きくなった場合は、`docs/tech-stack.md`
