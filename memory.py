@@ -47,7 +47,7 @@ def _validate_thread_id(thread_id: str) -> str:
     CONVERSATIONS_DIR配下のパス組み立てに使う前に必ず通すことで、
     ディレクトリトラバーサルや意図しないパスへのアクセスを防ぐ。
     """
-    if not isinstance(thread_id, str) or not THREAD_ID_PATTERN.match(thread_id):
+    if not isinstance(thread_id, str) or not THREAD_ID_PATTERN.fullmatch(thread_id):
         raise ValueError(f"不正なthread_idです: {thread_id!r}")
     return thread_id
 
