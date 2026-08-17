@@ -194,9 +194,11 @@ def load_conversation(thread_id: str) -> list[dict]:
 def conversation_count(thread_id: str | None = None) -> int:
     """保存済みの会話ログ件数を返す（サイドバー表示などに使用）。
 
-    thread_id を指定すればそのスレッドのみ、省略すれば全スレッド合計を返す。
+    thread_id に None を渡す（または省略する）と全スレッド合計を返す。
+    空文字列を含むそれ以外の値は save_conversation/load_conversation と同様に
+    _validate_thread_id() の検証対象になり、不正な値であれば ValueError になる。
     """
-    target_dir = CONVERSATIONS_DIR / _validate_thread_id(thread_id) if thread_id else CONVERSATIONS_DIR
+    target_dir = CONVERSATIONS_DIR / _validate_thread_id(thread_id) if thread_id is not None else CONVERSATIONS_DIR
     if not target_dir.exists():
         return 0
     return sum(1 for f in target_dir.rglob("*.md") if f.is_file())
