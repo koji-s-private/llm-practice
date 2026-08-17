@@ -13,11 +13,13 @@
 import json
 
 import pytest
+from fastapi import HTTPException
 from fastapi.testclient import TestClient
 from langchain_core.documents import Document
 from langchain_core.messages import AIMessageChunk, ToolMessage
 
 import api.main as api_main
+import memory
 
 
 class _FakeChunk:
@@ -613,3 +615,65 @@ def test_get_conversation_count_rejects_thread_id_exceeding_max_length(client, m
     assert response.status_code == 400
     assert response.json()["detail"] == "thread_id が長すぎます"
     assert called["count"] == 0
+
+
+# --- memory.THREAD_ID_PATTERN の共通化（api/main.pyとの許可文字ポリシー一致） ---
+
+
+class TestThreadIdPatternSharedWithMemory:
+    """memory.pyとapi/main.pyがthread_idの許可文字ポリシーを二重管理していないことの確認。
+
+    api/main.pyは独自の正規表現を持たず、memory.THREAD_ID_PATTERNをそのままimportして
+    使う構成になった。将来また別々の正規表現に戻ってしまうリグレッションを検知する。
+    """
+
+    def test_api_main_imports_same_pattern_object_as_memory(self):
+        assert api_main.THREAD_ID_PATTERN is memory.THREAD_ID_PATTERN
+
+    def test_pattern_only_allows_alnum_hyphen_underscore(self):
+        assert memory.THREAD_ID_PATTERN.pattern == r"^[A-Za-z0-9_-]+$"
+
+    @pytest.mark.parametrize(
+        "thread_id",
+        [
+            "a1b2c3d4",  # new_thread_id() が生成する形式
+            "thread-a",
+            "thread_a",
+            "Thread-ID_123",
+            "0",
+            "../../etc/passwd",
+            "../secret",
+            "..",
+            "a/../../b",
+            "/etc/passwd",
+            "thread/a",
+            "thread\\a",
+            "",
+            "thread a",  # 空白
+            "thread.a",  # ドット
+            "thread:a",
+            "thread;rm -rf /",
+            "日本語スレッド",  # 非ASCII文字
+        ],
+    )
+    def test_memory_and_api_main_agree_on_acceptance(self, thread_id, tmp_path, monkeypatch):
+        """同じ入力に対し、memory._validate_thread_id()とapi.main._validate_thread_id()の
+        受理/拒否（エラー型は異なってよい）が一致することを確認する。"""
+        monkeypatch.setattr(api_main, "CONVERSATIONS_DIR", tmp_path)
+
+        memory_accepted = True
+        try:
+            memory._validate_thread_id(thread_id)
+        except ValueError:
+            memory_accepted = False
+
+        api_main_accepted = True
+        try:
+            api_main._validate_thread_id(thread_id)
+        except HTTPException:
+            api_main_accepted = False
+
+        assert memory_accepted == api_main_accepted, (
+            f"thread_id={thread_id!r} でmemory.pyとapi/main.pyの受理/拒否結果が食い違っています "
+            f"(memory={memory_accepted}, api.main={api_main_accepted})"
+        )
