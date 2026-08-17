@@ -22,7 +22,6 @@
 """
 
 import json
-import re
 from collections.abc import Generator
 from pathlib import Path
 
@@ -34,7 +33,7 @@ from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 from pydantic import BaseModel
 
 from ingest import sync_data_dir
-from memory import CONVERSATIONS_DIR, conversation_count, new_thread_id, save_conversation
+from memory import CONVERSATIONS_DIR, THREAD_ID_PATTERN, conversation_count, new_thread_id, save_conversation
 from rag_chain import GLOBAL_THREAD_ID, build_agent
 
 app = FastAPI(
@@ -64,7 +63,7 @@ def health() -> dict:
 # 本API層ではHTTPリクエストの生のthread_idが直接渡ってくるため、絶対パスや`../`を含む値を
 # 許可するとdata/conversations/の外への任意ファイル書き込み・情報漏えいにつながる。ingest.pyの
 # safe_upload_dest()と同様に、許可文字種を制限した上でresolve()後の実パスも検証する。
-_THREAD_ID_PATTERN = re.compile(r"^[A-Za-z0-9_-]+$")
+# 許可文字の正規表現はmemory.pyのTHREAD_ID_PATTERNをそのまま使い、ポリシーが分散しないようにする。
 
 # new_thread_id() が生成する値（uuid4().hex[:8]、8文字）に十分な余裕を持たせつつ、
 # OSのファイル名長制限（一般的に255バイト程度）に触れないよう上限を設ける。
@@ -73,7 +72,7 @@ _THREAD_ID_MAX_LENGTH = 64
 
 def _validate_thread_id(thread_id: str) -> str:
     """thread_id がファイルパスとして安全か検証し、不正であれば400エラーを送出する。"""
-    if not thread_id or not _THREAD_ID_PATTERN.fullmatch(thread_id):
+    if not thread_id or not THREAD_ID_PATTERN.fullmatch(thread_id):
         raise HTTPException(status_code=400, detail="thread_id の形式が不正です")
     if len(thread_id) > _THREAD_ID_MAX_LENGTH:
         raise HTTPException(status_code=400, detail="thread_id が長すぎます")

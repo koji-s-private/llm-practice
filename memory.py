@@ -36,7 +36,9 @@ _ANSWER_PATTERN = re.compile(r"## 回答\n\n(.*)", re.DOTALL)
 
 # new_thread_id()が生成するuuid hex文字列を含む、英数字・ハイフン・アンダースコアのみを許可する。
 # 将来thread_idに外部入力がそのまま渡されるようになってもパストラバーサルが起きないようにする。
-_THREAD_ID_PATTERN = re.compile(r"^[A-Za-z0-9_-]+$")
+# api/main.py側の検証（長さ制限・resolve()によるパストラバーサル対策を追加で行う）も
+# このパターンをimportして使い、許可文字ポリシーの二重管理を避ける。
+THREAD_ID_PATTERN = re.compile(r"^[A-Za-z0-9_-]+$")
 
 
 def _validate_thread_id(thread_id: str) -> str:
@@ -45,7 +47,7 @@ def _validate_thread_id(thread_id: str) -> str:
     CONVERSATIONS_DIR配下のパス組み立てに使う前に必ず通すことで、
     ディレクトリトラバーサルや意図しないパスへのアクセスを防ぐ。
     """
-    if not isinstance(thread_id, str) or not _THREAD_ID_PATTERN.match(thread_id):
+    if not isinstance(thread_id, str) or not THREAD_ID_PATTERN.match(thread_id):
         raise ValueError(f"不正なthread_idです: {thread_id!r}")
     return thread_id
 
