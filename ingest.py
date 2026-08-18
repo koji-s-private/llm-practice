@@ -33,6 +33,8 @@ PDFの読み込みは2段構成:
 「pypdf/PyMuPDFでは苦手なファイル」だけが2)のコストを払う仕組みにすることで、
 処理速度への影響を最小限にしている。Doclingが未インストールの場合は自動的に
 1)の結果のみを使う（インストールは任意）。
+1)のPyMuPDF抽出では、行政資料に多い罫線表の行・列対応を保つためextract_tables="markdown"
+を有効にし、表構造検出結果をMarkdown表として本文に追記している。
 """
 
 import argparse
@@ -183,6 +185,12 @@ LOADERS = {
 # （図解・スキャンPDFの疑いがある）」とみなしDoclingでの再解析を試みる。
 MIN_CHARS_PER_PAGE_FOR_FAST_PATH = 40
 
+# PyMuPDFの素朴なテキスト抽出（読み取り順に流し込むだけ）は、罫線表のセル値が
+# 本来の行・列と食い違って抽出されることがある。extract_tables="markdown"を指定すると
+# page.find_tables()による表構造検出結果がMarkdown表として本文末尾に追記され、
+# ヘッダー行と数値の対応関係を保ったまま抽出できる（表が無いページでは何も追加されない）。
+PDF_EXTRACT_TABLES_FORMAT = "markdown"
+
 # Doclingフォールバック（DOC_CHUNKS）は段落・テーブルセル単位の細切れDocumentを返し、
 # そのままsplitterに渡すとチャンクが細かくなりすぎる（splitterはDocumentをまたいで
 # マージしない）ため、splitterのchunk_sizeと同じ目安文字数でまとめ直す。
@@ -281,7 +289,7 @@ def _fingerprint(path: Path) -> dict:
 def _load_pdf(path: Path, verbose: bool = True) -> list:
     """PDFを読み込む（PyMuPDFで高速抽出 → 必要な場合のみDoclingでフォールバック）。"""
     try:
-        fast_docs = PyMuPDFLoader(str(path)).load()
+        fast_docs = PyMuPDFLoader(str(path), extract_tables=PDF_EXTRACT_TABLES_FORMAT).load()
     except Exception as e:
         # PyMuPDF自体が例外を送出した場合（暗号化PDF・破損PDF・特殊なPDF構造など）。
         # Doclingが利用可能なら、レイアウト認識・OCRで読める可能性があるためフォールバックする。

@@ -9,6 +9,7 @@ import io
 import json
 import logging
 import os
+import re
 import threading
 import time
 import zipfile
@@ -180,7 +181,7 @@ def test_load_pdf_falls_back_to_docling_when_pymupdf_raises(monkeypatch, tmp_pat
     fake_pdf_path.write_bytes(b"not a real pdf")
 
     class _FailingPyMuPDFLoader:
-        def __init__(self, path):
+        def __init__(self, path, **kwargs):
             self.path = path
 
         def load(self):
@@ -212,7 +213,7 @@ def test_load_pdf_docling_fallback_on_pymupdf_error_respects_verbose_false(monke
     fake_pdf_path.write_bytes(b"not a real pdf")
 
     class _FailingPyMuPDFLoader:
-        def __init__(self, path):
+        def __init__(self, path, **kwargs):
             self.path = path
 
         def load(self):
@@ -241,7 +242,7 @@ def test_load_pdf_raises_original_error_when_docling_also_fails(monkeypatch, tmp
     fake_pdf_path.write_bytes(b"not a real pdf")
 
     class _FailingPyMuPDFLoader:
-        def __init__(self, path):
+        def __init__(self, path, **kwargs):
             self.path = path
 
         def load(self):
@@ -269,7 +270,7 @@ def test_load_pdf_raises_original_error_when_docling_not_installed(monkeypatch, 
     fake_pdf_path.write_bytes(b"not a real pdf")
 
     class _FailingPyMuPDFLoader:
-        def __init__(self, path):
+        def __init__(self, path, **kwargs):
             self.path = path
 
         def load(self):
@@ -295,7 +296,7 @@ def test_load_pdf_falls_back_to_docling_when_pymupdf_text_is_too_sparse(monkeypa
     fake_pdf_path.write_bytes(b"not a real pdf")
 
     class _SparsePyMuPDFLoader:
-        def __init__(self, path):
+        def __init__(self, path, **kwargs):
             self.path = path
 
         def load(self):
@@ -326,7 +327,7 @@ def test_load_pdf_keeps_pymupdf_result_when_docling_extracts_fewer_chars(monkeyp
     fake_pdf_path.write_bytes(b"not a real pdf")
 
     class _SparsePyMuPDFLoader:
-        def __init__(self, path):
+        def __init__(self, path, **kwargs):
             self.path = path
 
         def load(self):
@@ -356,7 +357,7 @@ def test_load_pdf_keeps_pymupdf_result_when_docling_fails_for_sparse_text(monkey
     fake_pdf_path.write_bytes(b"not a real pdf")
 
     class _SparsePyMuPDFLoader:
-        def __init__(self, path):
+        def __init__(self, path, **kwargs):
             self.path = path
 
         def load(self):
@@ -386,7 +387,7 @@ def test_load_pdf_uses_pymupdf_directly_when_text_is_sufficient(monkeypatch, tmp
     fake_pdf_path.write_bytes(b"not a real pdf")
 
     class _SufficientPyMuPDFLoader:
-        def __init__(self, path):
+        def __init__(self, path, **kwargs):
             self.path = path
 
         def load(self):
@@ -404,6 +405,122 @@ def test_load_pdf_uses_pymupdf_directly_when_text_is_sufficient(monkeypatch, tmp
 
     assert len(docs) == 1
     assert docs[0].page_content == "十分な量のテキストです。" * 10
+
+
+def _make_administrative_report_pdf(path):
+    """罫線表・小フォント脚注を含む行政資料風PDFをfitzで生成する（実際の抽出品質検証用）。
+
+    insert_text/insert_textboxのデフォルトフォントは日本語グリフを持たないため、
+    PyMuPDF組み込みのCJKフォント（fontname="japan"）を明示的に指定する必要がある。
+    """
+    import fitz
+
+    doc = fitz.open()
+    page = doc.new_page(width=595, height=842)
+    page.insert_text((50, 50), "第2章 予算執行状況", fontsize=14, fontname="japan")
+
+    headers = ["項目", "予算額（円）", "執行額（円）", "執行率"]
+    rows = [
+        ["防災設備整備費", "12,500,000", "11,980,000", "95.8%"],
+        ["高齢者見守り事業費", "8,300,000", "7,650,000", "92.2%"],
+    ]
+    col_x = [50, 200, 350, 470, 545]
+    row_h = 22
+    table_top = 80
+
+    def draw_row(y0, cells):
+        for i in range(len(col_x) - 1):
+            rect = fitz.Rect(col_x[i], y0, col_x[i + 1], y0 + row_h)
+            page.draw_rect(rect, color=(0, 0, 0), width=0.5)
+            page.insert_textbox(rect, cells[i], fontsize=10, fontname="japan", align=1)
+
+    draw_row(table_top, headers)
+    for i, row in enumerate(rows):
+        draw_row(table_top + row_h * (i + 1), row)
+
+    footnote_y = table_top + row_h * (len(rows) + 1) + 20
+    page.insert_text((50, footnote_y), "※1 執行率は予算額に対する執行額の割合。", fontsize=6, fontname="japan")
+
+    doc.save(str(path))
+
+
+def test_load_pdf_extracts_table_rows_with_preserved_column_correspondence(monkeypatch, tmp_path):
+    # 罫線表はPyMuPDFの素朴なテキスト抽出だとセルの値が行・列の対応を失って
+    # 1セルずつ別々の行に流し込まれる。extract_tables="markdown"により、
+    # ヘッダーと数値が同じ行で対応付いたMarkdown表として抽出できることを確認する
+    # （改善前はこのMarkdown行が出力に含まれず失敗するリグレッションテスト）。
+    pdf_path = tmp_path / "report.pdf"
+    _make_administrative_report_pdf(pdf_path)
+
+    class _DoclingLoaderThatShouldNotBeCalled:
+        def __init__(self, file_path, export_type):
+            raise AssertionError("十分なテキストが抽出できる場合はDoclingLoaderが呼ばれてはならない")
+
+    monkeypatch.setattr(ingest, "DOCLING_AVAILABLE", True)
+    monkeypatch.setattr(ingest, "DoclingLoader", _DoclingLoaderThatShouldNotBeCalled)
+
+    docs = ingest._load_pdf(pdf_path, verbose=False)
+
+    assert len(docs) == 1
+    content = docs[0].page_content
+    assert "|防災設備整備費|12,500,000|11,980,000|95.8%|" in content.replace("<br>", "")
+    assert "|高齢者見守り事業費|8,300,000|7,650,000|92.2%|" in content.replace("<br>", "")
+    # 小フォント（6pt）の脚注も欠落せず抽出できていること
+    assert "執行率は予算額に対する執行額の割合" in content
+
+
+def test_load_pdf_uses_fast_path_for_text_heavy_administrative_pdf(monkeypatch, tmp_path):
+    # 表・小フォント脚注を含む行政資料風PDFでも、1ページあたりの抽出文字数が
+    # MIN_CHARS_PER_PAGE_FOR_FAST_PATH（40文字）を大きく上回るため、
+    # PyMuPDF単独の高速経路のみで処理されDoclingへはフォールバックしない
+    pdf_path = tmp_path / "report.pdf"
+    _make_administrative_report_pdf(pdf_path)
+
+    class _DoclingLoaderThatShouldNotBeCalled:
+        def __init__(self, file_path, export_type):
+            raise AssertionError("高速経路で十分な文字数が抽出できる場合はDoclingLoaderが呼ばれてはならない")
+
+    monkeypatch.setattr(ingest, "DOCLING_AVAILABLE", True)
+    monkeypatch.setattr(ingest, "DoclingLoader", _DoclingLoaderThatShouldNotBeCalled)
+
+    docs = ingest._load_pdf(pdf_path, verbose=False)
+
+    total_chars = sum(len(d.page_content.strip()) for d in docs)
+    avg_chars_per_page = total_chars / len(docs)
+    assert avg_chars_per_page >= ingest.MIN_CHARS_PER_PAGE_FOR_FAST_PATH
+
+
+def test_load_pdf_does_not_append_table_markdown_for_table_less_pdf(monkeypatch, tmp_path):
+    # extract_tables="markdown"はfind_tables()が表を検出したページにのみMarkdown表を
+    # 追記する仕様のため、表を含まない通常のテキストPDFでは本文がそのまま抽出され、
+    # 余計なMarkdown表や区切り文字が混入しないことを確認する境界値テスト。
+    import fitz
+
+    pdf_path = tmp_path / "plain.pdf"
+    doc = fitz.open()
+    page = doc.new_page(width=595, height=842)
+    # MIN_CHARS_PER_PAGE_FOR_FAST_PATH（40文字）を超える長さにし、Doclingフォールバック
+    # （実モデルを読み込む重い処理）が発生しないことを保証した上で検証する。
+    plain_text = "第2章 これは表を含まない通常の本文です。" * 3
+    page.insert_textbox(fitz.Rect(50, 50, 500, 400), plain_text, fontsize=12, fontname="japan")
+    doc.save(str(pdf_path))
+
+    class _DoclingLoaderThatShouldNotBeCalled:
+        def __init__(self, file_path, export_type):
+            raise AssertionError("表を含まないテキストPDFでDoclingLoaderが呼ばれてはならない")
+
+    monkeypatch.setattr(ingest, "DOCLING_AVAILABLE", True)
+    monkeypatch.setattr(ingest, "DoclingLoader", _DoclingLoaderThatShouldNotBeCalled)
+
+    docs = ingest._load_pdf(pdf_path, verbose=False)
+
+    assert len(docs) == 1
+    # insert_textbox()は指定した矩形内で自動改行し、改行位置の空白を落とすことがあるため、
+    # 空白・改行を正規化した上で内容が保持されていること、余計なMarkdown表が
+    # 混入していないことだけを検証する。
+    normalized = re.sub(r"\s+", "", docs[0].page_content)
+    assert normalized == re.sub(r"\s+", "", plain_text)
+    assert "|" not in docs[0].page_content
 
 
 def test_extract_docling_page_returns_page_from_single_prov():
@@ -1994,7 +2111,7 @@ def test_docling_fallback_progress_message_respects_verbose_level(monkeypatch, t
     fake_pdf_path.write_bytes(b"not a real pdf")
 
     class _FailingPyMuPDFLoader:
-        def __init__(self, path):
+        def __init__(self, path, **kwargs):
             self.path = path
 
         def load(self):
