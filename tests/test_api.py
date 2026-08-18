@@ -20,6 +20,7 @@ from langchain_core.messages import AIMessageChunk, ToolMessage
 
 import api.main as api_main
 import memory
+import setup
 
 
 class _FakeChunk:
@@ -220,6 +221,63 @@ def test_chat_converts_history_roles_to_langchain_messages(client, monkeypatch):
     assert input_messages[0].content == "前回の質問"
     assert input_messages[1].content == "前回の回答"
     assert input_messages[2].content == "今回の質問"
+
+
+# --- POST /api/chat: 会話履歴のウィンドウイング（history_utils._windowed_history） ---
+
+
+def test_chat_sends_windowed_history_to_agent_when_over_ollama_budget(client, monkeypatch):
+    """正常系: 会話履歴が長くOllama利用時のトークン予算を超える場合、agent.stream()に
+    渡すメッセージ一覧は history_utils._windowed_history() で間引かれ、最も古いやりとり
+    は含まれない。リクエストで受け取った history 自体は書き換えられない。
+
+    conftest.pyのダミー環境変数によりデフォルトのCURRENT_PROVIDERは"anthropic"
+    （予算50000トークン）になっており、以下の会話量（約8000トークン相当）では
+    間引きが発生しない。ここではOllama利用時の予算（デフォルト設定で約3192
+    トークン）を明示的に使うことで、間引きが発生する条件を安定して再現する。"""
+    monkeypatch.setattr(setup, "CURRENT_PROVIDER", "ollama")
+    fake_agent = _FakeAgent(chunks=[_FakeChunk("短い回答")])
+    monkeypatch.setattr(api_main, "build_agent", lambda thread_id: fake_agent)
+
+    long_text = "あ" * 2000  # 概算で500トークン程度
+    history = []
+    for i in range(8):
+        history.append({"role": "user", "content": f"質問{i}: {long_text}"})
+        history.append({"role": "assistant", "content": f"回答{i}: {long_text}"})
+
+    response = client.post("/api/chat", json={"thread_id": "thread-1", "message": "今回の質問", "history": history})
+
+    assert response.status_code == 200
+    input_messages = fake_agent.stream_calls[0]["input"]["messages"]
+    # 全履歴(16件)+今回の質問(1件) より少ない件数に間引かれている
+    assert len(input_messages) < len(history) + 1
+    assert type(input_messages[0]).__name__ == "HumanMessage"
+    assert not any("質問0" in getattr(m, "content", "") for m in input_messages)
+    assert any("質問7" in getattr(m, "content", "") for m in input_messages)
+    # 直近の質問は残っている
+    assert input_messages[-1].content == "今回の質問"
+
+
+def test_chat_keeps_full_history_when_under_api_provider_budget(client, monkeypatch):
+    """正常系: CURRENT_PROVIDERが"anthropic"の場合、Ollama利用時の予算
+    （約3192トークン）を超える会話量でも、API向けの大きい予算（50000トークン）の
+    範囲内であれば間引かれず全メッセージがそのままagentに渡る。"""
+    monkeypatch.setattr(setup, "CURRENT_PROVIDER", "anthropic")
+    fake_agent = _FakeAgent(chunks=[_FakeChunk("短い回答")])
+    monkeypatch.setattr(api_main, "build_agent", lambda thread_id: fake_agent)
+
+    long_text = "あ" * 2000
+    history = []
+    for i in range(8):
+        history.append({"role": "user", "content": f"質問{i}: {long_text}"})
+        history.append({"role": "assistant", "content": f"回答{i}: {long_text}"})
+
+    response = client.post("/api/chat", json={"thread_id": "thread-1", "message": "今回の質問", "history": history})
+
+    assert response.status_code == 200
+    input_messages = fake_agent.stream_calls[0]["input"]["messages"]
+    assert len(input_messages) == len(history) + 1
+    assert any("質問0" in getattr(m, "content", "") for m in input_messages)
 
 
 def test_chat_accepts_empty_message_and_default_history(client, monkeypatch):

@@ -24,10 +24,20 @@ data/ フォルダの変更は、ページの操作（リロード・チャッ�
 from pathlib import Path
 
 import streamlit as st
-from langchain_core.messages import AIMessage, HumanMessage, ToolMessage, trim_messages
+from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 from streamlit.delta_generator import DeltaGenerator
 
 import setup
+
+# 会話履歴のトークン数ウィンドウイング（history_utils.py）は app.py と api/main.py の
+# 両方から使う共通ロジックのため切り出している。テストが従来通り app._windowed_history 等の
+# 名前で参照できるよう、"as 同名" で明示的に再エクスポートする（ruffのunused-import誤検知を防ぐ）。
+from history_utils import _API_PROVIDER_HISTORY_TOKENS as _API_PROVIDER_HISTORY_TOKENS
+from history_utils import _FALLBACK_HISTORY_TOKENS as _FALLBACK_HISTORY_TOKENS
+from history_utils import _OLLAMA_CONTEXT_MARGIN_TOKENS as _OLLAMA_CONTEXT_MARGIN_TOKENS
+from history_utils import _OLLAMA_MIN_HISTORY_TOKENS as _OLLAMA_MIN_HISTORY_TOKENS
+from history_utils import _history_token_budget as _history_token_budget
+from history_utils import _windowed_history as _windowed_history
 from ingest import (
     DATA_DIR,
     add_single_conversation_file,
@@ -49,51 +59,6 @@ st.set_page_config(
 st.title("📖 Doclore")
 st.markdown("##### あなたの資料から、迷わず答えへ。")
 st.caption("data/ フォルダにファイルを置くと自動でDBに反映され、AIエージェントが検索しながら回答します。")
-
-
-# 会話履歴の送信トークン予算。Ollamaはsetup.OLLAMA_NUM_CTXでコンテキスト長が小さく
-# 制限されるため、システムプロンプト・検索結果・生成分の余白を差し引いた保守的な値にする。
-_OLLAMA_CONTEXT_MARGIN_TOKENS = 5000
-_OLLAMA_MIN_HISTORY_TOKENS = 500
-
-# Anthropic/OpenAIはコンテキスト長を制限していないためOllamaより大きい予算を使えるが、
-# 無制限にするとAPI利用料・レイテンシが増えるため現実的な上限を設ける。
-_API_PROVIDER_HISTORY_TOKENS = 50000
-
-# CURRENT_PROVIDER未設定（想定外のケース）向けの安全側フォールバック値。
-_FALLBACK_HISTORY_TOKENS = 3000
-
-
-def _history_token_budget() -> int:
-    """実行時点のsetup.CURRENT_PROVIDERに応じて、会話履歴に割り当てるトークン予算を決める。
-
-    Ollamaのみnum_ctxでコンテキスト長を制限しており、Anthropic/OpenAIは制限が無いため、
-    固定値ではなくプロバイダに応じて動的に決める。
-    """
-    provider = setup.CURRENT_PROVIDER
-    if provider == "ollama":
-        return max(_OLLAMA_MIN_HISTORY_TOKENS, setup.OLLAMA_NUM_CTX - _OLLAMA_CONTEXT_MARGIN_TOKENS)
-    if provider in ("anthropic", "openai"):
-        return _API_PROVIDER_HISTORY_TOKENS
-    return _FALLBACK_HISTORY_TOKENS
-
-
-def _windowed_history(messages: list) -> list:
-    """会話履歴をトークン予算内に収まるようウィンドウイングする（直近優先）。
-
-    画面表示用の st.session_state.messages はそのまま保持しつつ、LLMへの送信直前だけ
-    直近のやりとりに絞り込む。start_on="human" により、絞り込んだ結果の先頭が必ず
-    HumanMessageになるようにする（エージェントが要求する会話構造を壊さないため）。
-    """
-    if not messages:
-        return messages
-    return trim_messages(
-        messages,
-        max_tokens=_history_token_budget(),
-        token_counter="approximate",
-        strategy="last",
-        start_on="human",
-    )
 
 
 def _format_snippet(text: str, limit: int = 300) -> str:
