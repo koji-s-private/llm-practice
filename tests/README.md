@@ -38,6 +38,7 @@ pytest
 | `test_memory.py` | `memory.py` | 会話ログの保存（Markdownファイル書き込み）・件数カウントのテスト |
 | `test_app.py` | `app.py` | Streamlitのチャット画面のエラーハンドリングのテスト（`streamlit.testing.v1.AppTest` を使いスクリプト実行エンジン上で検証） |
 | `test_app_source_display.py` | `app.py` | 参照元スニペットの整形（`_format_snippet`）、参照元ラベル（`_format_source_label`）、過去スレッドラベル（`_format_thread_label`）の純粋関数のテスト |
+| `test_source_formatting.py` | `source_formatting.py` | 参照元表示整形の共通ロジック（`format_snippet` / `format_source_label`）のユニットテストと、`app.py` / `api/main.py` の再エクスポートが同一実装を指していることの確認 |
 | `test_api.py` | `api/main.py` | FastAPIバックエンドの各エンドポイント（チャットのSSEストリーミング、同期、会話ログの作成・件数取得・保存、thread_idのパストラバーサル対策）のテスト |
 | `test_setup.py` | `setup.py` | LLMプロバイダの自動選択（`_build_model`）における非対話環境でのgetpass()ブロック回避、OllamaモデルのpullチェックのAPIやフォールバック挙動のテスト |
 | `test_evaluate_retrieval.py` | `scripts/evaluate_retrieval.py` | 検索結果の適合率・再現率・F1計算ロジックのテスト |

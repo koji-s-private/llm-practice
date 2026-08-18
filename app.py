@@ -29,9 +29,10 @@ from streamlit.delta_generator import DeltaGenerator
 
 import setup
 
-# 会話履歴のトークン数ウィンドウイング（history_utils.py）は app.py と api/main.py の
-# 両方から使う共通ロジックのため切り出している。テストが従来通り app._windowed_history 等の
-# 名前で参照できるよう、"as 同名" で明示的に再エクスポートする（ruffのunused-import誤検知を防ぐ）。
+# 会話履歴のトークン数ウィンドウイング（history_utils.py）・参照元表示の整形
+# （source_formatting.py）は app.py と api/main.py の両方から使う共通ロジックのため
+# 切り出している。テストが従来通り app._windowed_history 等の名前で参照できるよう、
+# "as 同名" で明示的に再エクスポートする（ruffのunused-import誤検知を防ぐ）。
 from history_utils import _API_PROVIDER_HISTORY_TOKENS as _API_PROVIDER_HISTORY_TOKENS
 from history_utils import _FALLBACK_HISTORY_TOKENS as _FALLBACK_HISTORY_TOKENS
 from history_utils import _OLLAMA_CONTEXT_MARGIN_TOKENS as _OLLAMA_CONTEXT_MARGIN_TOKENS
@@ -48,7 +49,9 @@ from ingest import (
     sync_data_dir,
 )
 from memory import conversation_count, list_threads, load_conversation, new_thread_id, save_conversation
-from rag_chain import GLOBAL_THREAD_ID, build_agent
+from rag_chain import build_agent
+from source_formatting import format_snippet as _format_snippet
+from source_formatting import format_source_label as _format_source_label
 
 # 配色・フォントは .streamlit/config.toml のカスタムテーマで設定している。
 st.set_page_config(
@@ -59,50 +62,6 @@ st.set_page_config(
 st.title("📖 Doclore")
 st.markdown("##### あなたの資料から、迷わず答えへ。")
 st.caption("data/ フォルダにファイルを置くと自動でDBに反映され、AIエージェントが検索しながら回答します。")
-
-
-def _format_snippet(text: str, limit: int = 300) -> str:
-    """参照元プレビュー用に本文を整形する。
-
-    limitを超える場合、単語・文の途中で不自然に切れないよう句点・改行などの区切り文字
-    （見つからなければ空白）のうち末尾に近いものを探して区切る。
-    """
-    stripped = text.strip()
-    if len(stripped) <= limit:
-        return stripped
-
-    truncated = stripped[:limit]
-    break_chars = "。\n！？!?"
-    best_pos = max((truncated.rfind(ch) for ch in break_chars), default=-1)
-    if best_pos >= limit // 2:
-        truncated = truncated[: best_pos + 1]
-    else:
-        space_pos = truncated.rfind(" ")
-        if space_pos >= limit // 2:
-            truncated = truncated[:space_pos]
-
-    return truncated.rstrip() + "..."
-
-
-def _format_source_label(metadata: dict) -> str:
-    """参照元ドキュメントのメタデータから表示用ラベルを組み立てる。
-
-    - source: ファイルパス → ファイル名のみを表示
-    - thread_id: 会話ログ由来のチャンクにのみ付与される（GLOBAL_THREAD_IDは
-      全スレッド共通ドキュメントを表すため対象外）。付与されている場合は
-      「会話ログ（スレッド: xxx）」であることが分かるように先頭に付ける
-    - page: PDFのページ番号（0始まり）があれば「（p.N）」を末尾に付ける
-    """
-    source = metadata.get("source", "unknown")
-    page = metadata.get("page")
-    thread_id = metadata.get("thread_id")
-
-    label = Path(source).name if source != "unknown" else source
-    if thread_id and thread_id != GLOBAL_THREAD_ID:
-        label = f"会話ログ（スレッド: {thread_id}） - {label}"
-    if page is not None:
-        label += f"（p.{page + 1}）"
-    return label
 
 
 def _sync_and_report(spinner_text: str, warning_slot: DeltaGenerator | None = None) -> None:

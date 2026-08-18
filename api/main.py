@@ -23,7 +23,6 @@
 
 import json
 from collections.abc import Generator
-from pathlib import Path
 
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
@@ -35,7 +34,9 @@ from pydantic import BaseModel
 from history_utils import _windowed_history
 from ingest import sync_data_dir
 from memory import CONVERSATIONS_DIR, THREAD_ID_PATTERN, conversation_count, new_thread_id, save_conversation
-from rag_chain import GLOBAL_THREAD_ID, build_agent
+from rag_chain import build_agent
+from source_formatting import format_snippet as _format_snippet
+from source_formatting import format_source_label as _format_source_label
 
 app = FastAPI(
     title="Doclore API",
@@ -110,46 +111,6 @@ def _to_langchain_messages(history: list[ChatMessage]) -> list:
         else:
             messages.append(AIMessage(content=m.content))
     return messages
-
-
-def _format_source_label(metadata: dict) -> str:
-    """参照元ドキュメントのメタデータから表示用ラベルを組み立てる（app.pyの同名関数と同じ方針）。
-
-    - source: ファイルパス → ファイル名のみを表示
-    - thread_id: 会話ログ由来のチャンクにのみ付与される（GLOBAL_THREAD_IDは
-      全スレッド共通ドキュメントを表すため対象外）。付与されている場合は
-      「会話ログ（スレッド: xxx）」であることが分かるように先頭に付ける
-    - page: PDFのページ番号（0始まり）があれば「（p.N）」を末尾に付ける
-    """
-    source = metadata.get("source", "unknown")
-    page = metadata.get("page")
-    thread_id = metadata.get("thread_id")
-
-    label = Path(source).name if source != "unknown" else source
-    if thread_id and thread_id != GLOBAL_THREAD_ID:
-        label = f"会話ログ（スレッド: {thread_id}） - {label}"
-    if page is not None:
-        label += f"（p.{page + 1}）"
-    return label
-
-
-def _format_snippet(text: str, limit: int = 300) -> str:
-    """参照元プレビュー用に本文を整形する（app.pyの同名関数と同じ方針）。"""
-    stripped = text.strip()
-    if len(stripped) <= limit:
-        return stripped
-
-    truncated = stripped[:limit]
-    break_chars = "。\n！？!?"
-    best_pos = max((truncated.rfind(ch) for ch in break_chars), default=-1)
-    if best_pos >= limit // 2:
-        truncated = truncated[: best_pos + 1]
-    else:
-        space_pos = truncated.rfind(" ")
-        if space_pos >= limit // 2:
-            truncated = truncated[:space_pos]
-
-    return truncated.rstrip() + "..."
 
 
 def _serialize_sources(sources: list[Document]) -> list[dict]:
