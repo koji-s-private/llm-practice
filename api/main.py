@@ -32,6 +32,7 @@ from langchain_core.documents import Document
 from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 from pydantic import BaseModel
 
+from history_utils import _windowed_history
 from ingest import sync_data_dir
 from memory import CONVERSATIONS_DIR, THREAD_ID_PATTERN, conversation_count, new_thread_id, save_conversation
 from rag_chain import GLOBAL_THREAD_ID, build_agent
@@ -169,11 +170,16 @@ def _stream_chat_response(thread_id: str, message: str, history: list[ChatMessag
     AIMessageChunk.content はプロバイダによって型が異なる（str、またはAnthropicの
     content blocks list）ため、getattr(chunk, "content", "") ではなく text系ブロックを
     結合済みの .text プロパティで本文を取り出す。
+
+    エージェントに渡す会話履歴は `_windowed_history()` でトークン予算内にウィンドウイングする
+    （app.pyと同じ防御ロジック。Ollama利用時にコンテキスト長超過で古い履歴が黙って
+    切り捨てられるのを防ぐ）。リクエストで受け取った `history` 自体は変更しない。
     """
     sources: list[Document] = []
     try:
         agent = build_agent(thread_id)
-        input_messages = _to_langchain_messages(history) + [HumanMessage(content=message)]
+        windowed_history = _windowed_history(_to_langchain_messages(history))
+        input_messages = windowed_history + [HumanMessage(content=message)]
         for chunk, _metadata in agent.stream({"messages": input_messages}, stream_mode="messages"):
             if isinstance(chunk, ToolMessage):
                 if getattr(chunk, "artifact", None):
