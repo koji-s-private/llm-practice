@@ -42,6 +42,7 @@ pytest
 | `test_api.py` | `api/main.py` | FastAPIバックエンドの各エンドポイント（チャットのSSEストリーミング、同期、会話ログの作成・件数取得・保存、thread_idのパストラバーサル対策）のテスト |
 | `test_setup.py` | `setup.py` | LLMプロバイダの自動選択（`_build_model`）における非対話環境でのgetpass()ブロック回避、OllamaモデルのpullチェックのAPIやフォールバック挙動のテスト |
 | `test_evaluate_retrieval.py` | `scripts/evaluate_retrieval.py` | 検索結果の適合率・再現率・F1計算ロジックのテスト |
+| `test_evaluate_relevance_grading.py` | `scripts/evaluate_relevance_grading.py` | LLM採点（`_grade_relevance`）の適合率・再現率・F1計算ロジックのテスト |
 | `test_select_next_issue.py` | `.github/scripts/select_next_issue.py` | AIチームのIssue選定ロジックのテスト（CI専用スクリプトのためファイルパスから直接import） |
 | `test_ci_config.py` | `.github/workflows/ci.yml` / `pyproject.toml` | CIワークフロー定義（トリガー・実行ステップの順序）とruff設定（除外ファイル・ルールセット）の静的検証 |
 | `test_ci_failure_guard_config.py` | `.github/workflows/ci-failure-guard.yml` | CI失敗時に自動対応するワークフロー定義（トリガー・権限・失敗要因の切り分けロジック）の静的検証 |
