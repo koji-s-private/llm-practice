@@ -34,6 +34,7 @@ pytest
 | `test_ingest_indexed_files.py` | `ingest.py` | インデックス済みファイル一覧の取得（`list_indexed_files`）とファイル削除（`delete_indexed_file`、パストラバーサル対策含む）のテスト |
 | `test_ingest_per_file_manifest_save.py` | `ingest.py` | 同期処理中にファイル1件ごとにmanifestを都度保存する挙動（中断時にも処理済み分が残ることを含む）のテスト |
 | `test_ingest_add_single_conversation_file.py` | `ingest.py` | 会話ログ保存直後に呼ばれる単一ファイル同期（`add_single_conversation_file`）のテスト |
+| `test_google_drive_sync.py` | `google_drive_sync.py` | Google Driveの指定フォルダを `data/google_drive/` にミラーする処理（Google Docs/Sheets/Slidesのexport、通常ファイルのダウンロード、未対応拡張子のスキップ、削除検知、`GOOGLE_DRIVE_FOLDER_ID`未設定時のスキップ、認証情報ファイル不在時のエラー）のテスト（実際のGoogle API呼び出し・OAuth認証は行わずフェイクに差し替える） |
 | `test_rag_chain.py` | `rag_chain.py` | 検索結果の関連度採点（`_grade_relevance`）と、「見つからない場合」のフォールバック応答のテスト |
 | `test_memory.py` | `memory.py` | 会話ログの保存（Markdownファイル書き込み）・件数カウントのテスト |
 | `test_app.py` | `app.py` | Streamlitのチャット画面のエラーハンドリングのテスト（`streamlit.testing.v1.AppTest` を使いスクリプト実行エンジン上で検証） |
