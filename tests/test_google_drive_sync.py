@@ -220,15 +220,6 @@ def test_pagination_collects_all_pages(fake_env, monkeypatch):
     assert (drive_dir / "b.pdf").read_bytes() == b"b-bytes"
 
 
-@pytest.mark.xfail(
-    reason=(
-        "既知のバグ: _download_drive_file() は open(dest_path, 'wb') でファイルを先に空にしてから"
-        "ダウンロードするため、ダウンロード失敗時に既存の正常なローカルファイルが0バイトに"
-        "破壊されてしまう(unlinkはされないためresult['removed']には載らないが内容は失われる)。"
-        "一時ファイルにダウンロードしてから成功時のみdest_pathへ置き換える対策が必要。"
-    ),
-    strict=True,
-)
 def test_download_failure_does_not_corrupt_existing_local_file(fake_env, monkeypatch):
     drive_dir = fake_env
     drive_files = [{"id": "pdf1", "name": "manual.pdf", "mimeType": "application/pdf"}]
@@ -243,14 +234,6 @@ def test_download_failure_does_not_corrupt_existing_local_file(fake_env, monkeyp
     assert (drive_dir / "manual.pdf").read_bytes() == b"original-content"
 
 
-@pytest.mark.xfail(
-    reason=(
-        "既知のバグ: _dest_path_for() はDrive上のファイル名をそのままGOOGLE_DRIVE_DIRと"
-        "結合しており、ingest.safe_upload_dest()のようなパストラバーサル対策が無い。"
-        "ファイル名に'../'を含めるとGOOGLE_DRIVE_DIR配下から外れたパスに書き込まれてしまう。"
-    ),
-    strict=True,
-)
 def test_dest_path_for_rejects_relative_path_traversal(fake_env):
     drive_dir = fake_env
     drive_file = {"id": "x1", "name": "../evil.pdf", "mimeType": "application/pdf"}
@@ -260,15 +243,6 @@ def test_dest_path_for_rejects_relative_path_traversal(fake_env):
     assert dest_path is None or dest_path.resolve().parent == drive_dir.resolve()
 
 
-@pytest.mark.xfail(
-    reason=(
-        "既知のバグ: Driveファイル名が絶対パス文字列の場合、pathlibの仕様上"
-        "GOOGLE_DRIVE_DIR / name が完全にnameの絶対パスへ置き換わってしまい、"
-        "GOOGLE_DRIVE_DIR外の任意パスに書き込める。ingest.safe_upload_dest()同様の"
-        "resolve()後チェックが必要。"
-    ),
-    strict=True,
-)
 def test_dest_path_for_rejects_absolute_path_override(fake_env, tmp_path):
     drive_dir = fake_env
     escape_target = tmp_path / "pwned.pdf"

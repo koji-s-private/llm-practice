@@ -129,17 +129,29 @@ def _list_drive_files(service, folder_id: str) -> list[dict]:
 
 
 def _dest_path_for(drive_file: dict) -> Path | None:
-    """Driveファイル1件のローカル保存先パスを決める。対応拡張子でない場合はNoneを返す。"""
+    """Driveファイル1件のローカル保存先パスを決める。対応拡張子でない場合はNoneを返す。
+
+    ingest.safe_upload_dest()と同様、Drive側のファイル名はディレクトリ部分を
+    除いた素の名前のみを使い、resolve()後にGOOGLE_DRIVE_DIR配下から外れていないかも
+    確認する（`../`によるパストラバーサルや絶対パス文字列によるDrive側からの
+    任意パス書き込みを防ぐため）。外れる場合はNoneを返す。
+    """
     mime_type = drive_file["mimeType"]
     name = drive_file["name"]
 
     if mime_type in GOOGLE_NATIVE_EXPORT_MIME_TYPES:
         export_suffix, _ = GOOGLE_NATIVE_EXPORT_MIME_TYPES[mime_type]
-        return GOOGLE_DRIVE_DIR / f"{name}{export_suffix}"
+        safe_name = f"{Path(name).name}{export_suffix}"
+    else:
+        if Path(name).suffix.lower() not in ingest.LOADERS:
+            return None
+        safe_name = Path(name).name
 
-    if Path(name).suffix.lower() not in ingest.LOADERS:
+    dest = (GOOGLE_DRIVE_DIR / safe_name).resolve()
+    if dest.parent != GOOGLE_DRIVE_DIR.resolve():
+        logger.warning("%s: 不正なファイル名のためスキップします（パストラバーサルの疑い）。", name)
         return None
-    return GOOGLE_DRIVE_DIR / name
+    return dest
 
 
 def _build_download_request(service, drive_file: dict):
@@ -151,12 +163,24 @@ def _build_download_request(service, drive_file: dict):
 
 
 def _download_drive_file(service, drive_file: dict, dest_path: Path) -> None:
+    """Driveファイルをdest_pathにダウンロードする。
+
+    一時ファイルにダウンロードしてから成功時のみos.replace()でdest_pathへ
+    アトミックに置き換える。dest_pathへ直接書き込むと、ダウンロード途中で
+    例外が発生した際に既存の正常なローカルファイルが0バイトに破壊されてしまうため。
+    """
     request = _build_download_request(service, drive_file)
-    with open(dest_path, "wb") as f:
-        downloader = MediaIoBaseDownload(f, request)
-        done = False
-        while not done:
-            _, done = downloader.next_chunk()
+    tmp_path = dest_path.with_suffix(dest_path.suffix + ".tmp")
+    try:
+        with open(tmp_path, "wb") as f:
+            downloader = MediaIoBaseDownload(f, request)
+            done = False
+            while not done:
+                _, done = downloader.next_chunk()
+        os.replace(tmp_path, dest_path)
+    except Exception:
+        tmp_path.unlink(missing_ok=True)
+        raise
 
 
 def sync_google_drive_files(verbose: bool = True) -> dict:
