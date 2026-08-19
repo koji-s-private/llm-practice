@@ -36,6 +36,16 @@ class _FakeMediaIoBaseDownload:
         return None, True
 
 
+class _FakeFailingRequest:
+    """execute()時に例外を送出するフェイクリクエスト（ダウンロード失敗のシミュレーション用）。"""
+
+    def __init__(self, error: Exception):
+        self.error = error
+
+    def execute(self):
+        raise self.error
+
+
 class _FakeFilesResource:
     def __init__(self, drive_files, export_contents, media_contents):
         self.drive_files = drive_files
@@ -49,7 +59,11 @@ class _FakeFilesResource:
         return _FakeRequest(self.export_contents[fileId])
 
     def get_media(self, fileId):
-        return _FakeRequest(self.media_contents[fileId])
+        # media_contents の値が例外インスタンスの場合はダウンロード失敗を模擬する
+        content = self.media_contents[fileId]
+        if isinstance(content, Exception):
+            return _FakeFailingRequest(content)
+        return _FakeRequest(content)
 
 
 class _FakeDriveService:
@@ -73,6 +87,30 @@ def _use_fake_service(monkeypatch, drive_files, export_contents=None, media_cont
     service = _FakeDriveService(drive_files, export_contents, media_contents)
     monkeypatch.setattr(google_drive_sync, "_get_drive_service", lambda: service)
     return service
+
+
+class _PaginatedFakeFilesResource:
+    """files.list() が複数ページに分けてレスポンスを返す想定のフェイク（ページネーション検証用）。"""
+
+    def __init__(self, pages: list[list[dict]], media_contents: dict):
+        self.pages = pages
+        self.media_contents = media_contents
+
+    def list(self, pageToken=None, **kwargs):
+        index = 0 if pageToken is None else int(pageToken)
+        next_token = str(index + 1) if index + 1 < len(self.pages) else None
+        return _FakeRequest({"files": self.pages[index], "nextPageToken": next_token})
+
+    def get_media(self, fileId):
+        return _FakeRequest(self.media_contents[fileId])
+
+
+class _PaginatedFakeDriveService:
+    def __init__(self, pages: list[list[dict]], media_contents: dict):
+        self._resource = _PaginatedFakeFilesResource(pages, media_contents)
+
+    def files(self):
+        return self._resource
 
 
 def test_google_docs_sheets_slides_are_exported_with_correct_extension(fake_env, monkeypatch):
@@ -162,3 +200,80 @@ def test_missing_client_secret_file_raises_clear_error(fake_env, monkeypatch, tm
 
     with pytest.raises(RuntimeError, match="OAuthクライアントシークレットファイルが見つかりません"):
         google_drive_sync._get_drive_service()
+
+
+def test_pagination_collects_all_pages(fake_env, monkeypatch):
+    """フォルダ内のファイルが複数ページに分かれて返ってきても全件取得できることを確認する。"""
+    drive_dir = fake_env
+    pages = [
+        [{"id": "pdf1", "name": "a.pdf", "mimeType": "application/pdf"}],
+        [{"id": "pdf2", "name": "b.pdf", "mimeType": "application/pdf"}],
+    ]
+    media_contents = {"pdf1": b"a-bytes", "pdf2": b"b-bytes"}
+    service = _PaginatedFakeDriveService(pages, media_contents)
+    monkeypatch.setattr(google_drive_sync, "_get_drive_service", lambda: service)
+
+    result = google_drive_sync.sync_google_drive_files(verbose=False)
+
+    assert sorted(result["added"]) == ["a.pdf", "b.pdf"]
+    assert (drive_dir / "a.pdf").read_bytes() == b"a-bytes"
+    assert (drive_dir / "b.pdf").read_bytes() == b"b-bytes"
+
+
+@pytest.mark.xfail(
+    reason=(
+        "既知のバグ: _download_drive_file() は open(dest_path, 'wb') でファイルを先に空にしてから"
+        "ダウンロードするため、ダウンロード失敗時に既存の正常なローカルファイルが0バイトに"
+        "破壊されてしまう(unlinkはされないためresult['removed']には載らないが内容は失われる)。"
+        "一時ファイルにダウンロードしてから成功時のみdest_pathへ置き換える対策が必要。"
+    ),
+    strict=True,
+)
+def test_download_failure_does_not_corrupt_existing_local_file(fake_env, monkeypatch):
+    drive_dir = fake_env
+    drive_files = [{"id": "pdf1", "name": "manual.pdf", "mimeType": "application/pdf"}]
+    _use_fake_service(monkeypatch, drive_files, media_contents={"pdf1": b"original-content"})
+    google_drive_sync.sync_google_drive_files(verbose=False)
+    assert (drive_dir / "manual.pdf").read_bytes() == b"original-content"
+
+    _use_fake_service(monkeypatch, drive_files, media_contents={"pdf1": RuntimeError("simulated network error")})
+    result = google_drive_sync.sync_google_drive_files(verbose=False)
+
+    assert result == {"added": [], "updated": [], "removed": [], "skipped": ["manual.pdf"]}
+    assert (drive_dir / "manual.pdf").read_bytes() == b"original-content"
+
+
+@pytest.mark.xfail(
+    reason=(
+        "既知のバグ: _dest_path_for() はDrive上のファイル名をそのままGOOGLE_DRIVE_DIRと"
+        "結合しており、ingest.safe_upload_dest()のようなパストラバーサル対策が無い。"
+        "ファイル名に'../'を含めるとGOOGLE_DRIVE_DIR配下から外れたパスに書き込まれてしまう。"
+    ),
+    strict=True,
+)
+def test_dest_path_for_rejects_relative_path_traversal(fake_env):
+    drive_dir = fake_env
+    drive_file = {"id": "x1", "name": "../evil.pdf", "mimeType": "application/pdf"}
+
+    dest_path = google_drive_sync._dest_path_for(drive_file)
+
+    assert dest_path is None or dest_path.resolve().parent == drive_dir.resolve()
+
+
+@pytest.mark.xfail(
+    reason=(
+        "既知のバグ: Driveファイル名が絶対パス文字列の場合、pathlibの仕様上"
+        "GOOGLE_DRIVE_DIR / name が完全にnameの絶対パスへ置き換わってしまい、"
+        "GOOGLE_DRIVE_DIR外の任意パスに書き込める。ingest.safe_upload_dest()同様の"
+        "resolve()後チェックが必要。"
+    ),
+    strict=True,
+)
+def test_dest_path_for_rejects_absolute_path_override(fake_env, tmp_path):
+    drive_dir = fake_env
+    escape_target = tmp_path / "pwned.pdf"
+    drive_file = {"id": "x2", "name": str(escape_target), "mimeType": "application/pdf"}
+
+    dest_path = google_drive_sync._dest_path_for(drive_file)
+
+    assert dest_path is None or dest_path.resolve().parent == drive_dir.resolve()
