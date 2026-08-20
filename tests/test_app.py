@@ -444,6 +444,48 @@ def test_google_drive_sync_button_generic_failure_shows_error(monkeypatch):
     assert "network timeout" in at.error[0].value
 
 
+def test_google_drive_sync_button_db_reflection_failed_files_shows_warning(monkeypatch):
+    """境界値: Drive側のミラーには成功しても、続く_sync_and_report（ingest.sync_data_dir）が
+    failedを返した場合、Google Driveボタンの押下ターン内でも既存の警告バナーが
+    即座に表示される（_sync_google_drive_and_reportがwarning_slotを正しく
+    _sync_and_reportへ引き継いでいることの確認）。"""
+    monkeypatch.setattr(
+        google_drive_sync,
+        "sync_google_drive_files",
+        lambda verbose=True: {
+            "added": ["doc.docx"],
+            "updated": [],
+            "removed": [],
+            "skipped": [],
+        },
+    )
+
+    call_count = {"n": 0}
+
+    def flaky_sync(verbose=False):
+        call_count["n"] += 1
+        if call_count["n"] == 1:
+            return {"added": [], "updated": [], "removed": [], "failed": []}
+        return {"added": ["doc.docx"], "updated": [], "removed": [], "failed": ["bad.pdf"]}
+
+    monkeypatch.setattr(ingest, "sync_data_dir", flaky_sync)
+
+    at = _run_app()
+    assert at.warning == []
+
+    drive_button = next(b for b in at.sidebar.button if "Google Drive" in b.label)
+    at = drive_button.click().run()
+
+    assert at.exception == []
+    assert at.error == []
+    # Drive側のミラー・DB反映それぞれの成功トーストが出つつ、DB反映がfailedを
+    # 含むため警告も同時に出る（両者は独立した通知のため排他ではない）。
+    assert len(at.toast) == 2
+    assert at.session_state["failed_sync_files"] == ["bad.pdf"]
+    assert len(at.warning) == 1
+    assert "bad.pdf" in at.warning[0].value
+
+
 # --- 1b. 会話履歴のウィンドウイング（長い会話でのコンテキスト長超過対策） ---
 
 
