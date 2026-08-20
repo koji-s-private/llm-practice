@@ -38,6 +38,11 @@ uvicorn[standard]==0.52.1
 # 環境変数読み込み
 python-dotenv==1.2.2
 
+# Google Drive連携（google_drive_sync.py。Google公式クライアントによるDrive API呼び出し・OAuth認証）
+google-api-python-client==2.198.0  # Drive APIクライアント本体（files.list/export/get_mediaの呼び出し）
+google-auth-oauthlib==1.4.0        # OAuth 2.0の初回ブラウザ認証フロー（InstalledAppFlow）
+google-auth-httplib2==0.4.1        # google-authの認証情報とgoogle-api-python-clientを繋ぐHTTPアダプタ
+
 # テスト用
 pytest==9.1.1
 PyYAML==6.0.3                    # CI設定ファイル(YAML)のパース用（tests/test_ci_config.py等）。他パッケージの推移的依存に頼らず明示化

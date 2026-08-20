@@ -7,6 +7,9 @@ env/
 # 秘密情報
 .env
 
+# Google Drive連携のOAuth認証情報（クライアントシークレット・トークン。詳細はdocs/google-drive-setup.md）
+.credentials/
+
 # ベクトルDB（ローカル生成物）
 chroma_db/
 
@@ -18,6 +21,10 @@ chroma_db/
 
 # 会話ログ（個人の実際のやり取りのため除外）
 data/conversations/
+
+# Google Driveからライブ同期でミラーされたファイル（個人のDrive内容そのもののため除外。
+# google_drive_sync.pyが実行のたびに自動生成・自動削除するローカルキャッシュ）
+data/google_drive/
 
 # グローバルgitignore(~/.gitignore_global)で.claude全体を除外している環境向けに、
 # バージョン管理したいAIチームのエージェント定義だけを明示的に復活させる

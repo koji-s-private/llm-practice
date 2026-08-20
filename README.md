@@ -233,6 +233,23 @@ HTTP API層を提供する。
 | `lxml` | 高速なHTML/XMLパーサー | `BSHTMLLoader`がデフォルトで使用するパーサーエンジン |
 | `docling` / `langchain-docling`（任意インストール） | レイアウト認識・表構造認識・OCRに対応した高精度なドキュメント解析ライブラリ | `ingest.py`の`_load_pdf()`。PyMuPDFでの抽出文字数が極端に少ない（図解・スキャンPDFの疑いがある）場合のみフォールバックとして使用。未インストールでも動作する |
 
+### Google Drive連携（任意機能・Issue #206）
+
+Googleスプレッドシート/ドキュメント/スライドを手動エクスポート・手動配置なしに直接（ライブに）
+同期対象にする機能です。Google Cloud Consoleでの事前セットアップ（無料の範囲内）が必要なため、
+使わない場合は導入不要です。手順は [docs/google-drive-setup.md](docs/google-drive-setup.md) を参照してください。
+
+| ライブラリ | 役割 | このプロジェクトでの使用箇所 |
+|---|---|---|
+| [google-api-python-client](https://github.com/googleapis/google-api-python-client) | Google公式のGoogle APIクライアントライブラリ | `google_drive_sync.py`の`_get_drive_service()`（`build("drive", "v3", ...)`でDrive APIクライアントを生成し、`files().list()`/`export_media()`/`get_media()`を呼び出す） |
+| [google-auth-oauthlib](https://github.com/googleapis/google-auth-library-python-oauthlib) | OAuth 2.0の認証フロー（初回のブラウザ同意・トークン取得）を扱うライブラリ | `google_drive_sync.py`の`_get_drive_service()`（`InstalledAppFlow.run_local_server()`で初回のみブラウザ認証） |
+| [google-auth-httplib2](https://github.com/googleapis/google-auth-library-python-httplib2) | google-authの認証情報をhttplib2ベースのHTTPトランスポートと連携させるアダプタ | `google_drive_sync.py`が`build()`経由で内部的に使用（google-api-python-clientの実行に必要） |
+
+`google_drive_sync.py`は、Driveフォルダの内容を`data/google_drive/`にミラー（Google Docs/Sheets/Slidesは
+`.docx`/`.xlsx`/`.pptx`にエクスポート、それ以外は既存拡張子のままダウンロード）した上で、既存の
+`ingest.sync_data_dir()`を呼び出してベクトルDBまで反映します。認証情報（クライアントシークレット・
+トークン）は`.credentials/`配下に保存され、`data/google_drive/`と合わせて`.gitignore`で除外されています。
+
 ### その他
 
 | ライブラリ | 役割 | このプロジェクトでの使用箇所 |
@@ -312,6 +329,9 @@ LangChainは1.0でメジャーアップデートされており、旧来の `Ret
   会話内容がLangSmith（外部サービス）へ送信されることはありません。
 
 埋め込み（ドキュメント検索用）はローカル無料モデルのため、追加の環境変数は不要です。
+
+- `GOOGLE_DRIVE_FOLDER_ID` / `GOOGLE_OAUTH_CLIENT_SECRET_FILE` / `GOOGLE_OAUTH_TOKEN_FILE`（任意・Google Drive連携を使う場合のみ）:
+  詳細は [docs/google-drive-setup.md](docs/google-drive-setup.md) を参照してください。
 
 ## テスト
 
