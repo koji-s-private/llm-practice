@@ -43,8 +43,10 @@ import logging
 import os
 import re
 import sys
+from functools import partial
 from pathlib import Path
 
+import chardet
 from filelock import FileLock, Timeout
 from langchain_community.document_loaders import BSHTMLLoader, CSVLoader, Docx2txtLoader, PyMuPDFLoader, TextLoader
 from langchain_core.documents import Document
@@ -167,18 +169,44 @@ class _PowerPointLoader:
         return docs
 
 
+# Shift-JIS(CP932)などUTF-8以外のファイルもDBへ反映できるよう、chardetによる文字コード
+# 自動判定を検出結果の信頼度がこの値以上の場合のみ採用する（誤判定でUTF-8ファイルまで
+# 化けさせないための下限。閾値は経験則）。
+ENCODING_DETECTION_MIN_CONFIDENCE = 0.5
+
+
+def _detect_html_encoding(file_path: str) -> str | None:
+    """BSHTMLLoaderはTextLoader/CSVLoaderと異なりautodetect_encoding相当の機能を持たないため、
+    chardetでファイル内容から文字コードを事前判定しopen_encodingへ渡す。
+
+    判定できない・信頼度が低い場合はNoneを返し、BSHTMLLoaderのデフォルト挙動
+    （openのシステムデフォルトエンコーディング）に委ねる。
+    """
+    with open(file_path, "rb") as f:
+        raw = f.read()
+    detected = chardet.detect(raw)
+    encoding = detected.get("encoding")
+    if encoding is None or detected.get("confidence", 0.0) < ENCODING_DETECTION_MIN_CONFIDENCE:
+        return None
+    return encoding
+
+
+def _load_html(file_path: str) -> BSHTMLLoader:
+    return BSHTMLLoader(file_path, open_encoding=_detect_html_encoding(file_path))
+
+
 # 拡張子ごとのローダー対応表（PDFは実際には_load_pdf()で2段構成の判定を行う）
 LOADERS = {
     ".pdf": PyMuPDFLoader,
-    ".txt": TextLoader,
-    ".md": TextLoader,
+    ".txt": partial(TextLoader, autodetect_encoding=True),
+    ".md": partial(TextLoader, autodetect_encoding=True),
     ".docx": Docx2txtLoader,
-    ".csv": CSVLoader,
+    ".csv": partial(CSVLoader, autodetect_encoding=True),
     ".xlsx": _ExcelLoader,
     ".xls": _LegacyExcelLoader,
     ".pptx": _PowerPointLoader,
-    ".html": BSHTMLLoader,
-    ".htm": BSHTMLLoader,
+    ".html": _load_html,
+    ".htm": _load_html,
 }
 
 # 1ページあたりの抽出文字数がこれ未満の場合、「うまくテキスト抽出できていない
@@ -519,6 +547,19 @@ def _add_single_conversation_file_locked(path: Path) -> str:
     return status
 
 
+def _is_encoding_related_error(e: Exception) -> bool:
+    """読み込み失敗が文字エンコーディング起因らしいかどうかを判定する。
+
+    TextLoader/CSVLoaderのautodetect_encodingは、候補となる全エンコーディングでの
+    デコードに失敗するとUnicodeDecodeErrorではなく`RuntimeError("Could not detect
+    encoding for ...")`を送出する。そのためUnicodeDecodeError自体だけでなく、
+    そのメッセージ文字列でも判定する。
+    """
+    if isinstance(e, UnicodeDecodeError) or isinstance(e.__cause__, UnicodeDecodeError):
+        return True
+    return "encoding" in str(e).lower()
+
+
 def _ingest_file(name: str, path: Path, vector_store, manifest: dict, splitter, verbose: bool) -> str:
     """1ファイル分の追加・更新判定と、必要な場合のベクトルDBへの反映を行う。
 
@@ -559,7 +600,15 @@ def _ingest_file(name: str, path: Path, vector_store, manifest: dict, splitter, 
     except Exception as e:
         # 1ファイルの読み込み失敗で他の正常なファイルの同期まで止めないよう、
         # ログに残してスキップする（manifestには記録しないので次回リトライされる）。
-        logger.warning("%s の読み込みに失敗したためスキップします: %s", name, e)
+        if _is_encoding_related_error(e):
+            logger.warning(
+                "%s の読み込みに失敗したためスキップします（文字エンコーディングを自動判定できませんでした。"
+                "UTF-8以外の特殊なエンコーディングか、ファイルが破損している可能性があります）: %s",
+                name,
+                e,
+            )
+        else:
+            logger.warning("%s の読み込みに失敗したためスキップします: %s", name, e)
         return "failed"
 
     thread_id = _thread_id_for(name)

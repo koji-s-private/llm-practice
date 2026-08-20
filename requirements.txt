@@ -21,6 +21,7 @@ python-pptx==1.0.2                # PowerPoint(.pptx)読み込み（ingest.pyの
 beautifulsoup4==4.15.0            # HTML(.html/.htm)読み込み（langchain_communityのBSHTMLLoaderが内部で使用）
 lxml==6.1.1                      # BSHTMLLoaderのデフォルトHTMLパーサー
 filelock==3.32.2                 # 複数セッション（複数タブ等）からのsync_data_dir()同時実行を排他制御
+chardet==5.2.0                   # Shift-JIS等の文字コード自動判定。TextLoader/CSVLoaderのautodetect_encodingが内部で使用するほか、ingest.pyの_load_html()がBSHTMLLoader向けのopen_encoding判定にも使用
 
 # 図解・スキャンPDFの高品質フォールバック解析（任意インストール）
 # 通常のPDFには使われません（PyMuPDFの抽出量が少ない場合のみ自動で使われます）。

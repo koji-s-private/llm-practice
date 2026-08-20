@@ -231,6 +231,7 @@ HTTP API層を提供する。
 | `python-pptx` | PowerPoint（`.pptx`）ファイルを読み書きするライブラリ | `ingest.py`の`_PowerPointLoader`（スライドごとに1つのDocumentとして読み込む自前ローダー。openpyxlと同じ理由で自前実装） |
 | `beautifulsoup4` | HTMLをパースするライブラリ | `ingest.py`の`LOADERS`（`BSHTMLLoader`が内部で使用し、`.html`/`.htm`ファイルからテキストを抽出） |
 | `lxml` | 高速なHTML/XMLパーサー | `BSHTMLLoader`がデフォルトで使用するパーサーエンジン |
+| [chardet](https://chardet.readthedocs.io/) | ファイルのバイト列から文字エンコーディング（Shift-JIS/CP932等）を推定するライブラリ | `ingest.py`。`.txt`/`.md`/`.csv`は`TextLoader`/`CSVLoader`の`autodetect_encoding=True`が内部で使用。`.html`/`.htm`は`BSHTMLLoader`がautodetect機能を持たないため、`_load_html()`が事前に文字コードを判定し`open_encoding`へ渡す |
 | `docling` / `langchain-docling`（任意インストール） | レイアウト認識・表構造認識・OCRに対応した高精度なドキュメント解析ライブラリ | `ingest.py`の`_load_pdf()`。PyMuPDFでの抽出文字数が極端に少ない（図解・スキャンPDFの疑いがある）場合のみフォールバックとして使用。未インストールでも動作する |
 
 ### Google Drive連携（任意機能・Issue #206）
