@@ -2220,9 +2220,7 @@ def test_shift_jis_csv_file_is_correctly_decoded_and_added(fake_env):
     # autodetect_encoding=Trueにより正しくデコードされて取り込めることを確認する。
     # chardetが安定してSHIFT_JISと判定できるよう、ある程度の分量の行を書き込む。
     data_dir, store = fake_env
-    rows = "".join(
-        f"田中太郎{i},これはCP932の日本語メモです。テストデータの一部です。\n" for i in range(10)
-    )
+    rows = "".join(f"田中太郎{i},これはCP932の日本語メモです。テストデータの一部です。\n" for i in range(10))
     csv_text = "name,memo\n" + rows
     _write_bytes(data_dir, "shiftjis.csv", csv_text.encode("cp932"))
 
@@ -2255,9 +2253,7 @@ def test_detect_html_encoding_returns_shift_jis_for_cp932_encoded_file(tmp_path)
     # _detect_html_encoding()単体でも、CP932でエンコードされたファイルの
     # 文字コードを正しく判定できることを確認する
     path = tmp_path / "shiftjis.html"
-    path.write_bytes(
-        ("<html><body>" + "日本語のテスト文章です。" * 5 + "</body></html>").encode("cp932")
-    )
+    path.write_bytes(("<html><body>" + "日本語のテスト文章です。" * 5 + "</body></html>").encode("cp932"))
 
     encoding = ingest._detect_html_encoding(str(path))
 
