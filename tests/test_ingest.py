@@ -1181,6 +1181,13 @@ def _write_bytes(data_dir, rel_path, data: bytes):
     return path
 
 
+# cp1252で未定義のコードポイント（0x81/0x8D/0x8F/0x90/0x9D）のみで構成したバイト列。
+# UTF-8/UTF-16は明らかに不一致な上、chardetが候補として選びうる主要な1バイト系
+# エンコーディング（cp1252等）でもデコードできず、chardet.detect_all()もencoding=Noneを
+# 返す（=「本当にどのエンコーディングとしても読み込めない」ことを再現するための壊れたバイト列）。
+_UNDECODABLE_BYTES = bytes([0x81, 0x8D, 0x8F, 0x90, 0x9D]) * 5
+
+
 def test_docx_file_is_loaded_and_added(fake_env):
     data_dir, store = fake_env
     _write_bytes(
@@ -1238,9 +1245,11 @@ def test_corrupt_docx_file_is_recorded_as_failed_without_blocking_others(fake_en
 
 
 def test_corrupt_csv_file_is_recorded_as_failed_without_blocking_others(fake_env):
-    # 異常系: デコード不能なバイト列の.csvファイルは読み込みに失敗しfailedに記録される
+    # 異常系: chardetでも文字コードを判定できない（信頼できるどのエンコーディングとしても
+    # デコードできない）本当に壊れた.csvファイルは、autodetect_encoding有効後も
+    # 引き続き読み込みに失敗しfailedに記録される
     data_dir, store = fake_env
-    _write_bytes(data_dir, "broken.csv", b"\xff\xfe\x00\x01\x02")
+    _write_bytes(data_dir, "broken.csv", _UNDECODABLE_BYTES)
     _write(data_dir, "good.txt", "正常に読み込めるテキストです。" * 5)
 
     result = ingest.sync_data_dir(verbose=False)
@@ -2187,3 +2196,147 @@ def test_main_configures_logging_basic_config_for_cli_console_output(monkeypatch
     out = capsys.readouterr().out
     assert "同期しています" in out
     assert "完了" in out
+
+
+# --- Shift-JIS(CP932)等UTF-8以外の文字エンコーディング自動判定のテスト ---
+
+
+def test_shift_jis_txt_file_is_correctly_decoded_and_added(fake_env):
+    # Shift-JIS(CP932)でエンコードされた.txtファイルも、TextLoaderの
+    # autodetect_encoding=Trueにより正しくデコードされて取り込めることを確認する
+    data_dir, store = fake_env
+    text = "これはShift-JISでエンコードされたテキストファイルです。" * 3
+    _write_bytes(data_dir, "shiftjis.txt", text.encode("cp932"))
+
+    result = ingest.sync_data_dir(verbose=False)
+
+    assert result == {"added": ["shiftjis.txt"], "updated": [], "removed": [], "failed": []}
+    contents = [doc.page_content for doc in store.docs_by_id.values()]
+    assert any("Shift-JISでエンコードされたテキストファイルです" in c for c in contents)
+
+
+def test_shift_jis_csv_file_is_correctly_decoded_and_added(fake_env):
+    # Shift-JIS(CP932)でエンコードされた.csvファイルも、CSVLoaderの
+    # autodetect_encoding=Trueにより正しくデコードされて取り込めることを確認する。
+    # chardetが安定してSHIFT_JISと判定できるよう、ある程度の分量の行を書き込む。
+    data_dir, store = fake_env
+    rows = "".join(
+        f"田中太郎{i},これはCP932の日本語メモです。テストデータの一部です。\n" for i in range(10)
+    )
+    csv_text = "name,memo\n" + rows
+    _write_bytes(data_dir, "shiftjis.csv", csv_text.encode("cp932"))
+
+    result = ingest.sync_data_dir(verbose=False)
+
+    assert result == {"added": ["shiftjis.csv"], "updated": [], "removed": [], "failed": []}
+    contents = [doc.page_content for doc in store.docs_by_id.values()]
+    assert any("田中太郎0" in c and "CP932の日本語メモです" in c for c in contents)
+
+
+def test_shift_jis_html_file_is_correctly_decoded_and_added(fake_env):
+    # Shift-JIS(CP932)でエンコードされた.htmlファイルも、_load_html()が
+    # chardetで事前判定した文字コードをBSHTMLLoaderのopen_encodingへ渡すことで
+    # 正しくデコードされて取り込めることを確認する
+    data_dir, store = fake_env
+    html = (
+        '<html><head><meta charset="shift_jis"><title>サンプル</title></head>'
+        "<body><p>シフトJISのHTML本文です。</p></body></html>"
+    )
+    _write_bytes(data_dir, "shiftjis.html", html.encode("cp932"))
+
+    result = ingest.sync_data_dir(verbose=False)
+
+    assert result == {"added": ["shiftjis.html"], "updated": [], "removed": [], "failed": []}
+    contents = [doc.page_content for doc in store.docs_by_id.values()]
+    assert any("シフトJISのHTML本文です" in c for c in contents)
+
+
+def test_detect_html_encoding_returns_shift_jis_for_cp932_encoded_file(tmp_path):
+    # _detect_html_encoding()単体でも、CP932でエンコードされたファイルの
+    # 文字コードを正しく判定できることを確認する
+    path = tmp_path / "shiftjis.html"
+    path.write_bytes(
+        ("<html><body>" + "日本語のテスト文章です。" * 5 + "</body></html>").encode("cp932")
+    )
+
+    encoding = ingest._detect_html_encoding(str(path))
+
+    assert encoding is not None
+    assert "shift" in encoding.lower() or "932" in encoding.lower()
+
+
+class _LowConfidenceFakeChardet:
+    """検出信頼度が閾値未満のケースを再現するための chardet モジュールの差し替え用フェイク。"""
+
+    @staticmethod
+    def detect(raw):
+        return {"encoding": "Windows-1252", "confidence": 0.1, "language": ""}
+
+
+def test_detect_html_encoding_returns_none_when_confidence_below_threshold(monkeypatch, tmp_path):
+    # 境界値: chardetの検出信頼度がENCODING_DETECTION_MIN_CONFIDENCE未満の場合は
+    # 誤判定によるUTF-8ファイルの文字化けを避けるためNoneを返し、
+    # BSHTMLLoaderのシステムデフォルトエンコーディングにフォールバックさせる
+    path = tmp_path / "ambiguous.html"
+    path.write_bytes(b"abc")
+
+    monkeypatch.setattr(ingest, "chardet", _LowConfidenceFakeChardet)
+
+    assert ingest._detect_html_encoding(str(path)) is None
+
+
+def test_is_encoding_related_error_true_for_unicode_decode_error():
+    # UnicodeDecodeErrorそのものはエンコーディング起因のエラーとして検出される
+    try:
+        b"\xff".decode("utf-8")
+    except UnicodeDecodeError as e:
+        assert ingest._is_encoding_related_error(e) is True
+    else:
+        pytest.fail("UnicodeDecodeErrorが送出されませんでした")
+
+
+def test_is_encoding_related_error_true_for_could_not_detect_encoding_runtime_error():
+    # TextLoader/CSVLoaderのautodetect_encodingが全候補のデコードに失敗した場合に送出する
+    # RuntimeError（"Could not detect encoding for ..."）もエンコーディング起因として検出される
+    error = RuntimeError("Could not detect encoding for /path/to/file.csv")
+
+    assert ingest._is_encoding_related_error(error) is True
+
+
+def test_is_encoding_related_error_false_for_unrelated_error():
+    # エンコーディングと無関係な例外はFalseと判定される
+    assert ingest._is_encoding_related_error(ValueError("壊れたファイルです")) is False
+
+
+def test_truly_undecodable_csv_file_failure_log_includes_encoding_hint(fake_env, caplog):
+    # 本当にchardetでも判定不能な壊れたファイルは、文字コード自動判定機能の追加後も
+    # 引き続きfailed扱いになり、かつ警告ログに原因ヒント（自動判定できなかった旨）が
+    # 追加されていることを確認する
+    data_dir, store = fake_env
+    _write_bytes(data_dir, "broken.csv", _UNDECODABLE_BYTES)
+
+    with caplog.at_level(logging.WARNING, logger="ingest"):
+        result = ingest.sync_data_dir(verbose=False)
+
+    assert result == {"added": [], "updated": [], "removed": [], "failed": ["broken.csv"]}
+    warnings = [r.getMessage() for r in caplog.records if r.levelname == "WARNING"]
+    assert len(warnings) == 1
+    assert "broken.csv" in warnings[0]
+    assert "文字エンコーディングを自動判定できませんでした" in warnings[0]
+
+
+def test_unrelated_load_failure_log_does_not_include_encoding_hint(fake_env, monkeypatch, caplog):
+    # エンコーディングと無関係な読み込み失敗（例: 壊れたZIP形式の.docx等を想定した
+    # ダミーローダーの例外）では、文字コード自動判定に関する原因ヒントは付与されない
+    data_dir, store = fake_env
+    _write(data_dir, "bad.txt", "壊れていることにするテキストです。" * 5)
+
+    monkeypatch.setattr(ingest, "LOADERS", {**ingest.LOADERS, ".txt": lambda p: _FailingLoader(p)})
+
+    with caplog.at_level(logging.WARNING, logger="ingest"):
+        result = ingest.sync_data_dir(verbose=False)
+
+    assert result == {"added": [], "updated": [], "removed": [], "failed": ["bad.txt"]}
+    warnings = [r.getMessage() for r in caplog.records if r.levelname == "WARNING"]
+    assert len(warnings) == 1
+    assert "文字エンコーディングを自動判定できませんでした" not in warnings[0]
