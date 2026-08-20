@@ -42,6 +42,7 @@ import pytest
 from langchain_core.messages import AIMessage, AIMessageChunk, HumanMessage, ToolMessage
 from streamlit.testing.v1 import AppTest
 
+import google_drive_sync
 import ingest
 import memory
 import rag_chain
@@ -335,6 +336,154 @@ def test_resync_button_success_shows_no_warning(monkeypatch):
     assert at.warning == []
     assert at.session_state["failed_sync_files"] == []
     assert call_count["n"] == 2
+
+
+# --- 1a. Google Drive手動同期ボタン ---
+
+
+def test_google_drive_sync_button_unconfigured_shows_info(monkeypatch):
+    """異常系: GOOGLE_DRIVE_FOLDER_ID未設定時（sync_google_drive_files()仕様通り全キー空
+    リストが返るケース）、st.infoで未設定である旨が案内され、エラーにはならない。"""
+    monkeypatch.setattr(
+        google_drive_sync,
+        "sync_google_drive_files",
+        lambda verbose=True: {"added": [], "updated": [], "removed": [], "skipped": []},
+    )
+
+    at = _run_app()
+    drive_button = next(b for b in at.sidebar.button if "Google Drive" in b.label)
+    at = drive_button.click().run()
+
+    assert at.exception == []
+    assert at.error == []
+    assert len(at.info) == 1
+    assert "未設定" in at.info[0].value
+    assert at.toast == []
+
+
+def test_google_drive_sync_button_success_shows_both_results(monkeypatch):
+    """正常系: Drive側のミラー結果（追加/更新/削除/スキップ）がトーストで通知され、
+    続けて既存のDB反映（_sync_and_report経由のingest.sync_data_dir）も実行される。"""
+    monkeypatch.setattr(
+        google_drive_sync,
+        "sync_google_drive_files",
+        lambda verbose=True: {
+            "added": ["doc.docx"],
+            "updated": [],
+            "removed": ["old.txt"],
+            "skipped": [],
+        },
+    )
+
+    db_sync_calls = {"n": 0}
+
+    def counting_sync(verbose=False):
+        db_sync_calls["n"] += 1
+        return {"added": ["doc.docx"], "updated": [], "removed": ["old.txt"], "failed": []}
+
+    monkeypatch.setattr(ingest, "sync_data_dir", counting_sync)
+
+    at = _run_app()
+    drive_button = next(b for b in at.sidebar.button if "Google Drive" in b.label)
+    at = drive_button.click().run()
+
+    assert at.exception == []
+    assert at.error == []
+    assert at.info == []
+    # 1回目は起動時同期、2回目がボタン押下によるDB反映
+    assert db_sync_calls["n"] == 2
+    assert len(at.toast) == 2
+    assert "追加1" in at.toast[0].value and "削除1" in at.toast[0].value
+    assert "追加1" in at.toast[1].value and "削除1" in at.toast[1].value
+
+
+def test_google_drive_sync_button_missing_credentials_shows_error(monkeypatch):
+    """異常系: クライアントシークレットが無い場合、sync_google_drive_files()が送出する
+    RuntimeErrorを捕捉し、st.errorでわかりやすく案内する（アプリはクラッシュしない）。"""
+
+    def raise_runtime_error(verbose=True):
+        raise RuntimeError("OAuthクライアントシークレットファイルが見つかりません")
+
+    monkeypatch.setattr(google_drive_sync, "sync_google_drive_files", raise_runtime_error)
+
+    db_sync_calls = {"n": 0}
+
+    def counting_sync(verbose=False):
+        db_sync_calls["n"] += 1
+        return {"added": [], "updated": [], "removed": [], "failed": []}
+
+    monkeypatch.setattr(ingest, "sync_data_dir", counting_sync)
+
+    at = _run_app()
+    drive_button = next(b for b in at.sidebar.button if "Google Drive" in b.label)
+    at = drive_button.click().run()
+
+    assert at.exception == []
+    assert len(at.error) == 1
+    assert "認証情報が見つかりません" in at.error[0].value
+    # Drive側の同期に失敗した場合はDB反映も行わない（起動時の1回のみ）
+    assert db_sync_calls["n"] == 1
+
+
+def test_google_drive_sync_button_generic_failure_shows_error(monkeypatch):
+    """異常系: Drive API呼び出し自体が予期しない例外で失敗しても、st.errorのみでアプリは
+    クラッシュせず継続する。"""
+
+    def raise_generic_error(verbose=True):
+        raise TimeoutError("network timeout")
+
+    monkeypatch.setattr(google_drive_sync, "sync_google_drive_files", raise_generic_error)
+
+    at = _run_app()
+    drive_button = next(b for b in at.sidebar.button if "Google Drive" in b.label)
+    at = drive_button.click().run()
+
+    assert at.exception == []
+    assert len(at.error) == 1
+    assert "Google Driveとの同期に失敗しました" in at.error[0].value
+    assert "network timeout" in at.error[0].value
+
+
+def test_google_drive_sync_button_db_reflection_failed_files_shows_warning(monkeypatch):
+    """境界値: Drive側のミラーには成功しても、続く_sync_and_report（ingest.sync_data_dir）が
+    failedを返した場合、Google Driveボタンの押下ターン内でも既存の警告バナーが
+    即座に表示される（_sync_google_drive_and_reportがwarning_slotを正しく
+    _sync_and_reportへ引き継いでいることの確認）。"""
+    monkeypatch.setattr(
+        google_drive_sync,
+        "sync_google_drive_files",
+        lambda verbose=True: {
+            "added": ["doc.docx"],
+            "updated": [],
+            "removed": [],
+            "skipped": [],
+        },
+    )
+
+    call_count = {"n": 0}
+
+    def flaky_sync(verbose=False):
+        call_count["n"] += 1
+        if call_count["n"] == 1:
+            return {"added": [], "updated": [], "removed": [], "failed": []}
+        return {"added": ["doc.docx"], "updated": [], "removed": [], "failed": ["bad.pdf"]}
+
+    monkeypatch.setattr(ingest, "sync_data_dir", flaky_sync)
+
+    at = _run_app()
+    assert at.warning == []
+
+    drive_button = next(b for b in at.sidebar.button if "Google Drive" in b.label)
+    at = drive_button.click().run()
+
+    assert at.exception == []
+    assert at.error == []
+    # Drive側のミラー・DB反映それぞれの成功トーストが出つつ、DB反映がfailedを
+    # 含むため警告も同時に出る（両者は独立した通知のため排他ではない）。
+    assert len(at.toast) == 2
+    assert at.session_state["failed_sync_files"] == ["bad.pdf"]
+    assert len(at.warning) == 1
+    assert "bad.pdf" in at.warning[0].value
 
 
 # --- 1b. 会話履歴のウィンドウイング（長い会話でのコンテキスト長超過対策） ---

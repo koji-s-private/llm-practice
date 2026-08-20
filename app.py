@@ -9,6 +9,8 @@ data/ フォルダの変更は、ページの操作（リロード・チャッ�
 スクリプトを再実行するタイミング）のたびに軽量な変更検知で自動的に検知され、
 裏側で自動的にベクトルDBへ反映されます（手動での再同期は基本不要。即時性が必要な
 場合のフォールバックとして、サイドバーの折りたたみ内に手動の再同期ボタンもあります）。
+Google Driveとの連携（設定方法はdocs/google-drive-setup.md参照）を設定済みの場合、
+同じ折りたたみ内の「🔄 Google Driveと同期」ボタンから手動でオンデマンド同期できます。
 
 さらに、チャットでの質問・回答も自動で data/conversations/<会話スレッドID>/ に保存され、
 「このスレッド」の次回以降の質問（別セッション・別タブでも同じスレッドを開けば）の
@@ -27,6 +29,7 @@ import streamlit as st
 from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 from streamlit.delta_generator import DeltaGenerator
 
+import google_drive_sync
 import setup
 
 # 会話履歴のトークン数ウィンドウイング（history_utils.py）・参照元表示の整形
@@ -95,6 +98,40 @@ def _sync_and_report(spinner_text: str, warning_slot: DeltaGenerator | None = No
     # 手動の再同期ボタン・アップロード時もこの関数を通るため、成功後にシグネチャを
     # 更新しておくことで直後の軽量チェックによる無駄な二重同期を防ぐ。
     st.session_state.data_dir_signature = data_dir_signature()
+
+
+def _sync_google_drive_and_report(warning_slot: DeltaGenerator | None = None) -> None:
+    """Google Driveの内容をdata/google_drive/にミラーし、続けてDBへ反映して結果を通知する。
+
+    GOOGLE_DRIVE_FOLDER_ID未設定時、sync_google_drive_files()は例外を出さず全キー空リストを
+    返す仕様のため（google_drive_sync.py参照）、それと「設定済みだが変更なし」を区別せず
+    未設定寄りの案内で共通化する（変更なしの場合に誤情報にはならないため実害は無い）。
+    認証情報ファイルが無い場合はRuntimeErrorが送出されるため、他の失敗と分けてエラー表示する。
+    """
+    try:
+        with st.spinner("Google Driveと同期中..."):
+            drive_result = google_drive_sync.sync_google_drive_files(verbose=False)
+    except RuntimeError as e:
+        st.error(f"Google Drive連携の認証情報が見つかりません。（詳細: {e}）")
+        return
+    except Exception as e:
+        st.error(f"Google Driveとの同期に失敗しました。時間をおいて再度お試しください。（詳細: {e}）")
+        return
+
+    if not any(drive_result.values()):
+        st.info(
+            "Google Drive連携が未設定、または同期対象の変更はありませんでした。"
+            "連携の設定方法は docs/google-drive-setup.md を参照してください。"
+        )
+    else:
+        st.toast(
+            f"Google Driveの内容を同期しました（追加{len(drive_result['added'])} / "
+            f"更新{len(drive_result['updated'])} / 削除{len(drive_result['removed'])} / "
+            f"スキップ{len(drive_result['skipped'])}）",
+            icon="✅",
+        )
+
+    _sync_and_report("data/ をベクトルDBに反映中...", warning_slot)
 
 
 def _sync_saved_conversation(path: Path, warning_slot: DeltaGenerator | None = None) -> None:
@@ -355,6 +392,8 @@ with st.sidebar:
     with st.expander("今すぐ強制的に再同期したい場合"):
         if st.button("🔄 data/ を再同期"):
             _sync_and_report("再同期中...", failed_sync_warning_slot)
+        if st.button("🔄 Google Driveと同期"):
+            _sync_google_drive_and_report(failed_sync_warning_slot)
 
     st.caption("ファイルをアップロードすると自動で data/ に保存・DB反映されます。")
     uploaded_files = st.file_uploader(
