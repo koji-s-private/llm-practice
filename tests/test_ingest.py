@@ -1349,6 +1349,35 @@ def test_xlsx_loader_raises_for_nonexistent_file():
         ingest.LOADERS[".xlsx"]("/no/such/path.xlsx").load()
 
 
+def test_xlsx_loader_closes_first_workbook_when_second_open_fails(tmp_path, monkeypatch):
+    # 回帰テスト: 1回目のload_workbook(data_only=True)成功後、2回目(data_only=False)が
+    # 失敗した場合でも1回目のworkbookがclose()されfdリークしないことを確認する
+    import openpyxl
+
+    path = tmp_path / "members.xlsx"
+    workbook = openpyxl.Workbook()
+    workbook.active.append(["name"])
+    workbook.save(path)
+
+    real_load_workbook = openpyxl.load_workbook
+    closed_flags = []
+
+    def flaky_load_workbook(*args, **kwargs):
+        if kwargs.get("data_only") is False:
+            raise RuntimeError("2回目のload_workbookが失敗")
+        wb = real_load_workbook(*args, **kwargs)
+        original_close = wb.close
+        wb.close = lambda: (closed_flags.append(True), original_close())
+        return wb
+
+    monkeypatch.setattr(openpyxl, "load_workbook", flaky_load_workbook)
+
+    with pytest.raises(RuntimeError, match="2回目のload_workbookが失敗"):
+        ingest.LOADERS[".xlsx"](str(path)).load()
+
+    assert closed_flags == [True]
+
+
 def _write_xlsx_with_uncalculated_formula(data_dir, rel_path):
     # openpyxlでセルに数式文字列を代入して保存しただけのファイルは、Excel等で一度も
     # 開かれ再計算されていないため計算結果のキャッシュを持たない（data_only=Trueで読むと

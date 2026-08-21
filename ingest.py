@@ -106,7 +106,13 @@ class _ExcelLoader:
         # 同じファイルから開いておき、値が取れないセルは数式文字列で代用することで
         # サイレントなデータ欠落（該当セルが空文字列として取り込まれる）を防ぐ。
         workbook = openpyxl.load_workbook(self.file_path, data_only=True, read_only=True)
-        formula_workbook = openpyxl.load_workbook(self.file_path, data_only=False, read_only=True)
+        try:
+            formula_workbook = openpyxl.load_workbook(self.file_path, data_only=False, read_only=True)
+        except Exception:
+            # 2回目のopenが失敗すると1回目のworkbookがtry/finallyに到達せずfdがリークするため、
+            # ここで個別にclose()してから例外を再送出する。
+            workbook.close()
+            raise
         try:
             docs = []
             for sheet, formula_sheet in zip(workbook.worksheets, formula_workbook.worksheets, strict=True):
