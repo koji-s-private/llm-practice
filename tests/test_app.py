@@ -2415,3 +2415,65 @@ def test_chat_with_none_agent_after_recovery_still_shows_error_for_that_turn(mon
     assert len(at.error) == 1
     assert "RAGエージェントが利用できないため、回答を生成できません" in at.error[0].value
     assert at.session_state["messages"] == []
+
+
+# --- 12. 有料APIへのフォールバック時の起動時警告バナー ---
+
+
+def test_provider_fallback_warning_hidden_when_ollama(monkeypatch):
+    """正常系: 使用中プロバイダがOllamaの場合、有料API利用中の警告バナーは表示されない。"""
+    import setup
+
+    monkeypatch.setattr(setup, "CURRENT_PROVIDER", "ollama")
+
+    at = _run_app()
+
+    assert at.exception == []
+    assert not any("有料API" in w.value for w in at.sidebar.warning)
+
+
+def test_provider_fallback_warning_hidden_when_provider_unset(monkeypatch):
+    """境界値: CURRENT_PROVIDER が未設定（None、想定外の状態）の場合も、
+    誤った警告は表示しない。"""
+    import setup
+
+    monkeypatch.setattr(setup, "CURRENT_PROVIDER", None)
+
+    at = _run_app()
+
+    assert at.exception == []
+    assert not any("有料API" in w.value for w in at.sidebar.warning)
+
+
+@pytest.mark.parametrize("provider", ["anthropic", "openai"])
+def test_provider_fallback_warning_shown_with_reason_when_using_paid_api(monkeypatch, provider):
+    """異常系: Ollamaが利用できず有料APIへフォールバックした場合、サイドバーに
+    プロバイダ名とフォールバック理由を含む警告バナーが表示される。"""
+    import setup
+
+    monkeypatch.setattr(setup, "CURRENT_PROVIDER", provider)
+    monkeypatch.setattr(setup, "CURRENT_PROVIDER_FALLBACK_REASON", "Ollamaサーバーに接続できません（未起動の可能性）。")
+
+    at = _run_app()
+
+    assert at.exception == []
+    fallback_warnings = [w.value for w in at.sidebar.warning if "有料API" in w.value]
+    assert len(fallback_warnings) == 1
+    assert provider in fallback_warnings[0]
+    assert "Ollamaサーバーに接続できません" in fallback_warnings[0]
+
+
+def test_provider_fallback_warning_shown_without_reason_when_reason_missing(monkeypatch):
+    """境界値: フォールバック理由が記録されていない（想定外）場合でも、
+    警告バナー自体はプロバイダ名付きで表示される。"""
+    import setup
+
+    monkeypatch.setattr(setup, "CURRENT_PROVIDER", "anthropic")
+    monkeypatch.setattr(setup, "CURRENT_PROVIDER_FALLBACK_REASON", None)
+
+    at = _run_app()
+
+    assert at.exception == []
+    fallback_warnings = [w.value for w in at.sidebar.warning if "有料API" in w.value]
+    assert len(fallback_warnings) == 1
+    assert "anthropic" in fallback_warnings[0]

@@ -209,6 +209,22 @@ def _format_invoke_error_message(e: Exception) -> str:
     return f"回答の生成に失敗しました。{cause}（詳細: {e}）"
 
 
+def _show_provider_fallback_warning() -> None:
+    """Ollama（無料・ローカル）が使えず有料APIにフォールバックしている場合、起動直後に警告バナーを表示する。
+
+    ユーザーが気づかないうちに課金対象のAPIが使われ続けることを防ぐため、
+    setup.CURRENT_PROVIDERが"ollama"以外になっているスクリプト実行では毎回表示する。
+    """
+    if setup.CURRENT_PROVIDER == "ollama" or setup.CURRENT_PROVIDER is None:
+        return
+    reason = setup.CURRENT_PROVIDER_FALLBACK_REASON
+    reason_text = f"（理由: {reason}）" if reason else ""
+    st.warning(
+        f"⚠️ ローカル無料実行(Ollama)が利用できないため、有料API（{setup.CURRENT_PROVIDER}）を使用しています。"
+        f"{reason_text}"
+    )
+
+
 def _build_agent_safely(thread_id: str):
     """build_agent()を例外から保護する共通ヘルパー。
 
@@ -327,6 +343,8 @@ if "processed_upload_ids" not in st.session_state:
     st.session_state.processed_upload_ids = set()
 
 with st.sidebar:
+    _show_provider_fallback_warning()
+
     if st.button("🆕 新しい会話を始める", use_container_width=True):
         _start_new_chat()
         # st.rerun()はその場でスクリプト実行を打ち切るため、直前のst.error()の描画内容も

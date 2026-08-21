@@ -44,6 +44,10 @@ OLLAMA_NUM_CTX = int(os.environ.get("OLLAMA_NUM_CTX", "8192"))
 # _build_model() 実行時に確定させ、app.py 側から参照してエラーメッセージの出し分けに使う。
 CURRENT_PROVIDER: str | None = None
 
+# Ollamaが利用できず有料APIにフォールバックした場合の具体的な理由（未起動 / モデル未pull）。
+# app.py が起動直後の警告バナー表示に使う。Ollamaをそのまま使用できた場合はNoneのまま。
+CURRENT_PROVIDER_FALLBACK_REASON: str | None = None
+
 
 def _ollama_available() -> bool:
     """ローカルでOllamaサーバーが起動しているかを軽くチェックする（起動が遅くならないよう短いタイムアウト）。"""
@@ -87,20 +91,28 @@ def _build_model():
 
     選定したプロバイダ名はモジュールレベル変数 CURRENT_PROVIDER にも記録する
     （app.py が agent.invoke() 失敗時のエラーメッセージ出し分けに使う）。
+    Ollamaが利用できずフォールバックした場合は、その理由を CURRENT_PROVIDER_FALLBACK_REASON にも
+    記録する（app.py が起動直後の警告バナーで、ユーザーがOllama側を復旧しやすいように使う）。
     """
-    global CURRENT_PROVIDER
+    global CURRENT_PROVIDER, CURRENT_PROVIDER_FALLBACK_REASON
+
+    CURRENT_PROVIDER_FALLBACK_REASON = None
 
     if _ollama_available():
         if _ollama_model_pulled():
             print(f"[setup] Ollama を検出: {OLLAMA_MODEL}（ローカル・無料、num_ctx={OLLAMA_NUM_CTX}）を使用します。")
             CURRENT_PROVIDER = "ollama"
             return init_chat_model(OLLAMA_MODEL, model_provider="ollama", num_ctx=OLLAMA_NUM_CTX)
-        print(
-            f"[setup] Ollama は起動していますが、モデル '{OLLAMA_MODEL}' が見つかりません"
-            "（pull未実施の可能性）。"
-            f"'ollama pull {OLLAMA_MODEL}' を実行するか、OLLAMA_MODEL を既存のモデル名に"
-            "変更してください。"
+        CURRENT_PROVIDER_FALLBACK_REASON = (
+            f"Ollamaは起動していますが、モデル '{OLLAMA_MODEL}' が見つかりません（pull未実施の可能性）。"
+            f"'ollama pull {OLLAMA_MODEL}' を実行するか、OLLAMA_MODEL を既存のモデル名に変更してください。"
         )
+        print(f"[setup] {CURRENT_PROVIDER_FALLBACK_REASON}")
+    else:
+        CURRENT_PROVIDER_FALLBACK_REASON = (
+            "Ollamaサーバーに接続できません（未起動の可能性）。'ollama serve' 等で起動してください。"
+        )
+        print(f"[setup] {CURRENT_PROVIDER_FALLBACK_REASON}")
 
     if os.environ.get("ANTHROPIC_API_KEY"):
         print("[setup] ANTHROPIC_API_KEY を検出: Claude (claude-sonnet-5) を使用します。")

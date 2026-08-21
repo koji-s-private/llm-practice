@@ -183,6 +183,44 @@ def test_build_model_sets_current_provider_openai(monkeypatch):
     assert setup.CURRENT_PROVIDER == "openai"
 
 
+# --- CURRENT_PROVIDER_FALLBACK_REASON（app.pyの起動時警告バナー用）の更新確認 ---
+
+
+def test_build_model_ollama_available_clears_fallback_reason(monkeypatch):
+    """正常系: Ollamaがそのまま使えた場合、フォールバック理由はNoneのままになる。"""
+    monkeypatch.setattr(setup, "_ollama_available", lambda: True)
+    monkeypatch.setattr(setup, "_ollama_model_pulled", lambda: True)
+
+    setup._build_model()
+
+    assert setup.CURRENT_PROVIDER_FALLBACK_REASON is None
+
+
+def test_build_model_ollama_unavailable_sets_not_running_reason(monkeypatch):
+    """異常系: Ollama未起動でフォールバックした場合、未起動である旨の理由が記録される。"""
+    monkeypatch.setattr(setup, "_ollama_available", lambda: False)
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "test-dummy-key")
+
+    setup._build_model()
+
+    assert setup.CURRENT_PROVIDER_FALLBACK_REASON is not None
+    assert "接続できません" in setup.CURRENT_PROVIDER_FALLBACK_REASON
+
+
+def test_build_model_ollama_model_not_pulled_sets_pull_reason(monkeypatch):
+    """異常系: Ollamaは起動しているがモデル未pullでフォールバックした場合、
+    pullコマンドを案内する理由が記録される。"""
+    monkeypatch.setattr(setup, "_ollama_available", lambda: True)
+    monkeypatch.setattr(setup, "_ollama_model_pulled", lambda: False)
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "test-dummy-key")
+
+    setup._build_model()
+
+    assert setup.CURRENT_PROVIDER_FALLBACK_REASON is not None
+    assert "見つかりません" in setup.CURRENT_PROVIDER_FALLBACK_REASON
+    assert f"ollama pull {setup.OLLAMA_MODEL}" in setup.CURRENT_PROVIDER_FALLBACK_REASON
+
+
 # --- _ollama_model_pulled()（Ollama起動済みだがモデル未pullの検出） ---
 
 

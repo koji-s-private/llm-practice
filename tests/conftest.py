@@ -113,3 +113,20 @@ def _forbid_unexpected_getpass(monkeypatch):
         )
 
     monkeypatch.setattr(getpass, "getpass", _raise_if_called)
+
+
+@pytest.fixture(autouse=True)
+def _default_current_provider_ollama(monkeypatch):
+    """setup.CURRENT_PROVIDERをデフォルトで"ollama"（警告バナーなし）に固定する。
+
+    DISABLE_OLLAMA=trueかつダミーのANTHROPIC_API_KEYを設定している都合上、
+    setup.py実際の初回インポート時点では"anthropic"にフォールバックした状態になる。
+    これを上書きしないと、プロバイダを検証しない大半のテストでもapp.pyの
+    有料API利用中警告バナー（st.warning）が意図せず出現してしまう。
+    プロバイダのフォールバック挙動自体を検証するテストは、各テスト内で
+    個別に上書きする。
+    """
+    import setup
+
+    monkeypatch.setattr(setup, "CURRENT_PROVIDER", "ollama")
+    monkeypatch.setattr(setup, "CURRENT_PROVIDER_FALLBACK_REASON", None)
