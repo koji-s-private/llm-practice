@@ -260,6 +260,7 @@ Googleスプレッドシート/ドキュメント/スライドを手動エクス
 | `PyYAML` | YAMLファイルのパース | `tests/test_ci_config.py` / `tests/test_ci_failure_guard_config.py`。GitHub Actionsのワークフロー定義（YAML）を読み込んで内容を検証するために使用（従来は他パッケージの推移的依存として導入されていたが、明示的に固定） |
 | `xlwt` | 旧バイナリ形式Excel（`.xls`）ファイルを書き出すライブラリ | `tests/test_ingest.py`で`.xls`取り込みテスト用のフィクスチャファイルを生成するためだけに使用（読み込み側の`xlrd`とは別ライブラリ） |
 | [ruff](https://docs.astral.sh/ruff/) | lint（静的解析）・コードフォーマットを1ツールでカバーするツール | `pyproject.toml`の`[tool.ruff]`でルールセットを設定。[.github/workflows/ci.yml](.github/workflows/ci.yml)がpush/PR時に`ruff check`・`ruff format --check`を自動実行 |
+| [Playwright](https://playwright.dev/python/) | ブラウザ自動操作ライブラリ | designerサブエージェント（[.claude/agents/designer.md](.claude/agents/designer.md)）が、UI関連PRの変更前(main)・変更後(PRブランチ)のStreamlit画面をスクリーンショット撮影し比較するために使用。通常のCI（[.github/workflows/ci.yml](.github/workflows/ci.yml)）では使用しない |
 
 > **README肥大化時の分割方針**: このセクションが今後さらに大きくなった場合は、`docs/tech-stack.md`
 > のような別ファイルに切り出し、ルートの`README.md`側にはリンクのみを残す方針とします

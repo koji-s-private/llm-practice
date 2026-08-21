@@ -13,6 +13,9 @@ env/
 # ベクトルDB（ローカル生成物）
 chroma_db/
 
+# designerサブエージェントがPlaywrightで撮影する変更前後の比較スクリーンショット（ローカル生成物）
+.designer-screenshots/
+
 # エディタ設定
 .vscode/
 

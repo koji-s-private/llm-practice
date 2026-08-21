@@ -89,7 +89,7 @@ GitHub Actions上で動くAIチームによって定期的にメンテナンス�
   ```
 - 作業開始時は `In Progress` に更新する。PR作成後は、GitHub Projects純正の「Pull request linked to issue」ワークフローが自動的に `Under Review` に変更するため、エージェントが自分で更新する必要はない（`Closes #<issue番号>` をPR本文に含めてさえいれば自動で動く）
 - マージ完了後の `Done` への更新も、GitHub Projects純正の「Pull request merged」ワークフローが自動的に行う
-- reviewerのapprove(LGTM)に至らず終了した場合は `In Progress` のままにせず `Under Review` のまま止め、人間が気づけるようにする
+- reviewer（UI関連PRの場合はdesignerも含む）のapprove(LGTM)に至らず終了した場合は `In Progress` のままにせず `Under Review` のまま止め、人間が気づけるようにする
 - **重要**: `claude-code-action` はセッション内で `GH_TOKEN`/`GITHUB_TOKEN` を自身のGitHub Appインストールトークン（`claude[bot]`）で上書きする。
   このbotトークンはIssue/PR操作はできるが、Organization配下のProjectsには権限がないため、
   `gh project` で始まるコマンドは必ず `GH_TOKEN=$PROJECTS_GH_TOKEN` を先頭に付けて、専用トークンに明示的に差し替えて実行すること
@@ -106,7 +106,8 @@ GitHub Actions上で動くAIチームによって定期的にメンテナンス�
   - `coder`: 実装・ブランチ作成（[.claude/agents/coder.md](.claude/agents/coder.md)）
   - `qa-engineer`: テスト作成・実行（[.claude/agents/qa-engineer.md](.claude/agents/qa-engineer.md)）
   - `reviewer`: 静的解析・セキュリティ観点でのレビュー、コード変更は行わない。判定結果は実際のGitHub PRレビュー(`gh pr review --comment`)として投稿する。`--approve`・`--request-changes`はどちらも使わない（PR作成者(coder)とレビュアー(reviewer)が同じGitHub App ID(`claude[bot]`)で動作しており、GitHubが自己レビューとみなしてどちらも必ず拒否するため。LGTM/修正必要のどちらの判定かは`--comment`の本文冒頭に明記する）（[.claude/agents/reviewer.md](.claude/agents/reviewer.md)）
-- 3者の作業が完了し、テストが通ってからPRを作成する
+  - `designer`: 「使いやすさ・継続して利用したいと思えるか」というUI/UX観点でのレビュー、コード変更は行わない。`app.py` / `.streamlit/`配下を変更するPRのみが対象で、Playwrightで変更前(main)・変更後(PRブランチ)のStreamlit画面のスクリーンショットを撮影・比較する。判定結果はreviewerと同じ理由・同じ方式（`gh pr review --comment`、`--approve`/`--request-changes`は使わない）で投稿する（[.claude/agents/designer.md](.claude/agents/designer.md)）
+- 3者（UI関連PRの場合はdesignerを含め4者）の作業が完了し、テストが通ってからPRを作成する
 - ワークフロー本体は [.github/workflows/ai-team.yml](.github/workflows/ai-team.yml) を参照
 - チケットの新規発掘は [.github/workflows/daily-health-check.yml](.github/workflows/daily-health-check.yml) が別途毎日担当する（役割が重複しないよう、ai-team.yml側はリポジトリ全体の能動的なスキャンは行わない）
 
@@ -116,15 +117,15 @@ GitHub Actions上で動くAIチームによって定期的にメンテナンス�
   同じ選定条件をクリアする最優先（Issue番号が最も小さい＝作成が最も古い）Issueを1件探し、
   見つかればラベルを `now` に自動で付け替えた上でその日の対象として選定する（昇格した旨をIssueにコメントで残す）。
   `now`/`next`/`later` のいずれにも対象が無い場合のみ、その日は何も実行しない
-- 3者の作業が完了しテストが通ったらPRを作成し、reviewerに実際のGitHub PRレビューでLGTM判定（`gh pr review --comment`、本文に「LGTM」と明記する慣習。coder/reviewerが同じGitHub App ID(`claude[bot]`)で動作するため、GitHub上の正式な`--approve`は自己承認扱いで必ず拒否される。そのためAIによる判定は常に`--comment`で記録し、GitHub上の正式なApprove状態の付与は行わない）をもらう
-- **reviewerがapprove(LGTM)を出しても、絶対に自動マージしない。マージは必ず人間（koji）が手動で行う。** これは意図的な設計判断であり、将来的にも変更しない前提とする
-- reviewerがrequest changesのまま(approveに至らない)場合も同様にマージしない。PRにこれまでの経緯を要約したコメントを残し、人間の判断を待つ
-- 何らかの理由（技術的制約、優先度変更、要件不明瞭など）によりcoder/qa-engineer/reviewerが実装・検証・レビューを
+- 3者の作業が完了しテストが通ったらPRを作成し、reviewerに実際のGitHub PRレビューでLGTM判定（`gh pr review --comment`、本文に「LGTM」と明記する慣習。coder/reviewerが同じGitHub App ID(`claude[bot]`)で動作するため、GitHub上の正式な`--approve`は自己承認扱いで必ず拒否される。そのためAIによる判定は常に`--comment`で記録し、GitHub上の正式なApprove状態の付与は行わない）をもらう。加えて`app.py` / `.streamlit/`配下を変更するUI関連のPRである場合は、designerにも同じPR番号でUI/UXレビューを依頼し、reviewerと同格のゲートとして扱う
+- **reviewerのLGTM（UI関連PRの場合はdesignerのLGTM相当も含む）が揃っても、絶対に自動マージしない。マージは必ず人間（koji）が手動で行う。** これは意図的な設計判断であり、将来的にも変更しない前提とする
+- reviewer・designerのいずれかがrequest changesのまま(両者ともLGTM相当に至らない)場合も同様にマージしない。PRにこれまでの経緯を要約したコメントを残し、人間の判断を待つ
+- 何らかの理由（技術的制約、優先度変更、要件不明瞭など）によりcoder/qa-engineer/reviewer/designerが実装・検証・レビューを
   中止する場合は、無言で終了せず必ず対象Issue（PR作成済みなら該当PR）にコメントで理由を残し、人間が状況を
   把握できるようにする
 
 ## スコープ外の発見事項の扱い
-- coder / qa-engineer / reviewer が作業中に今回のIssueと無関係な問題（バグ、技術的負債、改善点）に気づいた場合、
+- coder / qa-engineer / reviewer / designer が作業中に今回のIssueと無関係な問題（バグ、技術的負債、改善点）に気づいた場合、
   その場では直さずPMへの報告に「スコープ外の発見事項」として含める
 - PMはそれを新しいIssueとして作成し、`found-in-review` ラベルを付ける（Statusは `Todo`。既存Issueとの重複がないか事前に確認すること）
 - 優先度ラベル（`now`/`next`/`later`）は基本 `next` とする（緊急性が本当に高い場合のみ `now`）
