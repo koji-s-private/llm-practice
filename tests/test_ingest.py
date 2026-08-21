@@ -1349,6 +1349,43 @@ def test_xlsx_loader_raises_for_nonexistent_file():
         ingest.LOADERS[".xlsx"]("/no/such/path.xlsx").load()
 
 
+def _write_xlsx_with_uncalculated_formula(data_dir, rel_path):
+    # openpyxlでセルに数式文字列を代入して保存しただけのファイルは、Excel等で一度も
+    # 開かれ再計算されていないため計算結果のキャッシュを持たない（data_only=Trueで読むと
+    # 該当セルの値がNoneになる）。この状態を意図的に再現する。
+    import openpyxl
+
+    workbook = openpyxl.Workbook()
+    sheet = workbook.active
+    sheet.append(["item", "amount"])
+    sheet.append(["apple", 10])
+    sheet.append(["banana", 20])
+    sheet.append(["total", "=SUM(B2:B3)"])
+    path = data_dir / rel_path
+    path.parent.mkdir(parents=True, exist_ok=True)
+    workbook.save(path)
+    return path
+
+
+def test_xlsx_uncalculated_formula_cell_is_loaded_as_formula_string_with_warning(fake_env, caplog):
+    # data_only=Trueで読むと値が失われるはずの未計算数式セルが、数式文字列で代用され
+    # サイレントに欠落しないこと・警告ログが出ることを確認する
+    data_dir, store = fake_env
+    _write_xlsx_with_uncalculated_formula(data_dir, "budget.xlsx")
+
+    with caplog.at_level(logging.WARNING, logger="ingest"):
+        result = ingest.sync_data_dir(verbose=False)
+
+    assert result == {"added": ["budget.xlsx"], "updated": [], "removed": [], "failed": []}
+    contents = [doc.page_content for doc in store.docs_by_id.values()]
+    assert any("=SUM(B2:B3)" in c for c in contents)
+
+    warnings = [r for r in caplog.records if r.levelname == "WARNING"]
+    assert len(warnings) == 1
+    assert "budget.xlsx" in warnings[0].getMessage()
+    assert "未計算の数式セル" in warnings[0].getMessage()
+
+
 def _write_xls(data_dir, rel_path, rows: list[list]):
     import xlwt
 

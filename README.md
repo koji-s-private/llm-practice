@@ -226,7 +226,7 @@ HTTP API層を提供する。
 | `pymupdf` | PDFからテキストを高速抽出するエンジン（`PyMuPDFLoader`が内部で使用） | `ingest.py`の`_load_pdf()`（1段目の高速抽出） |
 | `cryptography` | 暗号化（パスワード付き）PDFの復号に必要 | `pymupdf`によるPDF読み込み時に内部的に使用（`ingest.py`） |
 | `docx2txt` | Word（`.docx`）ファイルからテキストを抽出するエンジン（`Docx2txtLoader`が内部で使用） | `ingest.py`の`LOADERS`（`.docx`ファイルの読み込み） |
-| `openpyxl` | Excel（`.xlsx`）ファイルを読み書きするライブラリ | `ingest.py`の`_ExcelLoader`（シートごとに1つのDocumentとして読み込む自前ローダー。依存が重い`unstructured`パッケージを避けるため自前実装にしている） |
+| `openpyxl` | Excel（`.xlsx`）ファイルを読み書きするライブラリ | `ingest.py`の`_ExcelLoader`（シートごとに1つのDocumentとして読み込む自前ローダー。依存が重い`unstructured`パッケージを避けるため自前実装にしている。既知の制約: `.xlsx`の数式セルはExcel等で一度も開かれ再計算されていない場合、計算結果のキャッシュが無く値が取得できないことがある。その場合は数式文字列自体（例:`=SUM(A1:A3)`）を代わりに取り込み警告ログを出すため、計算結果そのものを検索対象にしたい場合はExcel等で一度開いて保存し直すことを推奨） |
 | `xlrd` | 旧バイナリ形式Excel（`.xls`）ファイルを読み込むライブラリ（`openpyxl`は`.xlsx`専用で`.xls`は読めないため別ライブラリが必要） | `ingest.py`の`_LegacyExcelLoader`（`_ExcelLoader`と同じ出力形式の自前ローダー） |
 | `python-pptx` | PowerPoint（`.pptx`）ファイルを読み書きするライブラリ | `ingest.py`の`_PowerPointLoader`（スライドごとに1つのDocumentとして読み込む自前ローダー。openpyxlと同じ理由で自前実装） |
 | `beautifulsoup4` | HTMLをパースするライブラリ | `ingest.py`の`LOADERS`（`BSHTMLLoader`が内部で使用し、`.html`/`.htm`ファイルからテキストを抽出） |
