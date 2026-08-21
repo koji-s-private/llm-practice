@@ -12,10 +12,14 @@
   検索対象にでき、無関係な別スレッドの会話が回答に混ざらないようにしている。
 """
 
+import logging
+import os
 import re
 import uuid
 from datetime import datetime
 from pathlib import Path
+
+logger = logging.getLogger(__name__)
 
 CONVERSATIONS_DIR = Path(__file__).parent / "data" / "conversations"
 
@@ -90,8 +94,26 @@ def save_conversation(question: str, answer: str, thread_id: str, is_fallback: b
         f"- 回答文字数: {len(answer)}\n\n"
         f"{_QUESTION_HEADER}{question}{_ANSWER_HEADER}{answer}\n"
     )
-    path.write_text(content, encoding="utf-8")
+    # 書き込み中のプロセス終了で内容が途中で切れたファイルが残らないよう、一時ファイルに
+    # 書いてからos.replace()でアトミックに配置する（ingest._save_manifest()と同じパターン）。
+    tmp_path = path.with_suffix(".md.tmp")
+    tmp_path.write_text(content, encoding="utf-8")
+    os.replace(tmp_path, path)
     return path
+
+
+def _read_text_safe(path: Path) -> str | None:
+    """会話ログファイルをUTF-8で読み込む。破損（不正なUTF-8）や権限エラー等で読めない場合はNoneを返す。
+
+    保存時のアトミック書き込み（save_conversation）導入前に生成された壊れたファイルや、
+    手動編集による破損ファイルが1件混ざっただけでlist_threads()/load_conversation()全体が
+    クラッシュしないようにするためのガード。
+    """
+    try:
+        return path.read_text(encoding="utf-8")
+    except (UnicodeDecodeError, OSError) as e:
+        logger.warning("%s の読み込みに失敗したためスキップします: %s", path, e)
+        return None
 
 
 def _extract_qa(content: str) -> tuple[str, str]:
@@ -163,11 +185,12 @@ def list_threads() -> list[dict]:
         if not files:
             continue
         first_file = files[0]
+        content = _read_text_safe(first_file)
         threads.append(
             {
                 "thread_id": thread_dir.name,
                 "created_at": _parse_created_at(first_file),
-                "first_question": _extract_question(first_file.read_text(encoding="utf-8")),
+                "first_question": _extract_question(content) if content is not None else "",
                 "count": len(files),
             }
         )
@@ -188,7 +211,10 @@ def load_conversation(thread_id: str) -> list[dict]:
 
     conversations = []
     for f in sorted(thread_dir.glob("*.md")):
-        question, answer = _extract_qa(f.read_text(encoding="utf-8"))
+        content = _read_text_safe(f)
+        if content is None:
+            continue
+        question, answer = _extract_qa(content)
         conversations.append({"question": question, "answer": answer})
     return conversations
 

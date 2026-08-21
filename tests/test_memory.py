@@ -1,5 +1,6 @@
 """memory.py の会話ログ保存・件数カウント・過去スレッド一覧・再開機能のテスト。"""
 
+import logging
 import os
 from datetime import datetime
 
@@ -629,3 +630,207 @@ class TestConversationCountThreadIdValidation:
 
         with pytest.raises(ValueError):
             memory.conversation_count("thread.a")
+
+
+# --- _read_text_safe() / list_threads() / load_conversation():
+#     不正なUTF-8バイト列を含む破損ファイルへの耐性 ---
+
+
+def _write_corrupted_file(base_dir, thread_id, filename):
+    """不正なUTF-8バイト列を含む破損ファイルを直接書き込むテスト用ヘルパー。
+
+    0x80-0xFF帯の単独バイトはUTF-8として不正な組み合わせになりうる（0xffは
+    どのUTF-8シーケンスの先頭バイトとしても不正）ため、read_text(encoding="utf-8")で
+    UnicodeDecodeErrorを再現できる。
+    """
+    thread_dir = base_dir / thread_id
+    thread_dir.mkdir(parents=True, exist_ok=True)
+    path = thread_dir / filename
+    path.write_bytes(b"# \xff\xfe broken bytes not valid utf-8")
+    return path
+
+
+class TestReadTextSafe:
+    """_read_text_safe() 単体の正常系・異常系。"""
+
+    def test_returns_content_for_valid_utf8_file(self, tmp_path):
+        path = tmp_path / "ok.md"
+        path.write_text("正常なUTF-8テキストです", encoding="utf-8")
+
+        assert memory._read_text_safe(path) == "正常なUTF-8テキストです"
+
+    def test_returns_none_for_invalid_utf8_bytes(self, tmp_path):
+        path = tmp_path / "broken.md"
+        path.write_bytes(b"\xff\xfe\x00broken")
+
+        assert memory._read_text_safe(path) is None
+
+    def test_logs_warning_when_decode_fails(self, tmp_path, caplog):
+        path = tmp_path / "broken.md"
+        path.write_bytes(b"\xff\xfe\x00broken")
+
+        with caplog.at_level(logging.WARNING, logger="memory"):
+            memory._read_text_safe(path)
+
+        warnings = [r for r in caplog.records if r.levelname == "WARNING"]
+        assert len(warnings) == 1
+        assert str(path) in warnings[0].getMessage()
+
+    def test_returns_none_for_nonexistent_file(self, tmp_path):
+        """異常系: OSError(FileNotFoundError)系も捕捉されNoneを返す。"""
+        path = tmp_path / "does-not-exist.md"
+
+        assert memory._read_text_safe(path) is None
+
+    def test_returns_none_when_permission_denied(self, tmp_path):
+        """異常系: 読み込み権限が無いファイル(OSError系)も捕捉されNoneを返す。
+
+        root権限（例: CI/コンテナ環境）ではパーミッションが無視され読み込めてしまうため、
+        その場合はこのテスト自体をスキップする。
+        """
+        if os.name != "posix":
+            pytest.skip("POSIXパーミッションに依存するテストのためスキップ")
+        if hasattr(os, "geteuid") and os.geteuid() == 0:
+            pytest.skip("root権限ではファイルパーミッションが無視されるためスキップ")
+
+        path = tmp_path / "no-permission.md"
+        path.write_text("読めないはずの内容", encoding="utf-8")
+        path.chmod(0o000)
+        try:
+            assert memory._read_text_safe(path) is None
+        finally:
+            path.chmod(0o644)
+
+
+class TestListThreadsWithCorruptedFile:
+    """list_threads(): 破損ファイル（不正なUTF-8）混在時のクラッシュ耐性。"""
+
+    def test_does_not_raise_when_first_file_is_corrupted(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(memory, "CONVERSATIONS_DIR", tmp_path)
+        _write_corrupted_file(tmp_path, "thread-a", "20240101_090000_aaa111_q.md")
+
+        threads = memory.list_threads()
+
+        assert len(threads) == 1
+        assert threads[0]["thread_id"] == "thread-a"
+        assert threads[0]["first_question"] == ""
+
+    def test_corrupted_thread_is_not_excluded_and_other_threads_are_listed_correctly(self, tmp_path, monkeypatch):
+        """境界値: 破損ファイルを含むスレッドが一覧から除外されず、かつ正常な
+        他スレッドも正しく一覧に含まれ続けること。"""
+        monkeypatch.setattr(memory, "CONVERSATIONS_DIR", tmp_path)
+        _write_corrupted_file(tmp_path, "thread-broken", "20240101_090000_aaa111_q.md")
+        _write_log(tmp_path, "thread-ok", "20240102_090000_bbb222_q.md", question="正常な質問です")
+
+        threads = memory.list_threads()
+
+        thread_ids = {t["thread_id"] for t in threads}
+        assert thread_ids == {"thread-broken", "thread-ok"}
+        ok_thread = next(t for t in threads if t["thread_id"] == "thread-ok")
+        assert ok_thread["first_question"] == "正常な質問です"
+        broken_thread = next(t for t in threads if t["thread_id"] == "thread-broken")
+        assert broken_thread["first_question"] == ""
+        assert broken_thread["count"] == 1
+
+    def test_logs_warning_but_does_not_raise(self, tmp_path, monkeypatch, caplog):
+        monkeypatch.setattr(memory, "CONVERSATIONS_DIR", tmp_path)
+        _write_corrupted_file(tmp_path, "thread-a", "20240101_090000_aaa111_q.md")
+
+        with caplog.at_level(logging.WARNING, logger="memory"):
+            threads = memory.list_threads()
+
+        assert len(threads) == 1
+        assert any(r.levelname == "WARNING" for r in caplog.records)
+
+
+class TestLoadConversationWithCorruptedFile:
+    """load_conversation(): 破損ファイル（不正なUTF-8）混在時のクラッシュ耐性。"""
+
+    def test_skips_corrupted_file_and_returns_empty_list_when_only_file(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(memory, "CONVERSATIONS_DIR", tmp_path)
+        _write_corrupted_file(tmp_path, "thread-a", "20240101_090000_aaa111_q.md")
+
+        conversations = memory.load_conversation("thread-a")
+
+        assert conversations == []
+
+    def test_skips_corrupted_file_and_returns_only_valid_messages(self, tmp_path, monkeypatch):
+        """境界値: 正常なファイルと破損ファイルが混在する場合、破損ファイルのみ
+        スキップされ、正常なメッセージは処理が継続してすべて返る。"""
+        monkeypatch.setattr(memory, "CONVERSATIONS_DIR", tmp_path)
+        _write_log(tmp_path, "thread-a", "20240101_090000_aaa111_first.md", question="1番目", answer="回答1")
+        _write_corrupted_file(tmp_path, "thread-a", "20240101_093000_bbb222_broken.md")
+        _write_log(tmp_path, "thread-a", "20240101_100000_ccc333_third.md", question="3番目", answer="回答3")
+
+        conversations = memory.load_conversation("thread-a")
+
+        assert conversations == [
+            {"question": "1番目", "answer": "回答1"},
+            {"question": "3番目", "answer": "回答3"},
+        ]
+
+    def test_logs_warning_but_does_not_raise(self, tmp_path, monkeypatch, caplog):
+        monkeypatch.setattr(memory, "CONVERSATIONS_DIR", tmp_path)
+        _write_corrupted_file(tmp_path, "thread-a", "20240101_090000_aaa111_q.md")
+
+        with caplog.at_level(logging.WARNING, logger="memory"):
+            conversations = memory.load_conversation("thread-a")
+
+        assert conversations == []
+        assert any(r.levelname == "WARNING" for r in caplog.records)
+
+
+# --- save_conversation(): アトミック書き込み（一時ファイル + os.replace）への変更後も
+#     従来の入出力仕様が壊れていないこと ---
+
+
+class TestSaveConversationAtomicWrite:
+    def test_no_leftover_tmp_file_after_successful_save(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(memory, "CONVERSATIONS_DIR", tmp_path)
+
+        path = memory.save_conversation(question="質問", answer="回答", thread_id="thread-a")
+
+        tmp_files = list(path.parent.glob("*.md.tmp"))
+        assert tmp_files == []
+        assert path.exists()
+        assert path.suffix == ".md"
+
+    def test_final_file_content_matches_conventional_format_after_atomic_write(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(memory, "CONVERSATIONS_DIR", tmp_path)
+
+        path = memory.save_conversation(question="質問内容", answer="回答内容", thread_id="thread-a")
+
+        content = path.read_text(encoding="utf-8")
+        assert content.startswith("# 会話ログ\n\n")
+        assert "## 質問\n\n質問内容" in content
+        assert "## 回答\n\n回答内容" in content
+
+    def test_uses_os_replace_to_move_tmp_file_into_place(self, tmp_path, monkeypatch):
+        """os.replace()が一時ファイルパス(*.md.tmp)から最終パス(*.md)への
+        アトミック配置に実際に使われていることを確認する。"""
+        monkeypatch.setattr(memory, "CONVERSATIONS_DIR", tmp_path)
+        calls = []
+        original_replace = os.replace
+
+        def _spy_replace(src, dst):
+            calls.append((str(src), str(dst)))
+            return original_replace(src, dst)
+
+        monkeypatch.setattr(memory.os, "replace", _spy_replace)
+
+        path = memory.save_conversation(question="質問", answer="回答", thread_id="thread-a")
+
+        assert len(calls) == 1
+        src, dst = calls[0]
+        assert src.endswith(".md.tmp")
+        assert dst == str(path)
+
+    def test_saved_conversation_is_immediately_loadable(self, tmp_path, monkeypatch):
+        """回帰確認: アトミック書き込みへの変更後もload_conversation()から
+        正しく読み戻せること。"""
+        monkeypatch.setattr(memory, "CONVERSATIONS_DIR", tmp_path)
+        memory.save_conversation(question="質問A", answer="回答A", thread_id="thread-a")
+
+        conversations = memory.load_conversation("thread-a")
+
+        assert conversations == [{"question": "質問A", "answer": "回答A"}]
