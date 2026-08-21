@@ -100,11 +100,8 @@ class _ExcelLoader:
     def load(self) -> list[Document]:
         import openpyxl
 
-        # data_only=Trueは数式セルの「最後にExcelが計算したキャッシュ値」を返すが、
-        # Excel等で一度も開かれず再計算されていないファイル（pandas/openpyxlで数式だけを
-        # 書き込んで保存した場合等）はキャッシュが無くNoneになる。data_only=False側も
-        # 同じファイルから開いておき、値が取れないセルは数式文字列で代用することで
-        # サイレントなデータ欠落（該当セルが空文字列として取り込まれる）を防ぐ。
+        # data_only=Trueは未計算の数式セルではキャッシュが無くNoneになるため、
+        # data_only=False側から数式文字列を代用する。
         workbook = openpyxl.load_workbook(self.file_path, data_only=True, read_only=True)
         try:
             formula_workbook = openpyxl.load_workbook(self.file_path, data_only=False, read_only=True)

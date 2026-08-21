@@ -1379,9 +1379,7 @@ def test_xlsx_loader_closes_first_workbook_when_second_open_fails(tmp_path, monk
 
 
 def _write_xlsx_with_uncalculated_formula(data_dir, rel_path):
-    # openpyxlでセルに数式文字列を代入して保存しただけのファイルは、Excel等で一度も
-    # 開かれ再計算されていないため計算結果のキャッシュを持たない（data_only=Trueで読むと
-    # 該当セルの値がNoneになる）。この状態を意図的に再現する。
+    # 再計算されておらずキャッシュを持たない数式セル（data_only=TrueだとNoneになる）を再現する。
     import openpyxl
 
     workbook = openpyxl.Workbook()
