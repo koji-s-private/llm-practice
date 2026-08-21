@@ -2477,3 +2477,168 @@ def test_provider_fallback_warning_shown_without_reason_when_reason_missing(monk
     fallback_warnings = [w.value for w in at.sidebar.warning if "有料API" in w.value]
     assert len(fallback_warnings) == 1
     assert "anthropic" in fallback_warnings[0]
+
+
+# --- 13. 過去ターンの参照元expanderの永続化（additional_kwargs["sources"]） ---
+
+
+class _FakeAgentPerTurn:
+    """呼び出しターンごとに異なる回答・参照元artifactを返すフェイクエージェント。
+
+    複数ターンにわたってsourcesが正しく紐づくこと（ターン間で混ざらないこと）を
+    検証するため、turnsで渡した(answer, artifact)のタプルをstream()呼び出し順に消費する。
+    """
+
+    def __init__(self, turns):
+        self.turns = turns
+        self.call_count = 0
+
+    def stream(self, payload, stream_mode="messages"):
+        answer, artifact = self.turns[self.call_count]
+        self.call_count += 1
+        if artifact:
+            tool_message = ToolMessage(content="検索結果", artifact=artifact, tool_call_id=f"call-{self.call_count}")
+            yield tool_message, {}
+        yield AIMessageChunk(content=answer), {}
+
+
+def test_sources_expander_persists_after_next_turn_rerun(monkeypatch):
+    """正常系: 1ターン目でsources付きの回答を得た後、2ターン目（sourcesなし）の
+    質問を送信して画面が再描画されても、1ターン目の参照元expanderが引き続き表示される
+    （additional_kwargs["sources"]でst.session_state.messages自体に永続化されているため）。"""
+    turn1_doc = _FakeSourceDoc(page_content="1ターン目の参照内容", metadata={"source": "turn1.txt"})
+    fake_agent = _FakeAgentPerTurn(
+        turns=[
+            ("1ターン目の回答", [turn1_doc]),
+            ("2ターン目の回答", []),
+        ]
+    )
+    monkeypatch.setattr(rag_chain, "build_agent", lambda thread_id=None: fake_agent)
+
+    at = _run_app()
+    at = at.chat_input[0].set_value("1ターン目の質問").run()
+
+    expanders = [e for e in at.expander if "参照した箇所を見る" in e.label]
+    assert len(expanders) == 1
+    assert any("turn1.txt" in m.value for m in expanders[0].markdown)
+
+    # 2ターン目を送信し、画面全体が再描画された後も1ターン目のexpanderが消えない
+    at = at.chat_input[0].set_value("2ターン目の質問").run()
+
+    assert at.exception == []
+    expanders_after = [e for e in at.expander if "参照した箇所を見る" in e.label]
+    assert len(expanders_after) == 1
+    assert any("turn1.txt" in m.value for m in expanders_after[0].markdown)
+
+    messages = at.session_state["messages"]
+    assert len(messages) == 4
+    turn1_ai_message = messages[1]
+    turn2_ai_message = messages[3]
+    assert len(turn1_ai_message.additional_kwargs.get("sources")) == 1
+    assert turn1_ai_message.additional_kwargs["sources"][0].metadata["source"] == "turn1.txt"
+    assert turn2_ai_message.additional_kwargs.get("sources") == []
+
+
+def test_sources_expander_not_shown_when_turn_has_no_sources(monkeypatch):
+    """正常系: sourcesが無い（一般知識フォールバック等でsourcesが空の）ターンでは、
+    回答直後・再描画のいずれのタイミングでもexpanderが表示されない。"""
+    fake_agent = _FakeAgent(answer="一般知識による回答（根拠文書なし）")
+    monkeypatch.setattr(rag_chain, "build_agent", lambda thread_id=None: fake_agent)
+
+    at = _run_app()
+    at = at.chat_input[0].set_value("質問です").run()
+
+    assert at.exception == []
+    expanders = [e for e in at.expander if "参照した箇所を見る" in e.label]
+    assert expanders == []
+
+    messages = at.session_state["messages"]
+    assert messages[1].additional_kwargs.get("sources") == []
+
+    # 無関係な操作（サイドバートグル）による再描画後も、expanderは表示されないまま
+    toggle = at.sidebar.toggle[0]
+    at = toggle.set_value(False).run()
+
+    assert at.exception == []
+    expanders_after = [e for e in at.expander if "参照した箇所を見る" in e.label]
+    assert expanders_after == []
+
+
+def test_sources_do_not_mix_across_multiple_turns(monkeypatch):
+    """境界値: 複数ターン（3ターン）にわたって、各ターンごとに異なるsourcesが正しく
+    紐づいて表示され、ターン間でsourcesが混ざらない
+    （例: 2ターン目のexpanderに1ターン目や3ターン目のドキュメントが混入しない）。"""
+    doc1 = _FakeSourceDoc(page_content="ターン1の内容", metadata={"source": "doc1.txt"})
+    doc2 = _FakeSourceDoc(page_content="ターン2の内容", metadata={"source": "doc2.txt"})
+    doc3 = _FakeSourceDoc(page_content="ターン3の内容", metadata={"source": "doc3.txt"})
+    fake_agent = _FakeAgentPerTurn(
+        turns=[
+            ("ターン1の回答", [doc1]),
+            ("ターン2の回答", [doc2]),
+            ("ターン3の回答", [doc3]),
+        ]
+    )
+    monkeypatch.setattr(rag_chain, "build_agent", lambda thread_id=None: fake_agent)
+
+    at = _run_app()
+    at = at.chat_input[0].set_value("質問1").run()
+    at = at.chat_input[0].set_value("質問2").run()
+    at = at.chat_input[0].set_value("質問3").run()
+
+    assert at.exception == []
+    expanders = [e for e in at.expander if "参照した箇所を見る" in e.label]
+    assert len(expanders) == 3
+
+    for expander, expected_doc, other_docs in (
+        (expanders[0], "doc1.txt", ("doc2.txt", "doc3.txt")),
+        (expanders[1], "doc2.txt", ("doc1.txt", "doc3.txt")),
+        (expanders[2], "doc3.txt", ("doc1.txt", "doc2.txt")),
+    ):
+        markdown_texts = [m.value for m in expander.markdown]
+        assert any(expected_doc in text for text in markdown_texts)
+        for other in other_docs:
+            assert not any(other in text for text in markdown_texts)
+
+    messages = at.session_state["messages"]
+    ai_messages = [m for m in messages if isinstance(m, AIMessage)]
+    assert len(ai_messages) == 3
+    assert ai_messages[0].additional_kwargs["sources"][0].metadata["source"] == "doc1.txt"
+    assert ai_messages[1].additional_kwargs["sources"][0].metadata["source"] == "doc2.txt"
+    assert ai_messages[2].additional_kwargs["sources"][0].metadata["source"] == "doc3.txt"
+
+
+def test_switching_to_past_thread_with_legacy_ai_message_does_not_crash(monkeypatch):
+    """異常系（回帰防止）: _switch_thread()がload_conversation()から復元するAIMessageは
+    additional_kwargsに"sources"キーを持たない旧形式のままだが、再描画ループでの
+    .get("sources")呼び出しはNoneを返すだけでクラッシュせず、参照元expanderも表示されない。"""
+    from datetime import datetime
+
+    monkeypatch.setattr(
+        memory,
+        "list_threads",
+        lambda: [
+            {
+                "thread_id": "thread-past",
+                "created_at": datetime(2024, 1, 1, 9, 0),
+                "first_question": "過去の質問",
+                "count": 1,
+            }
+        ],
+    )
+    monkeypatch.setattr(
+        memory,
+        "load_conversation",
+        lambda thread_id: [{"question": "過去の質問", "answer": "過去の回答"}] if thread_id == "thread-past" else [],
+    )
+
+    at = _run_app()
+    at = at.sidebar.selectbox[0].select("thread-past").run()
+
+    assert at.exception == []
+    messages = at.session_state["messages"]
+    assert len(messages) == 2
+    restored_ai_message = messages[1]
+    assert restored_ai_message.additional_kwargs.get("sources") is None
+
+    expanders = [e for e in at.expander if "参照した箇所を見る" in e.label]
+    assert expanders == []

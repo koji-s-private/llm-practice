@@ -293,6 +293,17 @@ def _render_indexed_file_list() -> None:
                 st.rerun()
 
 
+def _render_sources_expander(sources: list) -> None:
+    """検索でヒットした参照元ドキュメントを、回答直後の描画・過去ターンの再描画の両方で使う共通の表示。"""
+    if not sources:
+        return
+    with st.expander("参照した箇所を見る"):
+        for i, doc in enumerate(sources, start=1):
+            label = _format_source_label(doc.metadata)
+            st.markdown(f"**[{i}] {label}**")
+            st.text(_format_snippet(doc.page_content))
+
+
 def _switch_thread(thread_id: str) -> None:
     """選択された過去スレッドに切り替え、そのスレッドの会話履歴をチャット画面に復元する。"""
     st.session_state.thread_id = thread_id
@@ -455,6 +466,10 @@ for message in st.session_state.messages:
     role = "user" if isinstance(message, HumanMessage) else "assistant"
     with st.chat_message(role):
         st.markdown(message.content)
+        if isinstance(message, AIMessage):
+            # additional_kwargsはAPI送信時には未知キーとして無視されるため、ここに参照元を
+            # 積んでおいても後続のagent.stream()への影響なくセッション内で保持できる。
+            _render_sources_expander(message.additional_kwargs.get("sources") or [])
 
 user_input = st.chat_input("資料について気になることを聞いてみましょう")
 
@@ -532,12 +547,7 @@ if user_input:
             # プレースホルダーが残っていれば消す。
             status_placeholder.empty()
 
-            if sources:
-                with st.expander("参照した箇所を見る"):
-                    for i, doc in enumerate(sources, start=1):
-                        label = _format_source_label(doc.metadata)
-                        st.markdown(f"**[{i}] {label}**")
-                        st.text(_format_snippet(doc.page_content))
+            _render_sources_expander(sources)
         except Exception as e:
             status_placeholder.empty()
             # ストリーム途中（一部チャンクをyield済み）で例外が発生した場合に、
@@ -548,7 +558,8 @@ if user_input:
 
     if answer is not None:
         st.session_state.messages.append(HumanMessage(content=user_input))
-        st.session_state.messages.append(AIMessage(content=answer))
+        # 参照元は再描画ループでも表示できるよう、additional_kwargsに載せてメッセージ本体と一緒に保持する。
+        st.session_state.messages.append(AIMessage(content=answer, additional_kwargs={"sources": sources}))
 
         # 会話を自動でナレッジ化（このスレッド専用でローカル保存し、全件走査するsync_data_dir()
         # ではなく保存した1ファイルだけをその場でDB反映）。sourcesが空＝根拠なしの一般知識回答
