@@ -100,14 +100,40 @@ class _ExcelLoader:
     def load(self) -> list[Document]:
         import openpyxl
 
+        # data_only=Trueは未計算の数式セルではキャッシュが無くNoneになるため、
+        # data_only=False側から数式文字列を代用する。
         workbook = openpyxl.load_workbook(self.file_path, data_only=True, read_only=True)
         try:
+            formula_workbook = openpyxl.load_workbook(self.file_path, data_only=False, read_only=True)
+        except Exception:
+            # 2回目のopenが失敗すると1回目のworkbookがtry/finallyに到達せずfdがリークするため、
+            # ここで個別にclose()してから例外を再送出する。
+            workbook.close()
+            raise
+        try:
             docs = []
-            for sheet in workbook.worksheets:
-                lines = [
-                    "\t".join("" if cell is None else str(cell) for cell in row)
-                    for row in sheet.iter_rows(values_only=True)
-                ]
+            for sheet, formula_sheet in zip(workbook.worksheets, formula_workbook.worksheets, strict=True):
+                uncalculated_count = 0
+                lines = []
+                for row, formula_row in zip(sheet.iter_rows(), formula_sheet.iter_rows(), strict=True):
+                    cells = []
+                    for cell, formula_cell in zip(row, formula_row, strict=True):
+                        value = cell.value
+                        if value is None and formula_cell.data_type == "f":
+                            # 未計算の数式セル。数式文字列（例: "=SUM(A1:A3)"）で代用する。
+                            value = formula_cell.value
+                            uncalculated_count += 1
+                        cells.append("" if value is None else str(value))
+                    lines.append("\t".join(cells))
+                if uncalculated_count:
+                    logger.warning(
+                        "%s のシート「%s」で未計算の数式セルを%d件検出しました。"
+                        "計算結果のキャッシュが無いため数式文字列をそのまま取り込みます"
+                        "（Excel等で一度開いて保存し直すと計算結果が取り込まれるようになります）。",
+                        self.file_path,
+                        sheet.title,
+                        uncalculated_count,
+                    )
                 text = "\n".join(lines).strip()
                 if text:
                     docs.append(Document(page_content=text, metadata={"source": self.file_path, "sheet": sheet.title}))
@@ -116,6 +142,7 @@ class _ExcelLoader:
             # read_only=Trueのワークブックは参照サイクルを持ち、GCが回るまでfdが解放されない
             # ことがあるため、明示的にclose()してsync_data_dir()の全件走査時のfd枯渇を防ぐ。
             workbook.close()
+            formula_workbook.close()
 
 
 class _LegacyExcelLoader:

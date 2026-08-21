@@ -1349,6 +1349,70 @@ def test_xlsx_loader_raises_for_nonexistent_file():
         ingest.LOADERS[".xlsx"]("/no/such/path.xlsx").load()
 
 
+def test_xlsx_loader_closes_first_workbook_when_second_open_fails(tmp_path, monkeypatch):
+    # 回帰テスト: 1回目のload_workbook(data_only=True)成功後、2回目(data_only=False)が
+    # 失敗した場合でも1回目のworkbookがclose()されfdリークしないことを確認する
+    import openpyxl
+
+    path = tmp_path / "members.xlsx"
+    workbook = openpyxl.Workbook()
+    workbook.active.append(["name"])
+    workbook.save(path)
+
+    real_load_workbook = openpyxl.load_workbook
+    closed_flags = []
+
+    def flaky_load_workbook(*args, **kwargs):
+        if kwargs.get("data_only") is False:
+            raise RuntimeError("2回目のload_workbookが失敗")
+        wb = real_load_workbook(*args, **kwargs)
+        original_close = wb.close
+        wb.close = lambda: (closed_flags.append(True), original_close())
+        return wb
+
+    monkeypatch.setattr(openpyxl, "load_workbook", flaky_load_workbook)
+
+    with pytest.raises(RuntimeError, match="2回目のload_workbookが失敗"):
+        ingest.LOADERS[".xlsx"](str(path)).load()
+
+    assert closed_flags == [True]
+
+
+def _write_xlsx_with_uncalculated_formula(data_dir, rel_path):
+    # 再計算されておらずキャッシュを持たない数式セル（data_only=TrueだとNoneになる）を再現する。
+    import openpyxl
+
+    workbook = openpyxl.Workbook()
+    sheet = workbook.active
+    sheet.append(["item", "amount"])
+    sheet.append(["apple", 10])
+    sheet.append(["banana", 20])
+    sheet.append(["total", "=SUM(B2:B3)"])
+    path = data_dir / rel_path
+    path.parent.mkdir(parents=True, exist_ok=True)
+    workbook.save(path)
+    return path
+
+
+def test_xlsx_uncalculated_formula_cell_is_loaded_as_formula_string_with_warning(fake_env, caplog):
+    # data_only=Trueで読むと値が失われるはずの未計算数式セルが、数式文字列で代用され
+    # サイレントに欠落しないこと・警告ログが出ることを確認する
+    data_dir, store = fake_env
+    _write_xlsx_with_uncalculated_formula(data_dir, "budget.xlsx")
+
+    with caplog.at_level(logging.WARNING, logger="ingest"):
+        result = ingest.sync_data_dir(verbose=False)
+
+    assert result == {"added": ["budget.xlsx"], "updated": [], "removed": [], "failed": []}
+    contents = [doc.page_content for doc in store.docs_by_id.values()]
+    assert any("=SUM(B2:B3)" in c for c in contents)
+
+    warnings = [r for r in caplog.records if r.levelname == "WARNING"]
+    assert len(warnings) == 1
+    assert "budget.xlsx" in warnings[0].getMessage()
+    assert "未計算の数式セル" in warnings[0].getMessage()
+
+
 def _write_xls(data_dir, rel_path, rows: list[list]):
     import xlwt
 
