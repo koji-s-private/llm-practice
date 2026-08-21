@@ -161,25 +161,35 @@ jobs:
 
             8. `reviewer` サブエージェントに、控えたPR番号を伝えてレビューを依頼する。reviewerは `gh pr review` で実際にGitHub上へapprove/request changesを投稿する(PMへのテキスト報告だけで終わらせない)。
             9. reviewerがrequest changesを出した場合は、`coder` にPR番号を伝えて修正を依頼する。coderは `gh pr view <PR番号> --json reviews,comments` 等で実際のレビュー内容を確認した上で同じブランチ上で修正し、`git push` で反映する。反映後、再度 `reviewer` に同じPR番号でレビューを依頼する(このループの間、Statusはまだ更新しない)。
-            10. reviewerがapproveを出した場合、PR本文に「## 動作確認(エビデンス)」セクションを追記し、qa-engineerが報告した実際のテスト出力をそのまま貼る。pytest実行・評価スクリプト実行など実行コマンドがあるものは、実行した具体的なコマンドも合わせて明記する。実機(ブラウザ等)の操作による動作確認を行った場合は、その検証フロー(操作手順)を箇条書きで記載した上で結果を示す。
-            11. **PRのマージは絶対に行わない(マージは必ず人間が行う)。** PR作成が完了したら、それ以上待機せず終了する。PR本文には以下を含める:
+
+            ## UI/UXレビュー(designer)
+
+            10. `gh pr view <PR番号> --json files --jq '.files[].path'` で変更ファイル一覧を確認し、`app.py` または `.streamlit/` 配下が含まれているか判定する。
+                - **含まれていない場合**: designerは呼び出さない(UI変更を伴わないPRにPlaywright起動などの余計なコストをかけないため)。手順12のPR本文には「## UI/UXレビュー」として「対象外(UI関連ファイルの変更なし)」と記載する。
+                - **含まれている場合**: `designer` サブエージェントに、控えたPR番号を伝えてUI/UXレビューを依頼する。designerもreviewerと同じ理由で `gh pr review --comment` で判定(「[designer] 判定: LGTM相当」または「[designer] 判定: 要修正」)を投稿する(PMへのテキスト報告だけで終わらせない)。
+            11. designerが「要修正」と判定した場合は、`coder` にPR番号を伝えて修正を依頼する。coderの修正後は `qa-engineer` に再度テストを依頼し、通過を確認したら `reviewer` と `designer` の両方に同じPR番号で再レビューを依頼する(このループの間、Statusはまだ更新しない。**この時点までreviewer/designerのどちらか一方でも要修正のままなら、次の手順12には進まないこと**)。
+            12. reviewer(該当する場合はdesignerも)のLGTM相当がすべて揃ったら、PR本文に以下の2セクションを追記する:
+                - `## 動作確認(エビデンス)`: qa-engineerが報告した実際のテスト出力をそのまま貼る。pytest実行・評価スクリプト実行など実行コマンドがあるものは、実行した具体的なコマンドも合わせて明記する。実機(ブラウザ等)の操作による動作確認を行った場合は、その検証フロー(操作手順)を箇条書きで記載した上で結果を示す。
+                - `## UI/UXレビュー`: designerを呼び出した場合はその判定(LGTM相当/要修正の経緯)と所見の要約、呼び出していない場合は「対象外(UI関連ファイルの変更なし)」と記載する。
+            13. **PRのマージは絶対に行わない(マージは必ず人間が行う)。** PR作成が完了したら、それ以上待機せず終了する。PR本文には以下を含める:
                 - `Closes #${{ steps.sanitize.outputs.issue_number }}`
                 - ## 対応したIssue(番号とリンク)
                 - ## 変更内容
                 - ## 動作確認(エビデンス)
-                - ## セルフレビューでの気付き(reviewerが実際に投稿したPRレビューを参照する旨と、その中のスコープ外の発見事項を起票したIssue番号があれば記載。問題が無ければ「特になし」)
-            12. ターン数の都合などでapproveに到達できずに終了する場合は、PRにこれまでの経緯を要約したコメントを残す。
+                - ## UI/UXレビュー
+                - ## セルフレビューでの気付き(reviewer・designer(呼び出した場合)が実際に投稿したPRレビューを参照する旨と、その中のスコープ外の発見事項を起票したIssue番号があれば記載。問題が無ければ「特になし」)
+            14. ターン数の都合などでreviewer(該当する場合はdesignerも)のLGTM相当に到達できずに終了する場合は、PRにこれまでの経緯を要約したコメントを残す。
 
             ## スコープ外の発見事項の扱い
 
-            13. coder / qa-engineer の報告、および `gh pr view <PR番号> --json reviews --jq '.reviews[].body'` で確認できるreviewerの実際のレビュー本文中の「## スコープ外の発見事項」に、範囲外の問題が含まれていた場合、それぞれについて以下を行う(なければ何もしなくてよい):
+            15. coder / qa-engineer の報告、および `gh pr view <PR番号> --json reviews --jq '.reviews[].body'` で確認できるreviewer・designer(呼び出した場合)の実際のレビュー本文中の「## スコープ外の発見事項」に、範囲外の問題が含まれていた場合、それぞれについて以下を行う(なければ何もしなくてよい):
                 a. `gh issue list --state open` で確認し、既存Issueと内容が重複する場合は新規作成しない。
                 b. 重複がなければ `gh issue create --title "<簡潔なタイトル>" --body "<概要・背景・やること・発見の経緯(Issue #${{ steps.sanitize.outputs.issue_number }}の実装中に発見、という旨)>"` で起票する。
                 c. `gh issue edit <新Issue番号> --add-label found-in-review` でラベルを付与する。優先度は `next` を基本とする(緊急性が本当に高い場合のみ `now`)。
                 d. `GH_TOKEN=$PROJECTS_GH_TOKEN gh project item-add $PROJECT_NUMBER --owner $PROJECT_OWNER --url <新IssueのURL>` でProjectに追加する(Statusは既定のTodoのままでよい)。
                 e. 起票したIssueの番号を、今回のPR本文の「セルフレビューでの気付き」に記載する。
 
-            14. 最後に、対応したIssue番号、作成したPRのURL、reviewerのレビュー結果(approve/request changesの経緯と回数)、新規に起票したIssue(あれば)を日本語でレポートする。
+            16. 最後に、対応したIssue番号、作成したPRのURL、reviewerのレビュー結果(approve/request changesの経緯と回数)、designerを呼び出した場合はその判定結果、新規に起票したIssue(あれば)を日本語でレポートする。
 
             各サブエージェントは Task tool 経由で呼び出してください。**必ず同期実行(run_in_background: false)で呼び出し、
             サブエージェントの完了(実際の出力)を受け取ってから次の手順に進むこと。** このワークフローはGitHub Actions上で
@@ -196,6 +206,16 @@ jobs:
             - .envの値やAPIキーなど秘密情報をコードやPR本文に含めない。
             - 課金が発生する可能性のある操作は絶対に実行しない。
             - 担当範囲はあくまで「指定された1件のIssueの実装」+「その過程で偶然見つけたスコープ外の問題のIssue化」まで。リポジトリ全体を能動的にスキャンして新たな問題点を探すことはしない(それは daily-health-check.yml の担当範囲)。
-            - reviewer の LGTM なしでのマージは、テストが全て通っていたとしても禁止。**LGTMが出ても人間承認なしの自動マージは絶対に行わない。**
+            - reviewer(UI関連PRの場合はdesignerも)のLGTM相当なしでのマージは、テストが全て通っていたとしても禁止。**LGTMが出ても人間承認なしの自動マージは絶対に行わない。**
+            - designerが撮影する比較スクリーンショットは `.designer-screenshots/{before,after}/` に保存すること(このステップ以降のワークフロー内で自動的にArtifactsへアップロードされる)。
           claude_args: |
-            --max-turns 60 --allowedTools "Bash,Read,Write,Edit,Grep,Glob,Task"
+            --max-turns 80 --allowedTools "Bash,Read,Write,Edit,Grep,Glob,Task"
+
+      - name: UI/UXレビューのスクリーンショットをArtifactsへ保存
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: designer-screenshots-issue-${{ steps.sanitize.outputs.issue_number }}
+          path: .designer-screenshots/
+          if-no-files-found: ignore
+          retention-days: 14

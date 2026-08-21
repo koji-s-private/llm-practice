@@ -4,6 +4,8 @@ name: PR Review On Update
 # レビューが既に一度でも投稿されているPRに限り、reviewerサブエージェントによる
 # 再レビューを自動的に行う。人間による直接pushでも、pr-conflict-guard.ymlによる
 # コンフリクト解消pushでも、この1本でカバーする。
+# designerのレビューが既に一度でも投稿されているPR(=初回のai-team.ymlでUI関連PRと
+# 判定されたPR)に限り、designerサブエージェントによる再レビューも同様に行う。
 #
 # 二重レビュー防止のガード:
 # - まだreviewerのレビューが1件も無いPR(=初回レビュー前)は対象外とする。
@@ -43,17 +45,26 @@ jobs:
           set -e
           has_prior_review="$(gh pr view "$PR_NUMBER" --repo "$REPO" --json reviews \
             --jq '[.reviews[] | select(.author.login == "claude" or .author.login == "claude[bot]")] | length > 0')"
+          has_prior_designer_review="$(gh pr view "$PR_NUMBER" --repo "$REPO" --json reviews \
+            --jq '[.reviews[] | select((.author.login == "claude" or .author.login == "claude[bot]") and (.body | startswith("[designer]")))] | length > 0')"
 
           in_progress_runs="$(gh run list --repo "$REPO" --workflow ai-team.yml --branch "$HEAD_REF" \
             --status in_progress --json databaseId --jq 'length')"
 
           echo "has_prior_review=$has_prior_review"
+          echo "has_prior_designer_review=$has_prior_designer_review"
           echo "in_progress_runs=$in_progress_runs"
 
           if [ "$has_prior_review" = "true" ] && [ "$in_progress_runs" = "0" ]; then
             echo "should_review=true" >> "$GITHUB_OUTPUT"
           else
             echo "should_review=false" >> "$GITHUB_OUTPUT"
+          fi
+
+          if [ "$has_prior_designer_review" = "true" ] && [ "$in_progress_runs" = "0" ]; then
+            echo "should_designer_review=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "should_designer_review=false" >> "$GITHUB_OUTPUT"
           fi
 
       - uses: actions/checkout@v5
@@ -77,3 +88,32 @@ jobs:
             (PRのマージ、Projectsのステータス更新など)は行わないこと。
           claude_args: |
             --max-turns 15 --allowedTools "Bash,Read,Grep,Glob,Task"
+
+      - name: Run designer agent
+        if: steps.check.outputs.should_designer_review == 'true'
+        uses: anthropics/claude-code-action@v1
+        with:
+          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          allowed_bots: "claude,github-actions"
+          prompt: |
+            PR #${{ github.event.pull_request.number }} に新しいコミットがpushされました。
+            このPRは初回のai-team.yml実行時にUI関連PRと判定され、既にdesignerによる
+            UI/UXレビューが投稿されていますが、内容が更新されたため再レビューが必要です。
+
+            `designer` サブエージェントをTask tool経由で(`run_in_background: false`で)呼び出し、
+            PR番号 ${{ github.event.pull_request.number }} を伝えて再レビューを依頼してください。
+            designerは既存の指示([.claude/agents/designer.md](.claude/agents/designer.md))通り、
+            Playwrightで変更前後のスクリーンショットを比較した上で `gh pr review --comment` で
+            判定(LGTM相当/要修正)を投稿します。それ以外の作業(PRのマージ、Projectsのステータス
+            更新など)は行わないこと。
+          claude_args: |
+            --max-turns 25 --allowedTools "Bash,Read,Grep,Glob,Task"
+
+      - name: 比較スクリーンショットをArtifactsへ保存
+        if: always() && steps.check.outputs.should_designer_review == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: designer-screenshots-pr-${{ github.event.pull_request.number }}-${{ github.sha }}
+          path: .designer-screenshots/
+          if-no-files-found: ignore
+          retention-days: 14
