@@ -2806,3 +2806,90 @@ def test_switching_to_past_thread_with_legacy_ai_message_does_not_crash(monkeypa
 
     expanders = [e for e in at.expander if "参照した箇所を見る" in e.label]
     assert expanders == []
+
+
+# --- 15. 回答の根拠バッジ（ドキュメント根拠 / 一般知識） ---
+
+
+def test_answer_badge_shows_document_based_when_sources_present(monkeypatch):
+    """正常系: sourcesが非空の回答には「🔍 ドキュメントに基づく回答」バッジが表示され、
+    「🧠 一般知識による回答」バッジは表示されない。"""
+    fake_agent = _FakeAgentWithSources(answer="文書に基づく回答", artifact=[_FakeSourceDoc()])
+    monkeypatch.setattr(rag_chain, "build_agent", lambda thread_id=None: fake_agent)
+
+    at = _run_app()
+    at.chat_input[0].set_value("質問です").run()
+
+    assert at.exception == []
+    caption_texts = [c.value for c in at.caption]
+    assert any("🔍 ドキュメントに基づく回答" in text for text in caption_texts)
+    assert not any("🧠 一般知識による回答" in text for text in caption_texts)
+
+
+def test_answer_badge_shows_general_knowledge_when_no_sources(monkeypatch):
+    """正常系: sourcesが空の回答には「🧠 一般知識による回答（ドキュメントに該当情報なし）」
+    バッジが表示され、「🔍 ドキュメントに基づく回答」バッジは表示されない。"""
+    fake_agent = _FakeAgent(answer="一般知識のみによる回答")
+    monkeypatch.setattr(rag_chain, "build_agent", lambda thread_id=None: fake_agent)
+
+    at = _run_app()
+    at.chat_input[0].set_value("質問です").run()
+
+    assert at.exception == []
+    caption_texts = [c.value for c in at.caption]
+    assert any("🧠 一般知識による回答（ドキュメントに該当情報なし）" in text for text in caption_texts)
+    assert not any("🔍 ドキュメントに基づく回答" in text for text in caption_texts)
+
+
+def test_answer_badge_persists_after_next_turn_rerun(monkeypatch):
+    """正常系: 1ターン目（sources有り）の後に2ターン目（sources無し）を送信して
+    画面が再描画されても、各ターンの回答直後に判定したバッジが両方とも残る
+    （additional_kwargs["sources"]から都度再判定されるため）。"""
+    turn1_doc = _FakeSourceDoc(page_content="1ターン目の参照内容", metadata={"source": "turn1.txt"})
+    fake_agent = _FakeAgentPerTurn(
+        turns=[
+            ("1ターン目の回答", [turn1_doc]),
+            ("2ターン目の回答", []),
+        ]
+    )
+    monkeypatch.setattr(rag_chain, "build_agent", lambda thread_id=None: fake_agent)
+
+    at = _run_app()
+    at = at.chat_input[0].set_value("1ターン目の質問").run()
+    at = at.chat_input[0].set_value("2ターン目の質問").run()
+
+    assert at.exception == []
+    caption_texts = [c.value for c in at.caption]
+    assert sum("🔍 ドキュメントに基づく回答" in text for text in caption_texts) == 1
+    assert sum("🧠 一般知識による回答（ドキュメントに該当情報なし）" in text for text in caption_texts) == 1
+
+
+def test_answer_badge_shows_general_knowledge_for_legacy_message_without_sources_key(monkeypatch):
+    """異常系（回帰防止）: additional_kwargsに"sources"キーを持たない旧形式のAIMessage
+    （_switch_thread()経由で復元されたもの）でも、クラッシュせず「一般知識」バッジとして扱われる。"""
+    from datetime import datetime
+
+    monkeypatch.setattr(
+        memory,
+        "list_threads",
+        lambda: [
+            {
+                "thread_id": "thread-past",
+                "created_at": datetime(2024, 1, 1, 9, 0),
+                "first_question": "過去の質問",
+                "count": 1,
+            }
+        ],
+    )
+    monkeypatch.setattr(
+        memory,
+        "load_conversation",
+        lambda thread_id: [{"question": "過去の質問", "answer": "過去の回答"}] if thread_id == "thread-past" else [],
+    )
+
+    at = _run_app()
+    at = at.sidebar.selectbox[0].select("thread-past").run()
+
+    assert at.exception == []
+    caption_texts = [c.value for c in at.caption]
+    assert any("🧠 一般知識による回答（ドキュメントに該当情報なし）" in text for text in caption_texts)
