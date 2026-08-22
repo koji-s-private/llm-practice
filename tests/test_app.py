@@ -1966,11 +1966,11 @@ def test_selecting_past_thread_restores_history_and_rebuilds_agent(monkeypatch):
     monkeypatch.setattr(
         memory,
         "load_conversation",
-        lambda thread_id: [
-            {"question": "過去の質問", "answer": "過去の回答", "created_at": datetime(2024, 1, 1, 9, 0)}
-        ]
-        if thread_id == "thread-past"
-        else [],
+        lambda thread_id: (
+            [{"question": "過去の質問", "answer": "過去の回答", "created_at": datetime(2024, 1, 1, 9, 0)}]
+            if thread_id == "thread-past"
+            else []
+        ),
     )
 
     built_thread_ids = []
@@ -2016,11 +2016,11 @@ def test_selecting_currently_active_thread_again_does_not_rebuild_agent(monkeypa
     monkeypatch.setattr(
         memory,
         "load_conversation",
-        lambda thread_id: [
-            {"question": "過去の質問", "answer": "過去の回答", "created_at": datetime(2024, 1, 1, 9, 0)}
-        ]
-        if thread_id == "thread-past"
-        else [],
+        lambda thread_id: (
+            [{"question": "過去の質問", "answer": "過去の回答", "created_at": datetime(2024, 1, 1, 9, 0)}]
+            if thread_id == "thread-past"
+            else []
+        ),
     )
 
     built_thread_ids = []
@@ -2066,11 +2066,11 @@ def test_start_new_chat_resets_thread_selector_and_does_not_pull_back_to_old_thr
     monkeypatch.setattr(
         memory,
         "load_conversation",
-        lambda thread_id: [
-            {"question": "過去の質問", "answer": "過去の回答", "created_at": datetime(2024, 1, 1, 9, 0)}
-        ]
-        if thread_id == "thread-past"
-        else [],
+        lambda thread_id: (
+            [{"question": "過去の質問", "answer": "過去の回答", "created_at": datetime(2024, 1, 1, 9, 0)}]
+            if thread_id == "thread-past"
+            else []
+        ),
     )
 
     id_counter = {"n": 0}
@@ -2357,11 +2357,11 @@ def test_switch_thread_build_agent_failure_sets_agent_none(monkeypatch):
     monkeypatch.setattr(
         memory,
         "load_conversation",
-        lambda thread_id: [
-            {"question": "過去の質問", "answer": "過去の回答", "created_at": datetime(2024, 1, 1, 9, 0)}
-        ]
-        if thread_id == "thread-past"
-        else [],
+        lambda thread_id: (
+            [{"question": "過去の質問", "answer": "過去の回答", "created_at": datetime(2024, 1, 1, 9, 0)}]
+            if thread_id == "thread-past"
+            else []
+        ),
     )
 
     at = _run_app()
@@ -2808,11 +2808,11 @@ def test_switching_to_past_thread_with_legacy_ai_message_does_not_crash(monkeypa
     monkeypatch.setattr(
         memory,
         "load_conversation",
-        lambda thread_id: [
-            {"question": "過去の質問", "answer": "過去の回答", "created_at": datetime(2024, 1, 1, 9, 0)}
-        ]
-        if thread_id == "thread-past"
-        else [],
+        lambda thread_id: (
+            [{"question": "過去の質問", "answer": "過去の回答", "created_at": datetime(2024, 1, 1, 9, 0)}]
+            if thread_id == "thread-past"
+            else []
+        ),
     )
 
     at = _run_app()
@@ -2904,11 +2904,11 @@ def test_answer_badge_shows_general_knowledge_for_legacy_message_without_sources
     monkeypatch.setattr(
         memory,
         "load_conversation",
-        lambda thread_id: [
-            {"question": "過去の質問", "answer": "過去の回答", "created_at": datetime(2024, 1, 1, 9, 0)}
-        ]
-        if thread_id == "thread-past"
-        else [],
+        lambda thread_id: (
+            [{"question": "過去の質問", "answer": "過去の回答", "created_at": datetime(2024, 1, 1, 9, 0)}]
+            if thread_id == "thread-past"
+            else []
+        ),
     )
 
     at = _run_app()
@@ -3016,9 +3016,11 @@ def test_switching_to_past_thread_from_different_day_shows_date_in_caption(monke
     monkeypatch.setattr(
         memory,
         "load_conversation",
-        lambda thread_id: [{"question": "過去の質問", "answer": "過去の回答", "created_at": past_created_at}]
-        if thread_id == "thread-past"
-        else [],
+        lambda thread_id: (
+            [{"question": "過去の質問", "answer": "過去の回答", "created_at": past_created_at}]
+            if thread_id == "thread-past"
+            else []
+        ),
     )
 
     at = _run_app()
@@ -3052,9 +3054,11 @@ def test_switching_to_past_thread_from_today_shows_time_only_caption(monkeypatch
     monkeypatch.setattr(
         memory,
         "load_conversation",
-        lambda thread_id: [{"question": "過去の質問", "answer": "過去の回答", "created_at": created_at}]
-        if thread_id == "thread-past"
-        else [],
+        lambda thread_id: (
+            [{"question": "過去の質問", "answer": "過去の回答", "created_at": created_at}]
+            if thread_id == "thread-past"
+            else []
+        ),
     )
 
     at = _run_app()

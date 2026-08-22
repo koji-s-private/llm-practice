@@ -256,9 +256,7 @@ def test_load_conversation_extracts_question_and_answer(tmp_path, monkeypatch):
 
     conversations = memory.load_conversation("thread-a")
 
-    assert conversations == [
-        {"question": "質問内容", "answer": "回答内容", "created_at": datetime(2024, 1, 1, 9, 0)}
-    ]
+    assert conversations == [{"question": "質問内容", "answer": "回答内容", "created_at": datetime(2024, 1, 1, 9, 0)}]
 
 
 def test_load_conversation_created_at_has_expected_keys(tmp_path, monkeypatch):
@@ -320,9 +318,7 @@ def test_load_conversation_returns_empty_strings_when_content_malformed(tmp_path
 
     conversations = memory.load_conversation("thread-a")
 
-    assert conversations == [
-        {"question": "", "answer": "", "created_at": datetime(2024, 1, 1, 9, 0)}
-    ]
+    assert conversations == [{"question": "", "answer": "", "created_at": datetime(2024, 1, 1, 9, 0)}]
 
 
 def test_load_conversation_ignores_non_markdown_files(tmp_path, monkeypatch):
@@ -380,9 +376,7 @@ def test_load_conversation_question_containing_answer_heading_is_restored_correc
 
     conversations = memory.load_conversation("thread-a")
 
-    assert conversations == [
-        {"question": question, "answer": answer, "created_at": memory._parse_created_at(path)}
-    ]
+    assert conversations == [{"question": question, "answer": answer, "created_at": memory._parse_created_at(path)}]
 
 
 def test_load_conversation_answer_containing_question_heading_is_restored_correctly(tmp_path, monkeypatch):
@@ -394,9 +388,7 @@ def test_load_conversation_answer_containing_question_heading_is_restored_correc
 
     conversations = memory.load_conversation("thread-a")
 
-    assert conversations == [
-        {"question": question, "answer": answer, "created_at": memory._parse_created_at(path)}
-    ]
+    assert conversations == [{"question": question, "answer": answer, "created_at": memory._parse_created_at(path)}]
 
 
 def test_load_conversation_both_question_and_answer_contain_heading_like_strings(tmp_path, monkeypatch):
@@ -409,9 +401,7 @@ def test_load_conversation_both_question_and_answer_contain_heading_like_strings
 
     conversations = memory.load_conversation("thread-a")
 
-    assert conversations == [
-        {"question": question, "answer": answer, "created_at": memory._parse_created_at(path)}
-    ]
+    assert conversations == [{"question": question, "answer": answer, "created_at": memory._parse_created_at(path)}]
 
 
 def test_list_threads_first_question_correct_when_question_contains_answer_heading(tmp_path, monkeypatch):
@@ -578,9 +568,7 @@ class TestLoadConversationThreadIdValidation:
 
         conversations = memory.load_conversation(thread_id)
 
-        assert conversations == [
-            {"question": "質問", "answer": "回答", "created_at": datetime(2024, 1, 1, 9, 0)}
-        ]
+        assert conversations == [{"question": "質問", "answer": "回答", "created_at": datetime(2024, 1, 1, 9, 0)}]
 
     def test_accepts_hyphen_and_underscore_thread_id(self, tmp_path, monkeypatch):
         monkeypatch.setattr(memory, "CONVERSATIONS_DIR", tmp_path)
@@ -588,9 +576,7 @@ class TestLoadConversationThreadIdValidation:
 
         conversations = memory.load_conversation("my-thread_01")
 
-        assert conversations == [
-            {"question": "質問", "answer": "回答", "created_at": datetime(2024, 1, 1, 9, 0)}
-        ]
+        assert conversations == [{"question": "質問", "answer": "回答", "created_at": datetime(2024, 1, 1, 9, 0)}]
 
     def test_rejects_path_traversal_thread_id(self, tmp_path, monkeypatch):
         monkeypatch.setattr(memory, "CONVERSATIONS_DIR", tmp_path)
