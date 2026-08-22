@@ -1966,7 +1966,11 @@ def test_selecting_past_thread_restores_history_and_rebuilds_agent(monkeypatch):
     monkeypatch.setattr(
         memory,
         "load_conversation",
-        lambda thread_id: [{"question": "過去の質問", "answer": "過去の回答"}] if thread_id == "thread-past" else [],
+        lambda thread_id: [
+            {"question": "過去の質問", "answer": "過去の回答", "created_at": datetime(2024, 1, 1, 9, 0)}
+        ]
+        if thread_id == "thread-past"
+        else [],
     )
 
     built_thread_ids = []
@@ -2012,7 +2016,11 @@ def test_selecting_currently_active_thread_again_does_not_rebuild_agent(monkeypa
     monkeypatch.setattr(
         memory,
         "load_conversation",
-        lambda thread_id: [{"question": "過去の質問", "answer": "過去の回答"}] if thread_id == "thread-past" else [],
+        lambda thread_id: [
+            {"question": "過去の質問", "answer": "過去の回答", "created_at": datetime(2024, 1, 1, 9, 0)}
+        ]
+        if thread_id == "thread-past"
+        else [],
     )
 
     built_thread_ids = []
@@ -2058,7 +2066,11 @@ def test_start_new_chat_resets_thread_selector_and_does_not_pull_back_to_old_thr
     monkeypatch.setattr(
         memory,
         "load_conversation",
-        lambda thread_id: [{"question": "過去の質問", "answer": "過去の回答"}] if thread_id == "thread-past" else [],
+        lambda thread_id: [
+            {"question": "過去の質問", "answer": "過去の回答", "created_at": datetime(2024, 1, 1, 9, 0)}
+        ]
+        if thread_id == "thread-past"
+        else [],
     )
 
     id_counter = {"n": 0}
@@ -2345,7 +2357,11 @@ def test_switch_thread_build_agent_failure_sets_agent_none(monkeypatch):
     monkeypatch.setattr(
         memory,
         "load_conversation",
-        lambda thread_id: [{"question": "過去の質問", "answer": "過去の回答"}] if thread_id == "thread-past" else [],
+        lambda thread_id: [
+            {"question": "過去の質問", "answer": "過去の回答", "created_at": datetime(2024, 1, 1, 9, 0)}
+        ]
+        if thread_id == "thread-past"
+        else [],
     )
 
     at = _run_app()
@@ -2792,7 +2808,11 @@ def test_switching_to_past_thread_with_legacy_ai_message_does_not_crash(monkeypa
     monkeypatch.setattr(
         memory,
         "load_conversation",
-        lambda thread_id: [{"question": "過去の質問", "answer": "過去の回答"}] if thread_id == "thread-past" else [],
+        lambda thread_id: [
+            {"question": "過去の質問", "answer": "過去の回答", "created_at": datetime(2024, 1, 1, 9, 0)}
+        ]
+        if thread_id == "thread-past"
+        else [],
     )
 
     at = _run_app()
@@ -2884,7 +2904,11 @@ def test_answer_badge_shows_general_knowledge_for_legacy_message_without_sources
     monkeypatch.setattr(
         memory,
         "load_conversation",
-        lambda thread_id: [{"question": "過去の質問", "answer": "過去の回答"}] if thread_id == "thread-past" else [],
+        lambda thread_id: [
+            {"question": "過去の質問", "answer": "過去の回答", "created_at": datetime(2024, 1, 1, 9, 0)}
+        ]
+        if thread_id == "thread-past"
+        else [],
     )
 
     at = _run_app()
@@ -2893,3 +2917,171 @@ def test_answer_badge_shows_general_knowledge_for_legacy_message_without_sources
     assert at.exception == []
     caption_texts = [c.value for c in at.caption]
     assert any("🧠 一般知識による回答（ドキュメントに該当情報なし）" in text for text in caption_texts)
+
+
+# --- 16. チャット送信・過去スレッド復元時のタイムスタンプ表示 ---
+
+
+def test_format_message_timestamp_same_day_returns_time_only():
+    """正常系: 今日の日時を渡すと、日付を省いた"HH:MM"形式の文字列を返す。"""
+    from datetime import datetime
+
+    import app
+
+    today = datetime.now().date()
+    timestamp = datetime(today.year, today.month, today.day, 14, 32)
+
+    assert app._format_message_timestamp(timestamp) == "14:32"
+
+
+def test_format_message_timestamp_different_day_returns_date_and_time():
+    """正常系: 今日と異なる日付を渡すと、"MM/DD HH:MM"形式で日付も添えて返す。"""
+    from datetime import datetime, timedelta
+
+    import app
+
+    yesterday = datetime.now().date() - timedelta(days=1)
+    timestamp = datetime(yesterday.year, yesterday.month, yesterday.day, 7, 29)
+
+    expected = f"{yesterday.month:02d}/{yesterday.day:02d} 07:29"
+    assert app._format_message_timestamp(timestamp) == expected
+
+
+def test_format_message_timestamp_none_returns_none():
+    """境界値: timestampがNone（旧形式のメッセージ等）の場合はNoneを返し、例外は送出しない。"""
+    import app
+
+    assert app._format_message_timestamp(None) is None
+
+
+def test_format_message_timestamp_midnight_boundary_is_formatted_correctly():
+    """境界値: 0時0分ちょうどでも例外なく"00:00"として整形される。"""
+    from datetime import datetime
+
+    import app
+
+    today = datetime.now().date()
+    timestamp = datetime(today.year, today.month, today.day, 0, 0)
+
+    assert app._format_message_timestamp(timestamp) == "00:00"
+
+
+def test_chat_send_shows_timestamp_caption_for_user_and_assistant_messages(monkeypatch):
+    """正常系: チャット送信直後、質問・回答それぞれの直前に当日分の"HH:MM"形式の
+    タイムスタンプキャプションが表示される。"""
+    import re
+
+    at = _run_app()
+    at = at.chat_input[0].set_value("質問です").run()
+
+    assert at.exception == []
+    caption_texts = [c.value for c in at.caption]
+    hhmm_captions = [c for c in caption_texts if re.fullmatch(r"\d{2}:\d{2}", c)]
+    assert len(hhmm_captions) == 2
+
+
+def test_chat_send_persists_timestamp_in_session_state_messages(monkeypatch):
+    """正常系: 送信したメッセージのadditional_kwargs["timestamp"]に、送信時刻(datetime)が
+    質問・回答の両方に同じ値で保持される。"""
+    at = _run_app()
+    at = at.chat_input[0].set_value("質問です").run()
+
+    assert at.exception == []
+    messages = at.session_state["messages"]
+    assert len(messages) == 2
+    human_ts = messages[0].additional_kwargs.get("timestamp")
+    ai_ts = messages[1].additional_kwargs.get("timestamp")
+    assert human_ts is not None
+    assert human_ts == ai_ts
+
+
+def test_switching_to_past_thread_from_different_day_shows_date_in_caption(monkeypatch):
+    """正常系: 日付をまたぐ過去スレッドを復元すると、"MM/DD HH:MM"形式で
+    日付付きのタイムスタンプが表示される。"""
+    from datetime import datetime
+
+    past_created_at = datetime(2024, 1, 1, 7, 29)
+    monkeypatch.setattr(
+        memory,
+        "list_threads",
+        lambda: [
+            {
+                "thread_id": "thread-past",
+                "created_at": past_created_at,
+                "first_question": "過去の質問",
+                "count": 1,
+            }
+        ],
+    )
+    monkeypatch.setattr(
+        memory,
+        "load_conversation",
+        lambda thread_id: [{"question": "過去の質問", "answer": "過去の回答", "created_at": past_created_at}]
+        if thread_id == "thread-past"
+        else [],
+    )
+
+    at = _run_app()
+    at = at.sidebar.selectbox[0].select("thread-past").run()
+
+    assert at.exception == []
+    caption_texts = [c.value for c in at.caption]
+    assert "01/01 07:29" in caption_texts
+
+
+def test_switching_to_past_thread_from_today_shows_time_only_caption(monkeypatch):
+    """境界値: 復元した過去スレッドの会話ログが今日の日付の場合、
+    日付を省いた"HH:MM"形式で表示される（同日スレッドの過去メッセージでも
+    日付表示にはならない）。"""
+    from datetime import datetime
+
+    today = datetime.now().date()
+    created_at = datetime(today.year, today.month, today.day, 8, 15)
+    monkeypatch.setattr(
+        memory,
+        "list_threads",
+        lambda: [
+            {
+                "thread_id": "thread-past",
+                "created_at": created_at,
+                "first_question": "過去の質問",
+                "count": 1,
+            }
+        ],
+    )
+    monkeypatch.setattr(
+        memory,
+        "load_conversation",
+        lambda thread_id: [{"question": "過去の質問", "answer": "過去の回答", "created_at": created_at}]
+        if thread_id == "thread-past"
+        else [],
+    )
+
+    at = _run_app()
+    at = at.sidebar.selectbox[0].select("thread-past").run()
+
+    assert at.exception == []
+    caption_texts = [c.value for c in at.caption]
+    assert "08:15" in caption_texts
+
+
+def test_render_loop_message_without_timestamp_key_shows_no_caption_and_does_not_crash():
+    """異常系（後方互換）: additional_kwargsに"timestamp"キーを持たない旧形式の
+    メッセージがセッションに残っていても、タイムスタンプキャプションなしで描画され
+    クラッシュしない。"""
+    import re
+
+    at = _run_app()
+    at.session_state["messages"] = [
+        HumanMessage(content="旧形式の質問"),
+        AIMessage(content="旧形式の回答"),
+    ]
+    at = at.run()
+
+    assert at.exception == []
+    markdown_texts = [m.value for m in at.markdown]
+    assert "旧形式の質問" in markdown_texts
+    assert "旧形式の回答" in markdown_texts
+    caption_texts = [c.value for c in at.caption]
+    assert not any(re.fullmatch(r"\d{2}:\d{2}", c) for c in caption_texts)
+    assert not any(re.fullmatch(r"\d{2}/\d{2} \d{2}:\d{2}", c) for c in caption_texts)

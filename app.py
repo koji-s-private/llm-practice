@@ -249,6 +249,18 @@ def _start_new_chat() -> None:
     st.session_state.pop("thread_selector", None)
 
 
+def _format_message_timestamp(timestamp: datetime | None) -> str | None:
+    """チャット画面に添えるタイムスタンプ表示を作る。timestampが無い場合はNoneを返す。
+
+    同じ日なら"14:32"、日をまたぐ場合は日付も添えて"07/29 14:32"のように表示する。
+    """
+    if timestamp is None:
+        return None
+    if timestamp.date() == datetime.now().date():
+        return timestamp.strftime("%H:%M")
+    return timestamp.strftime("%m/%d %H:%M")
+
+
 def _format_thread_label(thread: dict) -> str:
     """過去スレッド選択UI用に、作成日時と最初の質問の要約を組み合わせたラベルを作る。"""
     timestamp = thread["created_at"].strftime("%Y-%m-%d %H:%M")
@@ -335,10 +347,11 @@ def _switch_thread(thread_id: str) -> None:
     st.session_state.thread_id = thread_id
     messages = []
     for turn in load_conversation(thread_id):
+        timestamp_kwargs = {"timestamp": turn["created_at"]}
         if turn["question"]:
-            messages.append(HumanMessage(content=turn["question"]))
+            messages.append(HumanMessage(content=turn["question"], additional_kwargs=timestamp_kwargs))
         if turn["answer"]:
-            messages.append(AIMessage(content=turn["answer"]))
+            messages.append(AIMessage(content=turn["answer"], additional_kwargs=timestamp_kwargs))
     st.session_state.messages = messages
     st.session_state.agent = _build_agent_safely(thread_id)
 
@@ -505,6 +518,9 @@ with st.sidebar:
 for message in st.session_state.messages:
     role = "user" if isinstance(message, HumanMessage) else "assistant"
     with st.chat_message(role):
+        timestamp_label = _format_message_timestamp(message.additional_kwargs.get("timestamp"))
+        if timestamp_label:
+            st.caption(timestamp_label)
         st.markdown(message.content)
         if isinstance(message, AIMessage):
             # additional_kwargsはAPI送信時には未知キーとして無視されるため、ここに参照元を
@@ -514,12 +530,15 @@ for message in st.session_state.messages:
 user_input = st.chat_input("資料について気になることを聞いてみましょう")
 
 if user_input:
+    turn_timestamp = datetime.now()
     with st.chat_message("user"):
+        st.caption(_format_message_timestamp(turn_timestamp))
         st.markdown(user_input)
 
     answer = None
     sources: list = []
     with st.chat_message("assistant"):
+        st.caption(_format_message_timestamp(turn_timestamp))
         if st.session_state.agent is None:
             st.error(
                 "RAGエージェントが利用できないため、回答を生成できません。ページを再読み込みして再度お試しください。"
@@ -597,9 +616,14 @@ if user_input:
             st.error(_format_invoke_error_message(e))
 
     if answer is not None:
-        st.session_state.messages.append(HumanMessage(content=user_input))
-        # 参照元は再描画ループでも表示できるよう、additional_kwargsに載せてメッセージ本体と一緒に保持する。
-        st.session_state.messages.append(AIMessage(content=answer, additional_kwargs={"sources": sources}))
+        st.session_state.messages.append(
+            HumanMessage(content=user_input, additional_kwargs={"timestamp": turn_timestamp})
+        )
+        # 参照元・タイムスタンプは再描画ループでも表示できるよう、additional_kwargsに載せて
+        # メッセージ本体と一緒に保持する。
+        st.session_state.messages.append(
+            AIMessage(content=answer, additional_kwargs={"sources": sources, "timestamp": turn_timestamp})
+        )
 
         # 会話を自動でナレッジ化（このスレッド専用でローカル保存し、全件走査するsync_data_dir()
         # ではなく保存した1ファイルだけをその場でDB反映）。sourcesが空＝根拠なしの一般知識回答

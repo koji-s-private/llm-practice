@@ -203,7 +203,7 @@ def load_conversation(thread_id: str) -> list[dict]:
     """指定スレッドの会話ログを時系列順（古い→新しい）に読み込んで返す。
 
     過去スレッドを再開する際、チャット画面に会話履歴を再現するために使う。
-    各要素は {"question": str, "answer": str} の形式。
+    各要素は {"question": str, "answer": str, "created_at": datetime} の形式。
     """
     thread_dir = CONVERSATIONS_DIR / _validate_thread_id(thread_id)
     if not thread_dir.exists():
@@ -215,7 +215,7 @@ def load_conversation(thread_id: str) -> list[dict]:
         if content is None:
             continue
         question, answer = _extract_qa(content)
-        conversations.append({"question": question, "answer": answer})
+        conversations.append({"question": question, "answer": answer, "created_at": _parse_created_at(f)})
     return conversations
 
 
