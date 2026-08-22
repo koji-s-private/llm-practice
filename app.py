@@ -312,10 +312,17 @@ def _render_indexed_file_list() -> None:
                 st.rerun()
 
 
-def _render_sources_expander(sources: list) -> None:
-    """検索でヒットした参照元ドキュメントを、回答直後の描画・過去ターンの再描画の両方で使う共通の表示。"""
+def _render_answer_provenance(sources: list) -> None:
+    """回答がドキュメント根拠か一般知識かのバッジと、参照元expanderを回答直後・過去ターン再描画の両方で表示する。
+
+    sourcesが空か否かをそのまま判定に使う（save_conversation()のis_fallback判定と同じ考え方）ため、
+    additional_kwargs["sources"]としてメッセージ本体に保持済みのsourcesを渡せば、
+    再描画時も追加の状態を持たずに同じ判定結果を再現できる。
+    """
     if not sources:
+        st.caption("🧠 一般知識による回答（ドキュメントに該当情報なし）")
         return
+    st.caption("🔍 ドキュメントに基づく回答")
     with st.expander("参照した箇所を見る"):
         for i, doc in enumerate(sources, start=1):
             label = _format_source_label(doc.metadata)
@@ -502,7 +509,7 @@ for message in st.session_state.messages:
         if isinstance(message, AIMessage):
             # additional_kwargsはAPI送信時には未知キーとして無視されるため、ここに参照元を
             # 積んでおいても後続のagent.stream()への影響なくセッション内で保持できる。
-            _render_sources_expander(message.additional_kwargs.get("sources") or [])
+            _render_answer_provenance(message.additional_kwargs.get("sources") or [])
 
 user_input = st.chat_input("資料について気になることを聞いてみましょう")
 
@@ -580,7 +587,7 @@ if user_input:
             # プレースホルダーが残っていれば消す。
             status_placeholder.empty()
 
-            _render_sources_expander(sources)
+            _render_answer_provenance(sources)
         except Exception as e:
             status_placeholder.empty()
             # ストリーム途中（一部チャンクをyield済み）で例外が発生した場合に、
