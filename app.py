@@ -23,6 +23,7 @@ Google Driveとの連携（設定方法はdocs/google-drive-setup.md参照）を
 このアプリ自身が外部・クラウドへ追加送信することはありません。
 """
 
+from datetime import datetime
 from pathlib import Path
 
 import streamlit as st
@@ -255,6 +256,24 @@ def _format_thread_label(thread: dict) -> str:
     return f"{timestamp}｜{snippet}（{thread['count']}件）"
 
 
+def _conversation_to_markdown(messages: list, thread_id: str) -> str:
+    """現在のスレッドの会話履歴（HumanMessage/AIMessage）をエクスポート用のMarkdownに整形する。"""
+    lines = [
+        "# 会話ログ",
+        "",
+        f"- スレッドID: {thread_id}",
+        f"- エクスポート日時: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}",
+        "",
+    ]
+    for i, message in enumerate(messages, start=1):
+        role = "質問" if isinstance(message, HumanMessage) else "回答"
+        lines.append(f"## {role} {(i + 1) // 2}")
+        lines.append("")
+        lines.append(message.content)
+        lines.append("")
+    return "\n".join(lines)
+
+
 def _render_indexed_file_list() -> None:
     """インデックス済みファイルの一覧を表示し、各ファイルの削除ボタンから個別削除できるようにする。
 
@@ -406,6 +425,20 @@ with st.sidebar:
         )
         st.caption(f"この会話で保存済みのやりとり: {conversation_count(st.session_state.thread_id)}件")
         st.caption(f"会話ID（内部識別用）: `{st.session_state.thread_id}`")
+
+    st.divider()
+    st.subheader("📥 会話のエクスポート")
+    st.caption("現在表示中のスレッドの質問・回答をMarkdownファイルとしてダウンロードします。")
+    has_messages = bool(st.session_state.messages)
+    export_filename = f"conversation_{st.session_state.thread_id}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.md"
+    st.download_button(
+        "📥 この会話をダウンロード",
+        data=_conversation_to_markdown(st.session_state.messages, st.session_state.thread_id) if has_messages else "",
+        file_name=export_filename,
+        mime="text/markdown",
+        disabled=not has_messages,
+        use_container_width=True,
+    )
 
     st.divider()
     st.subheader("📂 ドキュメント管理")

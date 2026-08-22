@@ -1605,12 +1605,12 @@ def test_doclore_branding_title_and_tagline_are_displayed():
 def test_sidebar_document_management_heading_has_folder_icon():
     """境界値: サイドバーの「ドキュメント管理」見出しに📂アイコンが付与され、
     かつ既存の見出しテキスト自体は変わっていない（絵文字の付け忘れ・文言の
-    意図しない変更の両方を検知できるようにする）。「💬 過去の会話」見出しが
-    追加された後も、サイドバー内の見出しの並び順・両方の文言が保たれていることを確認する。"""
+    意図しない変更の両方を検知できるようにする）。「💬 過去の会話」「📥 会話のエクスポート」
+    見出しが追加された後も、サイドバー内の見出しの並び順・各文言が保たれていることを確認する。"""
     at = _run_app()
 
     headings = [s.value for s in at.sidebar.subheader]
-    assert headings == ["💬 過去の会話", "📂 ドキュメント管理"]
+    assert headings == ["💬 過去の会話", "📥 会話のエクスポート", "📂 ドキュメント管理"]
 
 
 def test_chat_input_placeholder_uses_renewed_wording():
@@ -2479,7 +2479,171 @@ def test_provider_fallback_warning_shown_without_reason_when_reason_missing(monk
     assert "anthropic" in fallback_warnings[0]
 
 
-# --- 13. 過去ターンの参照元expanderの永続化（additional_kwargs["sources"]） ---
+# --- 13. サイドバーの会話エクスポート（ダウンロード）ボタン ---
+
+
+def test_conversation_to_markdown_formats_question_and_answer_pairs():
+    """正常系: 質問・回答のペアがMarkdownの見出し付きで、スレッドIDと共に整形される。"""
+    import app
+
+    messages = [
+        HumanMessage(content="1つ目の質問"),
+        AIMessage(content="1つ目の回答"),
+        HumanMessage(content="2つ目の質問"),
+        AIMessage(content="2つ目の回答"),
+    ]
+
+    markdown = app._conversation_to_markdown(messages, "thread-test")
+
+    assert "スレッドID: thread-test" in markdown
+    assert "## 質問 1\n\n1つ目の質問" in markdown
+    assert "## 回答 1\n\n1つ目の回答" in markdown
+    assert "## 質問 2\n\n2つ目の質問" in markdown
+    assert "## 回答 2\n\n2つ目の回答" in markdown
+
+
+def test_conversation_to_markdown_empty_messages_still_includes_thread_id():
+    """境界値: メッセージが0件でも例外にならず、スレッドIDのみ含むMarkdownを返す。"""
+    import app
+
+    markdown = app._conversation_to_markdown([], "thread-test")
+
+    assert "スレッドID: thread-test" in markdown
+    assert "## 質問" not in markdown
+
+
+def test_export_download_button_disabled_when_no_messages():
+    """正常系: 会話がまだ始まっていない（messagesが空）場合、エクスポートボタンは無効化される。"""
+    at = _run_app()
+
+    assert at.exception == []
+    buttons = [b for b in at.sidebar.download_button if "会話をダウンロード" in b.label]
+    assert len(buttons) == 1
+    assert buttons[0].proto.disabled is True
+
+
+def test_export_download_button_enabled_after_chat(monkeypatch):
+    """正常系: チャットのやり取りが発生すると、エクスポートボタンが有効化される。"""
+    fake_agent = _FakeAgent(answer="これが回答です")
+    monkeypatch.setattr(rag_chain, "build_agent", lambda thread_id=None: fake_agent)
+
+    at = _run_app()
+    at.chat_input[0].set_value("質問です").run()
+    # サイドバーはチャット処理より前に描画されるため、その場の実行では
+    # まだ更新前のmessagesを参照している。次のスクリプト再実行で反映を確認する。
+    at = at.run()
+
+    assert at.exception == []
+    buttons = [b for b in at.sidebar.download_button if "会話をダウンロード" in b.label]
+    assert len(buttons) == 1
+    assert buttons[0].proto.disabled is False
+
+
+def test_conversation_to_markdown_single_pair_is_labeled_1():
+    """境界値: 質問・回答が1往復のみ（メッセージ2件）の最小構成でも正しく整形される。"""
+    import app
+
+    messages = [HumanMessage(content="質問"), AIMessage(content="回答")]
+
+    markdown = app._conversation_to_markdown(messages, "thread-min")
+    lines = markdown.splitlines()
+
+    assert "- スレッドID: thread-min" in lines
+    assert lines.count("## 質問 1") == 1
+    assert lines.count("## 回答 1") == 1
+    assert "## 質問 2" not in markdown
+    assert "## 回答 2" not in markdown
+    assert markdown.index("## 質問 1") < markdown.index("## 回答 1")
+
+
+def test_conversation_to_markdown_many_pairs_numbers_sequentially():
+    """境界値: 10往復（20件）の大量メッセージでも見出し番号が1件ずつずれずに連番になる。"""
+    import app
+
+    messages = []
+    for i in range(1, 11):
+        messages.append(HumanMessage(content=f"質問その{i}"))
+        messages.append(AIMessage(content=f"回答その{i}"))
+
+    markdown = app._conversation_to_markdown(messages, "thread-many")
+
+    for i in range(1, 11):
+        assert f"## 質問 {i}\n\n質問その{i}" in markdown
+        assert f"## 回答 {i}\n\n回答その{i}" in markdown
+    # 番号が重複・飛び番になっていないことも確認する（「質問 1」が「質問 10」に部分一致しないよう空白込みで数える）。
+    assert markdown.count("## 質問 1\n") == 1
+    assert markdown.count("## 回答 1\n") == 1
+
+
+def test_conversation_to_markdown_preserves_markdown_syntax_and_newlines_verbatim():
+    """異常系（想定外入力）: メッセージ本文にMarkdown記法や改行が含まれてもエスケープされず、
+    そのまま保持される（意図的にエスケープしない実装のため、崩れず素通しされることを確認する）。"""
+    import app
+
+    tricky_question = "見出し風の質問です\n## 回答 99\n- 箇条書きも含む"
+    tricky_answer = "コードブロックと**強調**を含む回答\n```python\nprint('hi')\n```\n[リンク](https://example.com)"
+    messages = [HumanMessage(content=tricky_question), AIMessage(content=tricky_answer)]
+
+    markdown = app._conversation_to_markdown(messages, "thread-tricky")
+
+    lines = markdown.splitlines()
+    # "## 質問 1" という見出し行自体は1つだけ存在し、本文中に紛れ込んだ
+    # "## 回答 99" のような文字列が誤って見出し扱いされていないことを確認する。
+    assert lines.count("## 質問 1") == 1
+    assert lines.count("## 回答 1") == 1
+    assert tricky_question in markdown
+    assert tricky_answer in markdown
+
+
+def test_conversation_to_markdown_export_timestamp_is_parseable():
+    """境界値: エクスポート日時の行が %Y-%m-%d %H:%M:%S 形式でパース可能であることを確認する。"""
+    from datetime import datetime
+
+    import app
+
+    markdown = app._conversation_to_markdown([], "thread-ts")
+
+    timestamp_line = next(line for line in markdown.splitlines() if line.startswith("- エクスポート日時: "))
+    timestamp_str = timestamp_line.removeprefix("- エクスポート日時: ")
+    # フォーマット不一致なら ValueError が送出されテストが失敗する。
+    datetime.strptime(timestamp_str, "%Y-%m-%d %H:%M:%S")
+
+
+def test_conversation_to_markdown_with_realistic_thread_id(monkeypatch):
+    """正常系: memory.new_thread_id() が生成する実際の形式（8桁hex）のスレッドIDでも問題なく整形される。
+
+    memory.new_thread_id は全テスト共通のautouseフィクスチャで固定値にフェイクされているため、
+    ここでは一時的に元の実装へ戻して実際の生成形式を使う。
+    """
+    import app
+
+    monkeypatch.undo()
+    thread_id = memory.new_thread_id()
+
+    markdown = app._conversation_to_markdown([HumanMessage(content="質問")], thread_id)
+
+    assert f"スレッドID: {thread_id}" in markdown
+    assert len(thread_id) == 8
+
+
+def test_conversation_to_markdown_trailing_unanswered_question_numbered_correctly():
+    """境界値: 最後の質問に回答がまだ無い（奇数件）場合でも、末尾の質問の番号がずれない。"""
+    import app
+
+    messages = [
+        HumanMessage(content="質問1"),
+        AIMessage(content="回答1"),
+        HumanMessage(content="質問2"),
+    ]
+
+    markdown = app._conversation_to_markdown(messages, "thread-odd")
+
+    assert "## 質問 1\n\n質問1" in markdown
+    assert "## 回答 1\n\n回答1" in markdown
+    assert "## 質問 2\n\n質問2" in markdown
+
+
+# --- 14. 過去ターンの参照元expanderの永続化（additional_kwargs["sources"]） ---
 
 
 class _FakeAgentPerTurn:
