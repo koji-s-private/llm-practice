@@ -2597,9 +2597,9 @@ def test_conversation_to_markdown_preserves_markdown_syntax_and_newlines_verbati
 
 def test_conversation_to_markdown_export_timestamp_is_parseable():
     """境界値: エクスポート日時の行が %Y-%m-%d %H:%M:%S 形式でパース可能であることを確認する。"""
-    import app
-
     from datetime import datetime
+
+    import app
 
     markdown = app._conversation_to_markdown([], "thread-ts")
 
