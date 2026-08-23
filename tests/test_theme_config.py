@@ -111,3 +111,12 @@ def test_set_page_config_uses_doclore_branding():
     assert kwargs["page_icon"] == "📖"
     assert kwargs["layout"] == "centered"
     assert "llm-practice" not in kwargs["page_title"]
+
+
+def test_set_page_config_expands_sidebar_by_default():
+    """正常系: スマートフォンなど狭い画面幅でもサイドバーの操作
+    （新しい会話・ドキュメント管理等）が既定で隠れてしまわないよう、
+    `initial_sidebar_state` は Streamlit のデフォルト値 "auto" ではなく
+    明示的に "expanded" が指定されている。"""
+    kwargs = _load_set_page_config_kwargs()
+    assert kwargs["initial_sidebar_state"] == "expanded"

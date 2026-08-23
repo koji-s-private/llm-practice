@@ -58,10 +58,13 @@ from source_formatting import format_snippet as _format_snippet
 from source_formatting import format_source_label as _format_source_label
 
 # 配色・フォントは .streamlit/config.toml のカスタムテーマで設定している。
+# initial_sidebar_state="expanded"は、デフォルト"auto"だと狭い画面幅で
+# サイドバーが自動的に折りたたまれてしまうのを防ぐための指定。
 st.set_page_config(
     page_title="Doclore | ドキュメントAIアシスタント",
     page_icon="📖",
     layout="centered",
+    initial_sidebar_state="expanded",
 )
 st.title("📖 Doclore")
 st.markdown("##### あなたの資料から、迷わず答えへ。")
@@ -335,11 +338,14 @@ def _render_answer_provenance(sources: list) -> None:
         st.caption("🧠 一般知識による回答（ドキュメントに該当情報なし）")
         return
     st.caption("🔍 ドキュメントに基づく回答")
-    with st.expander("参照した箇所を見る"):
+    # 件数をタイトルに出し、各項目を枠線付きcontainerで区切ることで、
+    # 狭い画面幅でも項目の境界が分かりやすくスクロール・タップしやすくする。
+    with st.expander(f"参照した箇所を見る（{len(sources)}件）"):
         for i, doc in enumerate(sources, start=1):
             label = _format_source_label(doc.metadata)
-            st.markdown(f"**[{i}] {label}**")
-            st.text(_format_snippet(doc.page_content))
+            with st.container(border=True):
+                st.markdown(f"**[{i}] {label}**")
+                st.text(_format_snippet(doc.page_content))
 
 
 def _switch_thread(thread_id: str) -> None:
