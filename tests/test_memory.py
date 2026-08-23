@@ -256,7 +256,35 @@ def test_load_conversation_extracts_question_and_answer(tmp_path, monkeypatch):
 
     conversations = memory.load_conversation("thread-a")
 
-    assert conversations == [{"question": "質問内容", "answer": "回答内容"}]
+    assert conversations == [{"question": "質問内容", "answer": "回答内容", "created_at": datetime(2024, 1, 1, 9, 0)}]
+
+
+def test_load_conversation_created_at_has_expected_keys(tmp_path, monkeypatch):
+    """境界値: load_conversation()の各要素は question/answer/created_at の3キーのみを持つ。"""
+    monkeypatch.setattr(memory, "CONVERSATIONS_DIR", tmp_path)
+    _write_log(tmp_path, "thread-a", "20240101_090000_aaa111_q.md", question="質問内容", answer="回答内容")
+
+    conversations = memory.load_conversation("thread-a")
+
+    assert set(conversations[0].keys()) == {"question", "answer", "created_at"}
+    assert isinstance(conversations[0]["created_at"], datetime)
+
+
+def test_load_conversation_created_at_falls_back_to_mtime_for_unparseable_filename(tmp_path, monkeypatch):
+    """異常系境界値: ファイル名がsave_conversationの命名規則（先頭15文字が日時）と一致しない場合、
+    load_conversation()のcreated_atもstrptime失敗によりファイルのmtimeにフォールバックする
+    （list_threads()と同じ_parse_created_at()を共有していることの確認）。"""
+    monkeypatch.setattr(memory, "CONVERSATIONS_DIR", tmp_path)
+    thread_dir = tmp_path / "thread-a"
+    thread_dir.mkdir()
+    path = thread_dir / "not-a-timestamp-name.md"
+    path.write_text("## 質問\n\n質問\n\n## 回答\n\n回答\n", encoding="utf-8")
+    fixed_mtime = datetime(2023, 5, 5, 12, 30, 0).timestamp()
+    os.utime(path, (fixed_mtime, fixed_mtime))
+
+    conversations = memory.load_conversation("thread-a")
+
+    assert conversations[0]["created_at"] == datetime.fromtimestamp(fixed_mtime)
 
 
 def test_load_conversation_returns_entries_in_chronological_order(tmp_path, monkeypatch):
@@ -290,7 +318,7 @@ def test_load_conversation_returns_empty_strings_when_content_malformed(tmp_path
 
     conversations = memory.load_conversation("thread-a")
 
-    assert conversations == [{"question": "", "answer": ""}]
+    assert conversations == [{"question": "", "answer": "", "created_at": datetime(2024, 1, 1, 9, 0)}]
 
 
 def test_load_conversation_ignores_non_markdown_files(tmp_path, monkeypatch):
@@ -323,13 +351,19 @@ def test_save_conversation_writes_question_and_answer_length_metadata(tmp_path, 
 def test_load_conversation_normal_case_without_heading_like_strings(tmp_path, monkeypatch):
     """正常系（リグレッション確認）: 見出し文字列を含まない通常のケースは従来通り復元される。"""
     monkeypatch.setattr(memory, "CONVERSATIONS_DIR", tmp_path)
-    memory.save_conversation(
+    path = memory.save_conversation(
         question="Pythonとは何ですか？", answer="Pythonはプログラミング言語です。", thread_id="thread-a"
     )
 
     conversations = memory.load_conversation("thread-a")
 
-    assert conversations == [{"question": "Pythonとは何ですか？", "answer": "Pythonはプログラミング言語です。"}]
+    assert conversations == [
+        {
+            "question": "Pythonとは何ですか？",
+            "answer": "Pythonはプログラミング言語です。",
+            "created_at": memory._parse_created_at(path),
+        }
+    ]
 
 
 def test_load_conversation_question_containing_answer_heading_is_restored_correctly(tmp_path, monkeypatch):
@@ -338,11 +372,11 @@ def test_load_conversation_question_containing_answer_heading_is_restored_correc
     monkeypatch.setattr(memory, "CONVERSATIONS_DIR", tmp_path)
     question = "Markdownで## 回答という見出しを書くにはどうすればいいですか？"
     answer = "そのまま `## 回答` と書けば見出しになります。"
-    memory.save_conversation(question=question, answer=answer, thread_id="thread-a")
+    path = memory.save_conversation(question=question, answer=answer, thread_id="thread-a")
 
     conversations = memory.load_conversation("thread-a")
 
-    assert conversations == [{"question": question, "answer": answer}]
+    assert conversations == [{"question": question, "answer": answer, "created_at": memory._parse_created_at(path)}]
 
 
 def test_load_conversation_answer_containing_question_heading_is_restored_correctly(tmp_path, monkeypatch):
@@ -350,11 +384,11 @@ def test_load_conversation_answer_containing_question_heading_is_restored_correc
     monkeypatch.setattr(memory, "CONVERSATIONS_DIR", tmp_path)
     question = "見出しレベル2の書き方を教えてください"
     answer = "例えば `## 質問` のように、行頭に `##` を書くと見出しになります。"
-    memory.save_conversation(question=question, answer=answer, thread_id="thread-a")
+    path = memory.save_conversation(question=question, answer=answer, thread_id="thread-a")
 
     conversations = memory.load_conversation("thread-a")
 
-    assert conversations == [{"question": question, "answer": answer}]
+    assert conversations == [{"question": question, "answer": answer, "created_at": memory._parse_created_at(path)}]
 
 
 def test_load_conversation_both_question_and_answer_contain_heading_like_strings(tmp_path, monkeypatch):
@@ -363,11 +397,11 @@ def test_load_conversation_both_question_and_answer_contain_heading_like_strings
     monkeypatch.setattr(memory, "CONVERSATIONS_DIR", tmp_path)
     question = "会話ログの書式は「## 質問」の次に本文、その後「## 回答」と続きますか？"
     answer = "はい、その通りです。「## 質問」の後に質問本文、「## 回答」の後に回答本文が続きます。"
-    memory.save_conversation(question=question, answer=answer, thread_id="thread-a")
+    path = memory.save_conversation(question=question, answer=answer, thread_id="thread-a")
 
     conversations = memory.load_conversation("thread-a")
 
-    assert conversations == [{"question": question, "answer": answer}]
+    assert conversations == [{"question": question, "answer": answer, "created_at": memory._parse_created_at(path)}]
 
 
 def test_list_threads_first_question_correct_when_question_contains_answer_heading(tmp_path, monkeypatch):
@@ -390,7 +424,9 @@ def test_extract_qa_legacy_format_without_length_metadata_falls_back_to_regex(tm
 
     conversations = memory.load_conversation("thread-a")
 
-    assert conversations == [{"question": "旧形式の質問", "answer": "旧形式の回答"}]
+    assert conversations == [
+        {"question": "旧形式の質問", "answer": "旧形式の回答", "created_at": datetime(2024, 1, 1, 9, 0)}
+    ]
 
 
 def test_extract_qa_legacy_format_with_heading_like_content_is_a_known_limitation(tmp_path, monkeypatch):
@@ -412,16 +448,18 @@ def test_extract_qa_falls_back_to_regex_when_length_metadata_is_inconsistent(tmp
     """境界値: 文字数メタデータが本文と矛盾する（記録されたオフセットに回答見出しが
     見つからない）場合はクラッシュせず、正規表現ベースのフォールバックに切り替わる。"""
     monkeypatch.setattr(memory, "CONVERSATIONS_DIR", tmp_path)
-    path = memory.save_conversation(question="質問本文", answer="回答本文", thread_id="thread-a")
-    content = path.read_text(encoding="utf-8")
+    saved_path = memory.save_conversation(question="質問本文", answer="回答本文", thread_id="thread-a")
+    file_content = saved_path.read_text(encoding="utf-8")
     # 質問文字数メタデータを実際の値とは異なる値に書き換え、意図的に整合性を崩す
-    tampered = content.replace(f"- 質問文字数: {len('質問本文')}", f"- 質問文字数: {len('質問本文') + 1}")
-    path.write_text(tampered, encoding="utf-8")
+    tampered = file_content.replace(f"- 質問文字数: {len('質問本文')}", f"- 質問文字数: {len('質問本文') + 1}")
+    saved_path.write_text(tampered, encoding="utf-8")
 
     conversations = memory.load_conversation("thread-a")
 
     # フォールバックの正規表現でも本文自体は問題なく復元できる（見出し文字列を含まないため）
-    assert conversations == [{"question": "質問本文", "answer": "回答本文"}]
+    assert conversations == [
+        {"question": "質問本文", "answer": "回答本文", "created_at": memory._parse_created_at(saved_path)}
+    ]
 
 
 # --- _validate_thread_id() / thread_id のパストラバーサル対策 ---
@@ -530,7 +568,7 @@ class TestLoadConversationThreadIdValidation:
 
         conversations = memory.load_conversation(thread_id)
 
-        assert conversations == [{"question": "質問", "answer": "回答"}]
+        assert conversations == [{"question": "質問", "answer": "回答", "created_at": datetime(2024, 1, 1, 9, 0)}]
 
     def test_accepts_hyphen_and_underscore_thread_id(self, tmp_path, monkeypatch):
         monkeypatch.setattr(memory, "CONVERSATIONS_DIR", tmp_path)
@@ -538,7 +576,7 @@ class TestLoadConversationThreadIdValidation:
 
         conversations = memory.load_conversation("my-thread_01")
 
-        assert conversations == [{"question": "質問", "answer": "回答"}]
+        assert conversations == [{"question": "質問", "answer": "回答", "created_at": datetime(2024, 1, 1, 9, 0)}]
 
     def test_rejects_path_traversal_thread_id(self, tmp_path, monkeypatch):
         monkeypatch.setattr(memory, "CONVERSATIONS_DIR", tmp_path)
@@ -765,8 +803,8 @@ class TestLoadConversationWithCorruptedFile:
         conversations = memory.load_conversation("thread-a")
 
         assert conversations == [
-            {"question": "1番目", "answer": "回答1"},
-            {"question": "3番目", "answer": "回答3"},
+            {"question": "1番目", "answer": "回答1", "created_at": datetime(2024, 1, 1, 9, 0)},
+            {"question": "3番目", "answer": "回答3", "created_at": datetime(2024, 1, 1, 10, 0)},
         ]
 
     def test_logs_warning_but_does_not_raise(self, tmp_path, monkeypatch, caplog):
@@ -829,8 +867,10 @@ class TestSaveConversationAtomicWrite:
         """回帰確認: アトミック書き込みへの変更後もload_conversation()から
         正しく読み戻せること。"""
         monkeypatch.setattr(memory, "CONVERSATIONS_DIR", tmp_path)
-        memory.save_conversation(question="質問A", answer="回答A", thread_id="thread-a")
+        saved_path = memory.save_conversation(question="質問A", answer="回答A", thread_id="thread-a")
 
         conversations = memory.load_conversation("thread-a")
 
-        assert conversations == [{"question": "質問A", "answer": "回答A"}]
+        assert conversations == [
+            {"question": "質問A", "answer": "回答A", "created_at": memory._parse_created_at(saved_path)}
+        ]
