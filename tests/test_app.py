@@ -997,6 +997,23 @@ def test_chat_streaming_tool_message_artifact_becomes_sources_expander(monkeypat
     assert len(expanders) == 1
 
 
+def test_chat_streaming_sources_expander_label_shows_count(monkeypatch):
+    """正常系: 参照元expanderのタイトルには件数が付き、展開する前から量が分かる
+    （狭い画面幅でも不要なタップを避けやすくする表示）。"""
+    doc_a = _FakeSourceDoc(page_content="Aの内容", metadata={"source": "a.txt"})
+    doc_b = _FakeSourceDoc(page_content="Bの内容", metadata={"source": "b.txt"})
+    fake_agent = _FakeAgentWithSources(answer="複数件ヒットした回答", artifact=[doc_a, doc_b])
+    monkeypatch.setattr(rag_chain, "build_agent", lambda thread_id=None: fake_agent)
+
+    at = _run_app()
+    at.chat_input[0].set_value("質問です").run()
+
+    assert at.exception == []
+    expanders = [e for e in at.expander if "参照した箇所を見る" in e.label]
+    assert len(expanders) == 1
+    assert expanders[0].label == "参照した箇所を見る（2件）"
+
+
 def test_chat_streaming_dedupes_sources_across_multiple_tool_calls(monkeypatch):
     """正常系: retrieve_contextが1ターン中に複数回呼ばれ、それぞれのartifactに
     (source, page, thread_id, page_content)が同じドキュメント（＝全く同じチャンク）が
