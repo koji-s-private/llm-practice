@@ -23,10 +23,12 @@ Google Driveとの連携（設定方法はdocs/google-drive-setup.md参照）を
 このアプリ自身が外部・クラウドへ追加送信することはありません。
 """
 
+import json
 from datetime import datetime
 from pathlib import Path
 
 import streamlit as st
+import streamlit.components.v1 as st_components
 from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 from streamlit.delta_generator import DeltaGenerator
 
@@ -348,6 +350,51 @@ def _render_answer_provenance(sources: list) -> None:
                 st.text(_format_snippet(doc.page_content))
 
 
+def _copy_button_html(text: str) -> str:
+    """回答コピーボタンのHTML/JSを組み立てる。
+
+    st.markdown(unsafe_allow_html=True)はDOMPurifyがonclick等のイベント属性を
+    除去してしまいクリックが効かないため、独立したHTMLドキュメントとしてscriptを
+    実行できるst.components.v1.html（iframe埋め込み）向けに組み立てる。
+    json.dumpsでエスケープすることで、改行や引用符を含む回答文でも
+    安全にJS文字列リテラルへ埋め込める。ただしjson.dumpsは"/"をエスケープ
+    しないため、回答文に"</script>"が含まれるとscriptタグが分断されてしまう。
+    "</"を"<\\/"へ置換し、HTMLパーサーがscript終端と誤認しないようにする。
+    """
+    encoded_text = json.dumps(text).replace("</", "<\\/")
+    return f"""
+        <style>
+            html, body {{ margin: 0; background-color: transparent; }}
+            button {{
+                font-size: 0.8rem;
+                padding: 0.25rem 0.6rem;
+                border-radius: 0.4rem;
+                border: 1px solid rgba(128, 128, 128, 0.4);
+                background-color: transparent;
+                color: inherit;
+                cursor: pointer;
+            }}
+            button:hover {{ background-color: rgba(128, 128, 128, 0.15); }}
+        </style>
+        <button onclick="copyAnswer(this)">📋 回答をコピー</button>
+        <script>
+            function copyAnswer(button) {{
+                const text = {encoded_text};
+                navigator.clipboard.writeText(text).then(() => {{
+                    const original = button.innerText;
+                    button.innerText = "✅ コピーしました";
+                    setTimeout(() => {{ button.innerText = original; }}, 1500);
+                }});
+            }}
+        </script>
+        """
+
+
+def _render_copy_button(text: str) -> None:
+    """AIメッセージの下に、回答全文をクリップボードへコピーするボタンを描画する。"""
+    st_components.html(_copy_button_html(text), height=40)
+
+
 def _switch_thread(thread_id: str) -> None:
     """選択された過去スレッドに切り替え、そのスレッドの会話履歴をチャット画面に復元する。"""
     st.session_state.thread_id = thread_id
@@ -532,6 +579,7 @@ for message in st.session_state.messages:
             # additional_kwargsはAPI送信時には未知キーとして無視されるため、ここに参照元を
             # 積んでおいても後続のagent.stream()への影響なくセッション内で保持できる。
             _render_answer_provenance(message.additional_kwargs.get("sources") or [])
+            _render_copy_button(message.content)
 
 user_input = st.chat_input("資料について気になることを聞いてみましょう")
 
@@ -613,6 +661,7 @@ if user_input:
             status_placeholder.empty()
 
             _render_answer_provenance(sources)
+            _render_copy_button(answer)
         except Exception as e:
             status_placeholder.empty()
             # ストリーム途中（一部チャンクをyield済み）で例外が発生した場合に、
