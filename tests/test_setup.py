@@ -451,3 +451,83 @@ def test_build_model_falls_back_through_to_runtime_error_when_ollama_model_not_p
     message = str(exc_info.value)
     assert "ANTHROPIC_API_KEY" in message
     assert "OPENAI_API_KEY" in message
+
+# --- CURRENT_MODEL_NAME（サイドバーの使用中モデル表示用）の更新確認 ---
+
+
+def test_build_model_sets_current_model_name_ollama(monkeypatch):
+    monkeypatch.setattr(setup, "_ollama_available", lambda: True)
+
+    setup._build_model()
+
+    assert setup.CURRENT_MODEL_NAME == setup.OLLAMA_MODEL
+
+
+def test_build_model_sets_current_model_name_anthropic(monkeypatch):
+    monkeypatch.setattr(setup, "_ollama_available", lambda: False)
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "test-dummy-key")
+
+    setup._build_model()
+
+    assert setup.CURRENT_MODEL_NAME == "claude-sonnet-5"
+
+
+def test_build_model_sets_current_model_name_openai(monkeypatch):
+    monkeypatch.setattr(setup, "_ollama_available", lambda: False)
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    monkeypatch.setenv("OPENAI_API_KEY", "already-set-key")
+
+    setup._build_model()
+
+    assert setup.CURRENT_MODEL_NAME == "gpt-5-chat-latest"
+
+
+# --- current_model_label()（サイドバー表示文字列の組み立て） ---
+
+
+def test_current_model_label_ollama(monkeypatch):
+    monkeypatch.setattr(setup, "CURRENT_PROVIDER", "ollama")
+    monkeypatch.setattr(setup, "CURRENT_MODEL_NAME", "llama3.1")
+
+    assert setup.current_model_label() == "Ollama (llama3.1)"
+
+
+def test_current_model_label_anthropic(monkeypatch):
+    monkeypatch.setattr(setup, "CURRENT_PROVIDER", "anthropic")
+    monkeypatch.setattr(setup, "CURRENT_MODEL_NAME", "claude-sonnet-5")
+
+    assert setup.current_model_label() == "Anthropic (claude-sonnet-5)"
+
+
+def test_current_model_label_openai(monkeypatch):
+    monkeypatch.setattr(setup, "CURRENT_PROVIDER", "openai")
+    monkeypatch.setattr(setup, "CURRENT_MODEL_NAME", "gpt-5-chat-latest")
+
+    assert setup.current_model_label() == "OpenAI (gpt-5-chat-latest)"
+
+
+def test_current_model_label_falls_back_to_raw_provider_string_when_unknown(monkeypatch):
+    """異常系: CURRENT_PROVIDERが既知の3値以外の想定外の文字列の場合、
+    表示名変換テーブルに無い値でもクラッシュせず、生の文字列をそのまま使う。"""
+    monkeypatch.setattr(setup, "CURRENT_PROVIDER", "unknown-provider")
+    monkeypatch.setattr(setup, "CURRENT_MODEL_NAME", "some-model")
+
+    assert setup.current_model_label() == "unknown-provider (some-model)"
+
+
+def test_current_model_label_falls_back_to_fumei_when_provider_is_none(monkeypatch):
+    """異常系/境界値: CURRENT_PROVIDERが未設定(None)の場合でもクラッシュせず、
+    「不明」というフォールバック表示になる。"""
+    monkeypatch.setattr(setup, "CURRENT_PROVIDER", None)
+    monkeypatch.setattr(setup, "CURRENT_MODEL_NAME", "some-model")
+
+    assert setup.current_model_label() == "不明 (some-model)"
+
+
+def test_current_model_label_shows_none_literal_when_model_name_is_none(monkeypatch):
+    """境界値: CURRENT_MODEL_NAMEが未設定(None、_build_model()未実行等の想定外の状態)の場合、
+    例外は送出せず"None"という文字列がそのまま括弧内に表示される。"""
+    monkeypatch.setattr(setup, "CURRENT_PROVIDER", "ollama")
+    monkeypatch.setattr(setup, "CURRENT_MODEL_NAME", None)
+
+    assert setup.current_model_label() == "Ollama (None)"
