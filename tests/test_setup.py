@@ -452,6 +452,7 @@ def test_build_model_falls_back_through_to_runtime_error_when_ollama_model_not_p
     assert "ANTHROPIC_API_KEY" in message
     assert "OPENAI_API_KEY" in message
 
+
 # --- CURRENT_MODEL_NAME（サイドバーの使用中モデル表示用）の更新確認 ---
 
 
