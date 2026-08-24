@@ -13,7 +13,7 @@
 | `app.py` | Streamlitのチャット画面（ファイルアップロードUI・新しい会話ボタンを含む） |
 | `.streamlit/config.toml` | Streamlitのカスタムテーマ設定（配色・フォント。Issue #72） |
 | `api/main.py` | FastAPI製バックエンドAPI（`ingest.py`/`rag_chain.py`/`memory.py`をラップ。フロントエンド移行Step1, Issue #88） |
-| `frontend/` | Vite + React + TypeScript製の新フロントエンド基盤（フロントエンド移行Step2, Issue #242）。移行完了までStreamlit版（`app.py`）と並存する |
+| `frontend/` | Vite + React + TypeScript製の新フロントエンド（チャットUIまで実装済み。フロントエンド移行Step2/3, Issue #242, #256）。移行完了までStreamlit版（`app.py`）と並存する |
 | `data/` | 質問させたいPDF/テキストファイルを置く場所（アップロードUIからもここに保存される） |
 | `data/conversations/<会話ID>/` | 自動保存された過去の質問・回答（会話ログ。会話IDごとにフォルダが分かれる） |
 | `examples/models_and_prompts.py` / `examples/extract_text.py` | LangChain公式チュートリアルの学習用スクリプト（アプリ本体からは未使用。`python -m examples.extract_text` のように直接実行した場合のみLLMを呼び出す） |
@@ -191,10 +191,10 @@ Streamlit版（`app.py`）と本APIは同じ `data/` / `chroma_db/` を参照す
 |---|---|---|
 | [Streamlit](https://streamlit.io/) | Pythonだけでブラウザ上のチャットUIを構築できるフレームワーク | `app.py`。チャット画面本体（`st.chat_input` / `st.chat_message`）、サイドバー（ファイルアップロード・再同期ボタン・会話管理トグル）を実装 |
 
-### フロントエンド基盤（Issue #242）
+### フロントエンド基盤・チャットUI（Issue #242, #256）
 
-[docs/frontend-tech-policy.md](docs/frontend-tech-policy.md)の移行計画Step2として追加。`frontend/`配下に
-Vite + React + TypeScriptの雛形を構築したもので、本Issue時点では実際の画面（チャットUI等）は未実装。
+[docs/frontend-tech-policy.md](docs/frontend-tech-policy.md)の移行計画Step2（基盤構築）・Step3（チャットUI）
+として追加。`frontend/`配下にVite + React + TypeScriptでチャット画面を実装している。
 Streamlit版（`app.py`）は移行完了まで並存する。使用技術の詳細は[frontend/README.md](frontend/README.md)を参照。
 
 | ライブラリ | 役割 | このプロジェクトでの使用箇所 |
@@ -202,10 +202,12 @@ Streamlit版（`app.py`）は移行完了まで並存する。使用技術の詳
 | [Vite](https://vitejs.dev/) | 高速なローカル開発サーバー・ビルドツール | `frontend/vite.config.ts` |
 | [React](https://react.dev/) + TypeScript | フロントエンドのUIライブラリ・型システム（`tsconfig.json`で`strict`モードを有効化） | `frontend/src/` |
 | [Tailwind CSS](https://tailwindcss.com/) + [shadcn/ui](https://ui.shadcn.com/) | ユーティリティファーストなCSSフレームワークと、それを使ったコピー&ペースト方式のUIコンポーネント群 | `frontend/src/index.css`、`frontend/src/components/ui/` |
-| [TanStack Query](https://tanstack.com/query) | API通信のキャッシュ・再試行等を扱うデータ取得・状態管理ライブラリ | `frontend/src/main.tsx`（`QueryClientProvider`）、`frontend/src/App.tsx`（`api/main.py`の`GET /api/health`への疎通確認） |
+| [TanStack Query](https://tanstack.com/query) | API通信のキャッシュ・再試行等を扱うデータ取得・状態管理ライブラリ | `frontend/src/main.tsx`（`QueryClientProvider`）。チャット送受信自体は`useChat`フックが直接`fetch`する（ストリーミング用途のためTanStack Queryは未使用） |
+| [react-markdown](https://github.com/remarkjs/react-markdown) + [remark-gfm](https://github.com/remarkjs/remark-gfm) | チャット回答のMarkdown表示（表・取り消し線等のGFM記法を含む） | `frontend/src/components/markdown/Markdown.tsx` |
+| [react-syntax-highlighter](https://github.com/react-syntax-highlighter/react-syntax-highlighter) | Markdown内のコードブロックのシンタックスハイライト | `frontend/src/components/markdown/Markdown.tsx` |
 | [ESLint](https://eslint.org/) + [Prettier](https://prettier.io/) | フロントエンドの静的解析・コードフォーマット | `frontend/eslint.config.ts` / `frontend/.prettierrc.json` |
-| [Vitest](https://vitest.dev/) + [React Testing Library](https://testing-library.com/react) | コンポーネント単体テスト | `frontend/src/App.test.tsx` |
-| [Playwright](https://playwright.dev/)（Node版） | E2Eテスト（ローカル実行のみ、無料） | `frontend/e2e/app.spec.ts` |
+| [Vitest](https://vitest.dev/) + [React Testing Library](https://testing-library.com/react) | コンポーネント単体テスト | `frontend/src/App.test.tsx`、`frontend/src/components/chat/`、`frontend/src/lib/api.test.ts` |
+| [Playwright](https://playwright.dev/)（Node版） | E2Eテスト（ローカル実行のみ、無料。バックエンドは`page.route`でモック） | `frontend/e2e/app.spec.ts`、`frontend/e2e/chat.spec.ts` |
 
 ### バックエンドAPI（Issue #88）
 

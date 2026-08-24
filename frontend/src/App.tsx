@@ -1,26 +1,31 @@
-import { useQuery } from '@tanstack/react-query'
-import { Button } from '@/components/ui/button'
-import { fetchHealth } from '@/lib/api'
+import { ChatMessageList } from '@/components/chat/ChatMessageList'
+import { MessageInput } from '@/components/chat/MessageInput'
+import { useChat } from '@/hooks/useChat'
 
 function App() {
-  const health = useQuery({
-    queryKey: ['health'],
-    queryFn: fetchHealth,
-    retry: false,
-  })
+  const { messages, sendMessage, isSending, isThreadReady, threadError } = useChat()
 
   return (
-    <main className="mx-auto flex min-h-svh max-w-2xl flex-col items-center justify-center gap-4 p-8 text-center">
-      <h1 className="text-3xl font-semibold">Doclore</h1>
-      <p className="text-muted-foreground">
-        フロントエンド基盤（Vite + React + TypeScript）の雛形です。
-      </p>
-      <p data-testid="api-status" className="text-sm">
-        {health.isPending && 'API疎通確認中...'}
-        {health.isError && `API疎通確認に失敗しました: ${health.error.message}`}
-        {health.isSuccess && `API疎通確認: ${health.data.status}`}
-      </p>
-      <Button onClick={() => health.refetch()}>再確認する</Button>
+    <main className="mx-auto flex h-svh max-w-2xl flex-col px-4">
+      <header className="border-border shrink-0 border-b py-4">
+        <h1 className="text-xl font-semibold">Doclore</h1>
+        <p className="text-muted-foreground text-sm">資料をもとに質問に答えるRAGチャットです。</p>
+      </header>
+
+      {threadError && (
+        <p role="alert" className="text-destructive shrink-0 py-2 text-sm">
+          会話の初期化に失敗しました: {threadError}
+        </p>
+      )}
+
+      <ChatMessageList messages={messages} />
+
+      <div className="shrink-0">
+        <MessageInput
+          onSend={(text) => void sendMessage(text)}
+          disabled={isSending || !isThreadReady}
+        />
+      </div>
     </main>
   )
 }
