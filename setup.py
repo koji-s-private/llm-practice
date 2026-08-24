@@ -44,6 +44,11 @@ OLLAMA_NUM_CTX = int(os.environ.get("OLLAMA_NUM_CTX", "8192"))
 # _build_model() 実行時に確定させ、app.py 側から参照してエラーメッセージの出し分けに使う。
 CURRENT_PROVIDER: str | None = None
 
+# 現在実際に使用しているモデル名（例: "llama3.1"、"claude-sonnet-5"）。
+# _build_model() 実行時に CURRENT_PROVIDER とあわせて確定させ、app.py がサイドバーの
+# 使用中モデル表示に使う。
+CURRENT_MODEL_NAME: str | None = None
+
 # Ollamaが利用できず有料APIにフォールバックした場合の具体的な理由（未起動 / モデル未pull）。
 # app.py が起動直後の警告バナー表示に使う。Ollamaをそのまま使用できた場合はNoneのまま。
 CURRENT_PROVIDER_FALLBACK_REASON: str | None = None
@@ -89,12 +94,13 @@ def _ollama_model_pulled() -> bool:
 def _build_model():
     """優先順位: 1) Ollama（無料・ローカル） 2) ANTHROPIC_API_KEY 3) OPENAI_API_KEY。
 
-    選定したプロバイダ名はモジュールレベル変数 CURRENT_PROVIDER にも記録する
-    （app.py が agent.invoke() 失敗時のエラーメッセージ出し分けに使う）。
+    選定したプロバイダ名・モデル名はモジュールレベル変数 CURRENT_PROVIDER / CURRENT_MODEL_NAME
+    にも記録する（app.py が agent.invoke() 失敗時のエラーメッセージ出し分けや、サイドバーの
+    使用中モデル表示に使う）。
     Ollamaが利用できずフォールバックした場合は、その理由を CURRENT_PROVIDER_FALLBACK_REASON にも
     記録する（app.py が起動直後の警告バナーで、ユーザーがOllama側を復旧しやすいように使う）。
     """
-    global CURRENT_PROVIDER, CURRENT_PROVIDER_FALLBACK_REASON
+    global CURRENT_PROVIDER, CURRENT_MODEL_NAME, CURRENT_PROVIDER_FALLBACK_REASON
 
     CURRENT_PROVIDER_FALLBACK_REASON = None
 
@@ -102,6 +108,7 @@ def _build_model():
         if _ollama_model_pulled():
             print(f"[setup] Ollama を検出: {OLLAMA_MODEL}（ローカル・無料、num_ctx={OLLAMA_NUM_CTX}）を使用します。")
             CURRENT_PROVIDER = "ollama"
+            CURRENT_MODEL_NAME = OLLAMA_MODEL
             return init_chat_model(OLLAMA_MODEL, model_provider="ollama", num_ctx=OLLAMA_NUM_CTX)
         CURRENT_PROVIDER_FALLBACK_REASON = (
             f"Ollamaは起動していますが、モデル '{OLLAMA_MODEL}' が見つかりません（pull未実施の可能性）。"
@@ -117,6 +124,7 @@ def _build_model():
     if os.environ.get("ANTHROPIC_API_KEY"):
         print("[setup] ANTHROPIC_API_KEY を検出: Claude (claude-sonnet-5) を使用します。")
         CURRENT_PROVIDER = "anthropic"
+        CURRENT_MODEL_NAME = "claude-sonnet-5"
         return init_chat_model("claude-sonnet-5", model_provider="anthropic")
 
     openai_key = os.environ.get("OPENAI_API_KEY")
@@ -137,7 +145,15 @@ def _build_model():
 
     print("[setup] Ollama未起動・ANTHROPIC_API_KEY未設定のため、OpenAI (gpt-5-chat-latest) にフォールバックします。")
     CURRENT_PROVIDER = "openai"
+    CURRENT_MODEL_NAME = "gpt-5-chat-latest"
     return init_chat_model("gpt-5-chat-latest", model_provider="openai")
+
+
+def current_model_label() -> str:
+    """サイドバー表示用に「プロバイダ名 (モデル名)」形式の文字列を返す（例: "Ollama (llama3.1)"）。"""
+    provider_labels = {"ollama": "Ollama", "anthropic": "Anthropic", "openai": "OpenAI"}
+    provider_label = provider_labels.get(CURRENT_PROVIDER, CURRENT_PROVIDER or "不明")
+    return f"{provider_label} ({CURRENT_MODEL_NAME})"
 
 
 model = _build_model()

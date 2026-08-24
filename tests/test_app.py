@@ -1584,6 +1584,40 @@ def test_memory_settings_expander_integrates_thread_info(monkeypatch):
     assert toggles == ["今の会話を記憶として保存する"]
 
 
+# --- 4.5 サイドバー先頭の使用中モデル表示（current_model_label） ---
+
+
+def test_sidebar_shows_current_model_label(monkeypatch):
+    """正常系: サイドバー最初のcaptionに、setup.current_model_label()の結果が
+    そのまま埋め込まれて表示される。"""
+    import setup
+
+    monkeypatch.setattr(setup, "CURRENT_PROVIDER", "ollama")
+    monkeypatch.setattr(setup, "CURRENT_MODEL_NAME", "llama3.1")
+
+    at = _run_app()
+
+    first_caption = at.sidebar.caption[0].value
+    assert "使用中のモデル" in first_caption
+    assert "Ollama (llama3.1)" in first_caption
+
+
+def test_sidebar_shows_current_model_label_for_anthropic_fallback(monkeypatch):
+    """正常系: 有料APIへフォールバック中でも、警告バナーとは別に使用中モデル名が
+    サイドバー先頭に表示され続ける（境界: フォールバック警告と共存する）。"""
+    import setup
+
+    monkeypatch.setattr(setup, "CURRENT_PROVIDER", "anthropic")
+    monkeypatch.setattr(setup, "CURRENT_MODEL_NAME", "claude-sonnet-5")
+    monkeypatch.setattr(setup, "CURRENT_PROVIDER_FALLBACK_REASON", "Ollamaに接続できません。")
+
+    at = _run_app()
+
+    first_caption = at.sidebar.caption[0].value
+    assert "Anthropic (claude-sonnet-5)" in first_caption
+    assert len(at.sidebar.warning) == 1
+
+
 # --- 5. トップレベルの軽量シグネチャチェック（data_dir_signature）そのもの ---
 
 

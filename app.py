@@ -446,6 +446,7 @@ if "processed_upload_ids" not in st.session_state:
     st.session_state.processed_upload_ids = set()
 
 with st.sidebar:
+    st.caption(f"🤖 使用中のモデル: {setup.current_model_label()}")
     _show_provider_fallback_warning()
 
     if st.button("🆕 新しい会話を始める", use_container_width=True):
