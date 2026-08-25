@@ -11,9 +11,9 @@
 | `rag_chain.py` | 検索ツール付きRAGエージェント（`create_agent`）の定義 |
 | `memory.py` | 質問・回答を `data/conversations/<会話ID>/` に自動保存する会話ナレッジ化機能 |
 | `app.py` | Streamlitのチャット画面（ファイルアップロードUI・新しい会話ボタンを含む） |
-| `.streamlit/config.toml` | Streamlitのカスタムテーマ設定（配色・フォント。Issue #72） |
-| `api/main.py` | FastAPI製バックエンドAPI（`ingest.py`/`rag_chain.py`/`memory.py`をラップ。フロントエンド移行Step1, Issue #88） |
-| `frontend/` | Vite + React + TypeScript製の新フロントエンド基盤（フロントエンド移行Step2, Issue #242）。移行完了までStreamlit版（`app.py`）と並存する |
+| `.streamlit/config.toml` | Streamlitのカスタムテーマ設定（配色・フォント） |
+| `api/main.py` | FastAPI製バックエンドAPI（`ingest.py`/`rag_chain.py`/`memory.py`をラップ。フロントエンド移行Step1） |
+| `frontend/` | Vite + React + TypeScript製の新フロントエンド（フロントエンド移行Step2-3）。チャットUI実装済み。移行完了までStreamlit版（`app.py`）と並存する |
 | `data/` | 質問させたいPDF/テキストファイルを置く場所（アップロードUIからもここに保存される） |
 | `data/conversations/<会話ID>/` | 自動保存された過去の質問・回答（会話ログ。会話IDごとにフォルダが分かれる） |
 | `examples/models_and_prompts.py` / `examples/extract_text.py` | LangChain公式チュートリアルの学習用スクリプト（アプリ本体からは未使用。`python -m examples.extract_text` のように直接実行した場合のみLLMを呼び出す） |
@@ -27,7 +27,7 @@
 | ディレクトリ | 役割（概要） | 詳細 |
 |---|---|---|
 | `data/` | 質問対象ファイル・会話ログの保存場所 | [data/README.md](data/README.md) |
-| `frontend/` | Vite + React + TypeScript製の新フロントエンド基盤（移行完了まで`app.py`と並存） | [frontend/README.md](frontend/README.md) |
+| `frontend/` | Vite + React + TypeScript製の新フロントエンド（チャットUI実装済み。移行完了まで`app.py`と並存） | [frontend/README.md](frontend/README.md) |
 | `tests/` | 自動テスト（pytest） | [tests/README.md](tests/README.md) |
 | `.claude/agents/` | AIチーム（coder/qa-engineer/reviewer）の役割定義 | [.claude/agents/README.md](.claude/agents/README.md) |
 | `.github/workflows/` | GitHub Actionsワークフロー定義 | [.github/workflows/README.md](.github/workflows/README.md) |
@@ -38,8 +38,8 @@
 ```
 llm-practice/
 ├── app.py                  # Streamlitのチャット画面
-├── api/main.py              # FastAPI製バックエンドAPI（Issue #88, ingest/rag_chain/memoryをラップ）
-├── frontend/                # Vite + React + TypeScript製の新フロントエンド基盤（Issue #242, 詳細: frontend/README.md）
+├── api/main.py              # FastAPI製バックエンドAPI
+├── frontend/                # Vite + React + TypeScript製の新フロントエンド基盤（詳細: frontend/README.md）
 ├── ingest.py                # data/ とベクトルDBの差分同期
 ├── rag_chain.py              # RAGエージェントの定義
 ├── memory.py                 # 会話ログの自動保存
@@ -120,8 +120,8 @@ Ollamaが起動していてもあえて使いたくない場合は `.env` に `D
 
 ### バックエンドAPI（FastAPI）を起動する場合
 
-フロントエンド移行（Issue #88, Step1）の一環として、Streamlit版とは別にFastAPI製のバックエンドAPIも
-用意しています。フロントエンド基盤（`frontend/`, Issue #242, Step2）からもこのAPIを呼び出しますが、
+フロントエンド移行（Step1）の一環として、Streamlit版とは別にFastAPI製のバックエンドAPIも
+用意しています。フロントエンド基盤（`frontend/`, Step2）からもこのAPIを呼び出しますが、
 実際の画面（チャットUI等）はStep3以降で実装するため、本APIだけの動作確認には引き続き
 `curl` やブラウザの `http://localhost:8000/docs`（Swagger UI）が使えます。
 
@@ -191,10 +191,11 @@ Streamlit版（`app.py`）と本APIは同じ `data/` / `chroma_db/` を参照す
 |---|---|---|
 | [Streamlit](https://streamlit.io/) | Pythonだけでブラウザ上のチャットUIを構築できるフレームワーク | `app.py`。チャット画面本体（`st.chat_input` / `st.chat_message`）、サイドバー（ファイルアップロード・再同期ボタン・会話管理トグル）を実装 |
 
-### フロントエンド基盤（Issue #242）
+### フロントエンド基盤・チャットUI
 
-[docs/frontend-tech-policy.md](docs/frontend-tech-policy.md)の移行計画Step2として追加。`frontend/`配下に
-Vite + React + TypeScriptの雛形を構築したもので、本Issue時点では実際の画面（チャットUI等）は未実装。
+[docs/frontend-tech-policy.md](docs/frontend-tech-policy.md)の移行計画Step2（基盤構築）・Step3（チャットUI実装）
+として追加。`frontend/`配下にVite + React + TypeScriptでチャット画面（`POST /api/chat`のSSEストリーミング表示・
+Markdown/コードブロック表示・参照元表示）を実装した。会話の一覧・切り替え・削除等の会話管理UIは未実装（Step5以降）。
 Streamlit版（`app.py`）は移行完了まで並存する。使用技術の詳細は[frontend/README.md](frontend/README.md)を参照。
 
 | ライブラリ | 役割 | このプロジェクトでの使用箇所 |
@@ -202,12 +203,14 @@ Streamlit版（`app.py`）は移行完了まで並存する。使用技術の詳
 | [Vite](https://vitejs.dev/) | 高速なローカル開発サーバー・ビルドツール | `frontend/vite.config.ts` |
 | [React](https://react.dev/) + TypeScript | フロントエンドのUIライブラリ・型システム（`tsconfig.json`で`strict`モードを有効化） | `frontend/src/` |
 | [Tailwind CSS](https://tailwindcss.com/) + [shadcn/ui](https://ui.shadcn.com/) | ユーティリティファーストなCSSフレームワークと、それを使ったコピー&ペースト方式のUIコンポーネント群 | `frontend/src/index.css`、`frontend/src/components/ui/` |
-| [TanStack Query](https://tanstack.com/query) | API通信のキャッシュ・再試行等を扱うデータ取得・状態管理ライブラリ | `frontend/src/main.tsx`（`QueryClientProvider`）、`frontend/src/App.tsx`（`api/main.py`の`GET /api/health`への疎通確認） |
+| [TanStack Query](https://tanstack.com/query) | API通信のキャッシュ・再試行等を扱うデータ取得・状態管理ライブラリ | `frontend/src/main.tsx`（`QueryClientProvider`）、`frontend/src/components/chat/Chat.tsx`（会話スレッド発行 `POST /api/conversations/new`） |
+| [react-markdown](https://github.com/remarkjs/react-markdown) | チャット回答本文のMarkdown描画 | `frontend/src/components/chat/MarkdownContent.tsx` |
+| [react-syntax-highlighter](https://github.com/react-syntax-highlighter/react-syntax-highlighter) | コードブロックのシンタックスハイライト | `frontend/src/components/chat/MarkdownContent.tsx` |
 | [ESLint](https://eslint.org/) + [Prettier](https://prettier.io/) | フロントエンドの静的解析・コードフォーマット | `frontend/eslint.config.ts` / `frontend/.prettierrc.json` |
 | [Vitest](https://vitest.dev/) + [React Testing Library](https://testing-library.com/react) | コンポーネント単体テスト | `frontend/src/App.test.tsx` |
 | [Playwright](https://playwright.dev/)（Node版） | E2Eテスト（ローカル実行のみ、無料） | `frontend/e2e/app.spec.ts` |
 
-### バックエンドAPI（Issue #88）
+### バックエンドAPI
 
 [docs/frontend-tech-policy.md](docs/frontend-tech-policy.md)の移行計画Step1として追加。既存の
 Streamlit版（`app.py`）とは別に、将来のTypeScript製フロントエンド（React + Vite）から呼び出せる
@@ -254,7 +257,7 @@ HTTP API層を提供する。
 | [chardet](https://chardet.readthedocs.io/) | ファイルのバイト列から文字エンコーディング（Shift-JIS/CP932等）を推定するライブラリ | `ingest.py`。`.txt`/`.md`/`.csv`は`TextLoader`/`CSVLoader`の`autodetect_encoding=True`が内部で使用。`.html`/`.htm`は`BSHTMLLoader`がautodetect機能を持たないため、`_load_html()`が事前に文字コードを判定し`open_encoding`へ渡す |
 | `docling` / `langchain-docling`（任意インストール） | レイアウト認識・表構造認識・OCRに対応した高精度なドキュメント解析ライブラリ | `ingest.py`の`_load_pdf()`。PyMuPDFでの抽出文字数が極端に少ない（図解・スキャンPDFの疑いがある）場合のみフォールバックとして使用。未インストールでも動作する |
 
-### Google Drive連携（任意機能・Issue #206）
+### Google Drive連携（任意機能）
 
 Googleスプレッドシート/ドキュメント/スライドを手動エクスポート・手動配置なしに直接（ライブに）
 同期対象にする機能です。Google Cloud Consoleでの事前セットアップ（無料の範囲内）が必要なため、
@@ -288,7 +291,7 @@ Googleスプレッドシート/ドキュメント/スライドを手動エクス
 > 新しい技術・ライブラリを追加した際の更新ルールは [AGENTS.md](AGENTS.md) の
 > 「コード品質」セクションを参照してください。
 
-### 依存パッケージのバージョン管理・更新方針（Issue #64）
+### 依存パッケージのバージョン管理・更新方針
 
 `requirements.txt`に記載の全パッケージは、動作確認済みのバージョンに`==`で固定しています。
 LangChain関連は短期間で破壊的変更が入った実績がある（`RetrievalQA`/`create_retrieval_chain`の
@@ -303,7 +306,7 @@ LangChain関連は短期間で破壊的変更が入った実績がある（`Retr
   `pip-audit -r requirements.txt`）を組み合わせて監視します（詳細は[AGENTS.md](AGENTS.md)の
   「コード品質」セクション参照）。Dependabotの自動更新PR（`.github/dependabot.yml`によるバージョン
   自動引き上げPR）は現時点では導入せず、alertsによる検知のみを利用します（自動更新PRの導入は
-  必要になった時点で別Issueとして検討します）。
+  必要になった時点で検討します）。
 
 ## 技術構成とベストプラクティスのポイント
 

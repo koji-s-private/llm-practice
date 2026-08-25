@@ -5,7 +5,7 @@ import App from './App'
 
 vi.stubGlobal(
   'fetch',
-  vi.fn(() => Promise.resolve(new Response(JSON.stringify({ status: 'ok' })))),
+  vi.fn(() => Promise.resolve(new Response(JSON.stringify({ thread_id: 'abc12345' })))),
 )
 
 function renderWithQueryClient() {
@@ -21,10 +21,5 @@ describe('App', () => {
   it('見出し「Doclore」を表示する', () => {
     renderWithQueryClient()
     expect(screen.getByRole('heading', { name: 'Doclore' })).toBeInTheDocument()
-  })
-
-  it('API疎通確認結果を表示する', async () => {
-    renderWithQueryClient()
-    expect(await screen.findByText(/API疎通確認: ok/)).toBeInTheDocument()
   })
 })

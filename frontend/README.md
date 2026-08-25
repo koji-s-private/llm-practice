@@ -2,20 +2,24 @@
 
 Doclore（ローカルRAGチャットアプリ）の新フロントエンド（Vite + React + TypeScript）です。
 既存のStreamlit版（ルートの `app.py`）を置き換える移行計画（[docs/frontend-tech-policy.md](../docs/frontend-tech-policy.md)）
-のStep2として基盤構築のみを行ったもので、実際の画面（チャットUI等）はStep3以降で実装します。
+のStep2で基盤を構築し、Step3で `POST /api/chat` を呼び出すチャットUI（メッセージ入力・
+SSEストリーミング表示・Markdown/コードブロック表示・参照元表示）を実装しました。
+会話の一覧・切り替え・削除等の会話管理UIは未実装（Step5以降）です。
 
 ## 使用技術
 
-| 用途                    | ライブラリ                                                                                 | このディレクトリでの使用箇所                                                                                                            |
-| ----------------------- | ------------------------------------------------------------------------------------------ | --------------------------------------------------------------------------------------------------------------------------------------- |
-| ビルドツール            | [Vite](https://vitejs.dev/)                                                                | `vite.config.ts`。開発サーバ・本番ビルドを実行                                                                                          |
-| フロントエンド          | [React](https://react.dev/) + TypeScript（`strict`モード）                                 | `src/`配下。`.js`/`.jsx`は使用しない                                                                                                    |
-| UIコンポーネント        | [Tailwind CSS](https://tailwindcss.com/) + [shadcn/ui](https://ui.shadcn.com/)             | `src/index.css`（Tailwindの読み込み）、`src/components/ui/`（shadcn/ui CLIで取り込んだコンポーネント。`components.json`が設定ファイル） |
-| データ取得・状態管理    | [TanStack Query](https://tanstack.com/query)                                               | `src/main.tsx`（`QueryClientProvider`）、`src/App.tsx`（`useQuery`によるAPIヘルスチェック呼び出し）                                     |
-| バックエンドAPI呼び出し | 素の`fetch`                                                                                | `src/lib/api.ts`。`api/main.py`（FastAPI）のエンドポイントを呼び出す薄いラッパー                                                        |
-| 静的解析                | [ESLint](https://eslint.org/)（Flat Config） + [Prettier](https://prettier.io/)            | `eslint.config.ts` / `.prettierrc.json`                                                                                                 |
-| 単体テスト              | [Vitest](https://vitest.dev/) + [React Testing Library](https://testing-library.com/react) | `vite.config.ts`の`test`設定、`src/App.test.tsx`                                                                                        |
-| E2Eテスト               | [Playwright](https://playwright.dev/)（ローカル実行）                                      | `playwright.config.ts`、`e2e/app.spec.ts`                                                                                               |
+| 用途                                   | ライブラリ                                                                                                                           | このディレクトリでの使用箇所                                                                                                                                                                             |
+| -------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| ビルドツール                           | [Vite](https://vitejs.dev/)                                                                                                          | `vite.config.ts`。開発サーバ・本番ビルドを実行                                                                                                                                                           |
+| フロントエンド                         | [React](https://react.dev/) + TypeScript（`strict`モード）                                                                           | `src/`配下。`.js`/`.jsx`は使用しない                                                                                                                                                                     |
+| UIコンポーネント                       | [Tailwind CSS](https://tailwindcss.com/) + [shadcn/ui](https://ui.shadcn.com/)                                                       | `src/index.css`（Tailwindの読み込み）、`src/components/ui/`（shadcn/ui CLIで取り込んだコンポーネント。`components.json`が設定ファイル）                                                                  |
+| データ取得・状態管理                   | [TanStack Query](https://tanstack.com/query)                                                                                         | `src/main.tsx`（`QueryClientProvider`）、`src/components/chat/Chat.tsx`（`useQuery`による会話スレッド発行 `POST /api/conversations/new`。チャット送信自体はSSEストリーミングのため素の`useState`で管理） |
+| バックエンドAPI呼び出し                | 素の`fetch`                                                                                                                          | `src/lib/api.ts` / `src/lib/chat.ts`。`api/main.py`（FastAPI）のエンドポイントを呼び出す薄いラッパー。`chat.ts`は`POST /api/chat`のSSEレスポンスを`fetch` + `ReadableStream`でパースする                 |
+| Markdown表示                           | [react-markdown](https://github.com/remarkjs/react-markdown)                                                                         | `src/components/chat/MarkdownContent.tsx`。チャット回答本文（Markdown）を描画                                                                                                                            |
+| コードブロックのシンタックスハイライト | [react-syntax-highlighter](https://github.com/react-syntax-highlighter/react-syntax-highlighter) + `@types/react-syntax-highlighter` | `src/components/chat/MarkdownContent.tsx`。react-markdownの`code`コンポーネントを差し替えてコードブロックを装飾                                                                                          |
+| 静的解析                               | [ESLint](https://eslint.org/)（Flat Config） + [Prettier](https://prettier.io/)                                                      | `eslint.config.ts` / `.prettierrc.json`                                                                                                                                                                  |
+| 単体テスト                             | [Vitest](https://vitest.dev/) + [React Testing Library](https://testing-library.com/react)                                           | `vite.config.ts`の`test`設定、`src/App.test.tsx`                                                                                                                                                         |
+| E2Eテスト                              | [Playwright](https://playwright.dev/)（ローカル実行）                                                                                | `playwright.config.ts`、`e2e/app.spec.ts`                                                                                                                                                                |
 
 ## ローカル開発サーバーの起動手順
 
@@ -31,8 +35,7 @@ npm run dev
 
 ### FastAPIバックエンド（`api/main.py`）を併用する場合
 
-画面上の「API疎通確認」（TanStack Queryによる `GET /api/health` 呼び出し）を成功させるには、
-リポジトリルートで別途FastAPIサーバーを起動しておく必要があります（`api/main.py`自体は本Issueで変更していません）。
+チャット画面を使うには、リポジトリルートで別途FastAPIサーバーを起動しておく必要があります
 
 ```bash
 # リポジトリルートで（frontendディレクトリではない）
