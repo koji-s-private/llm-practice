@@ -20,7 +20,9 @@ function applyStreamEvent(message: DisplayMessage, event: ChatStreamEvent): Disp
     case 'error':
       return { ...message, error: event.error, isStreaming: false }
     case 'done':
-      return { ...message, isStreaming: false }
+      // sourcesイベントは一般知識回答時（根拠ドキュメント無し）にはサーバーから送られてこないため、
+      // 完了時点で未受信ならChatSourcesの表示条件（message.sources &&）を満たすよう空配列を補う。
+      return { ...message, isStreaming: false, sources: message.sources ?? [] }
   }
 }
 
