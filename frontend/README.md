@@ -36,7 +36,6 @@ npm run dev
 ### FastAPIバックエンド（`api/main.py`）を併用する場合
 
 チャット画面を使うには、リポジトリルートで別途FastAPIサーバーを起動しておく必要があります
-（`api/main.py`自体は本Issueで変更していません）。
 
 ```bash
 # リポジトリルートで（frontendディレクトリではない）
