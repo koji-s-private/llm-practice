@@ -604,6 +604,14 @@ if user_input:
             # （ツール呼び出し中は回答本文のトークンが生成されないため、その間の待機を可視化する）。
             status_placeholder = st.empty()
             status_placeholder.markdown("🔍 検索して回答を考え中...")
+            # ストリーミング中に押せるキャンセルボタン。Streamlitは、ウィジェット操作を
+            # 検知すると実行中のスクリプトを次のst.*呼び出し（＝このあとのループ内の
+            # answer_placeholder.markdown()等）のタイミングで自動的に中断・再実行する
+            # 仕組みを持つため、押されたことをここで能動的にチェックする必要はない。
+            # 中断されると以降のコード（履歴への追加やsave_conversation）は一切実行されず、
+            # 直前まで描画されていた部分的な回答も次の再実行で自然に消える。
+            cancel_placeholder = st.empty()
+            cancel_placeholder.button("⏹️ キャンセル", key="cancel_generation")
             # st.write_stream() が内部的に生成するプレースホルダーは呼び出し元から
             # 参照できず、ストリーム途中で例外が起きた場合に描画済みの部分テキストを
             # クリアできない。自前でプレースホルダーを持つことで、except節から
@@ -660,11 +668,14 @@ if user_input:
             # 回答トークンが1つも届かなかった場合（ツール呼び出しのみで終わった等）に備え、
             # プレースホルダーが残っていれば消す。
             status_placeholder.empty()
+            # 生成が正常に完了したので、もう押しても意味のないキャンセルボタンを消す。
+            cancel_placeholder.empty()
 
             _render_answer_provenance(sources)
             _render_copy_button(answer)
         except Exception as e:
             status_placeholder.empty()
+            cancel_placeholder.empty()
             # ストリーム途中（一部チャンクをyield済み）で例外が発生した場合に、
             # 描画済みの部分的な回答テキストを画面に残さずクリアする。
             answer_placeholder.empty()
