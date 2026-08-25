@@ -306,7 +306,7 @@ LangChain関連は短期間で破壊的変更が入った実績がある（`Retr
   `pip-audit -r requirements.txt`）を組み合わせて監視します（詳細は[AGENTS.md](AGENTS.md)の
   「コード品質」セクション参照）。Dependabotの自動更新PR（`.github/dependabot.yml`によるバージョン
   自動引き上げPR）は現時点では導入せず、alertsによる検知のみを利用します（自動更新PRの導入は
-  必要になった時点でとして検討します）。
+  必要になった時点で検討します）。
 
 ## 技術構成とベストプラクティスのポイント
 
