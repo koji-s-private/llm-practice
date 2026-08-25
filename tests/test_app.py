@@ -40,6 +40,7 @@ from pathlib import Path
 
 import pytest
 from langchain_core.messages import AIMessage, AIMessageChunk, HumanMessage, ToolMessage
+from streamlit.delta_generator import DeltaGenerator
 from streamlit.testing.v1 import AppTest
 
 import google_drive_sync
@@ -1201,6 +1202,91 @@ def test_chat_streaming_exception_after_partial_chunks_skips_history_and_save(mo
     assert len(at.error) == 1
     assert at.session_state["messages"] == []
     assert save_calls == []
+
+
+def _track_button_calls(monkeypatch):
+    """DeltaGenerator.button()の呼び出し(label, key)を記録するリストを返す。
+
+    AppTestは完全に同期実行されるため、途中で描画されたボタンが最終的な
+    DOM（at.button等）には残らない場合がある。button()呼び出しそのものを
+    フックすることで、実際にその呼び出しが発生したかどうかを検証できる。
+    """
+    button_calls = []
+    original_button = DeltaGenerator.button
+
+    def _tracking_button(self, label, *args, **kwargs):
+        result = original_button(self, label, *args, **kwargs)
+        button_calls.append((label, kwargs.get("key"), self))
+        return result
+
+    monkeypatch.setattr(DeltaGenerator, "button", _tracking_button)
+    return button_calls
+
+
+def test_chat_streaming_shows_cancel_button_with_correct_key(monkeypatch):
+    """正常系: ストリーミング開始直前に、正しいラベル・key（cancel_generation）で
+    キャンセルボタンが描画される。真の割り込み動作（ボタン押下でスクリプトが
+    中断される挙動）はAppTestが完全同期実行のため再現できないが、ボタンが
+    想定通りのkeyで生成されていること自体は button() 呼び出しのフックで確認できる。"""
+    fake_agent = _FakeAgent(answer="回答")
+    monkeypatch.setattr(rag_chain, "build_agent", lambda thread_id=None: fake_agent)
+    button_calls = _track_button_calls(monkeypatch)
+
+    at = _run_app()
+    at.chat_input[0].set_value("質問です").run()
+
+    assert at.exception == []
+    cancel_calls = [(label, key) for label, key, _ in button_calls if key == "cancel_generation"]
+    assert cancel_calls == [("⏹️ キャンセル", "cancel_generation")]
+
+
+def test_chat_streaming_success_clears_cancel_button(monkeypatch):
+    """正常系: 回答生成が正常に完了すると、キャンセルボタンを描画した
+    プレースホルダーに対して empty() が呼ばれ、ボタンが画面から消える。"""
+    fake_agent = _FakeAgent(answer="回答")
+    monkeypatch.setattr(rag_chain, "build_agent", lambda thread_id=None: fake_agent)
+    button_calls = _track_button_calls(monkeypatch)
+
+    original_empty = DeltaGenerator.empty
+    cancel_cleared = {"value": False}
+
+    def _tracking_empty(self, *args, **kwargs):
+        if any(placeholder is self for _, key, placeholder in button_calls if key == "cancel_generation"):
+            cancel_cleared["value"] = True
+        return original_empty(self, *args, **kwargs)
+
+    monkeypatch.setattr(DeltaGenerator, "empty", _tracking_empty)
+
+    at = _run_app()
+    at.chat_input[0].set_value("質問です").run()
+
+    assert at.exception == []
+    assert cancel_cleared["value"] is True
+
+
+def test_chat_streaming_exception_also_clears_cancel_button(monkeypatch):
+    """異常系: ストリーム中に例外が発生した場合も、except節でキャンセルボタンの
+    プレースホルダーが empty() され、押しても意味のない状態のボタンが残らない。"""
+    fake_agent = _FakeAgent(chunks=["途中まで"], exc=RuntimeError("stream broken"))
+    monkeypatch.setattr(rag_chain, "build_agent", lambda thread_id=None: fake_agent)
+    button_calls = _track_button_calls(monkeypatch)
+
+    original_empty = DeltaGenerator.empty
+    cancel_cleared = {"value": False}
+
+    def _tracking_empty(self, *args, **kwargs):
+        if any(placeholder is self for _, key, placeholder in button_calls if key == "cancel_generation"):
+            cancel_cleared["value"] = True
+        return original_empty(self, *args, **kwargs)
+
+    monkeypatch.setattr(DeltaGenerator, "empty", _tracking_empty)
+
+    at = _run_app()
+    at.chat_input[0].set_value("質問です").run()
+
+    assert at.exception == []
+    assert len(at.error) == 1
+    assert cancel_cleared["value"] is True
 
 
 # --- 3. 会話ログ保存後の挙動（save_conversation直後にadd_single_conversation_fileで即時反映） ---
