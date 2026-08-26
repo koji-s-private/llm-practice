@@ -329,6 +329,28 @@ def _render_indexed_file_list() -> None:
                 st.rerun()
 
 
+def _render_empty_state_guidance() -> None:
+    """ドキュメント未登録・初回訪問のユーザー向けに、次に何をすればよいかの案内を表示する。
+
+    「ドキュメントが0件」と「ドキュメントはあるが会話ログがまだ無い初回訪問」を区別する。
+    後者はconversation_count(thread_id=None)で全スレッド合計を見ることで、
+    「新しい会話を始める」で現在のスレッドだけが空になったケースを誤って
+    初回訪問と判定しないようにする。
+    """
+    if not list_indexed_files():
+        st.info(
+            "📂 まだドキュメントが登録されていません。"
+            "サイドバーの「ファイルを追加」からアップロードするか、`data/` フォルダに直接ファイルを置いてください。"
+        )
+    elif not st.session_state.messages and conversation_count(thread_id=None) == 0:
+        st.info(
+            "👋 ようこそ！使い方は簡単です。\n"
+            "1. サイドバーからファイルをアップロード（または `data/` フォルダに配置）\n"
+            "2. 自動でベクトルDBに反映されます\n"
+            "3. チャットで気になることを質問してみましょう"
+        )
+
+
 def _render_answer_provenance(sources: list) -> None:
     """回答がドキュメント根拠か一般知識かのバッジと、参照元expanderを回答直後・過去ターン再描画の両方で表示する。
 
@@ -581,6 +603,8 @@ for message in st.session_state.messages:
             # 積んでおいても後続のagent.stream()への影響なくセッション内で保持できる。
             _render_answer_provenance(message.additional_kwargs.get("sources") or [])
             _render_copy_button(message.content)
+
+_render_empty_state_guidance()
 
 user_input = st.chat_input("資料について気になることを聞いてみましょう")
 

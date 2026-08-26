@@ -350,6 +350,10 @@ def test_google_drive_sync_button_unconfigured_shows_info(monkeypatch):
         "sync_google_drive_files",
         lambda verbose=True: {"added": [], "updated": [], "removed": [], "skipped": []},
     )
+    # ドキュメントも会話履歴もある状態にし、空状態ガイダンス（st.info）が余分に
+    # 出現してGoogle Drive未設定案内の件数検証と混ざらないようにする。
+    monkeypatch.setattr(ingest, "list_indexed_files", lambda: [{"name": "dummy.txt", "chunk_count": 1}])
+    monkeypatch.setattr(memory, "conversation_count", lambda thread_id=None: 1)
 
     at = _run_app()
     drive_button = next(b for b in at.sidebar.button if "Google Drive" in b.label)
@@ -375,6 +379,10 @@ def test_google_drive_sync_button_success_shows_both_results(monkeypatch):
             "skipped": [],
         },
     )
+    # ドキュメントも会話履歴もある状態にし、空状態ガイダンス（st.info）が
+    # at.info == [] の検証に混ざらないようにする。
+    monkeypatch.setattr(ingest, "list_indexed_files", lambda: [{"name": "dummy.txt", "chunk_count": 1}])
+    monkeypatch.setattr(memory, "conversation_count", lambda thread_id=None: 1)
 
     db_sync_calls = {"n": 0}
 
@@ -3262,3 +3270,95 @@ def test_render_loop_message_without_timestamp_key_shows_no_caption_and_does_not
     caption_texts = [c.value for c in at.caption]
     assert not any(re.fullmatch(r"\d{2}:\d{2}", c) for c in caption_texts)
     assert not any(re.fullmatch(r"\d{2}/\d{2} \d{2}:\d{2}", c) for c in caption_texts)
+
+
+# --- 8. 空状態ガイダンス（_render_empty_state_guidance） ---
+
+
+def test_empty_state_guidance_shows_upload_info_when_no_documents(monkeypatch):
+    """正常系: インデックス済みドキュメントが0件の場合、サイドバーからのアップロードか
+    `data/` への直接配置を促す案内（st.info）が表示される。"""
+    monkeypatch.setattr(ingest, "list_indexed_files", lambda: [])
+
+    at = _run_app()
+
+    assert at.exception == []
+    assert len(at.info) == 1
+    assert "ドキュメントが登録されていません" in at.info[0].value
+    assert "アップロード" in at.info[0].value
+
+
+def test_empty_state_guidance_hidden_when_documents_and_conversations_exist(monkeypatch):
+    """正常系: ドキュメントが登録済みで、かつ会話ログも既にある（初回訪問でない）場合、
+    空状態ガイダンスは一切表示されず通常表示のままになる。"""
+    monkeypatch.setattr(ingest, "list_indexed_files", lambda: [{"name": "dummy.txt", "chunk_count": 1}])
+    monkeypatch.setattr(memory, "conversation_count", lambda thread_id=None: 1)
+
+    at = _run_app()
+
+    assert at.exception == []
+    assert at.info == []
+
+
+def test_empty_state_guidance_shows_usage_steps_for_first_time_visit(monkeypatch):
+    """正常系: ドキュメントは登録済みだが会話ログが0件（初回訪問）の場合、
+    ファイル配置→自動DB反映→チャットで質問、の3ステップの使い方ガイダンスが表示される。"""
+    monkeypatch.setattr(ingest, "list_indexed_files", lambda: [{"name": "dummy.txt", "chunk_count": 1}])
+    monkeypatch.setattr(memory, "conversation_count", lambda thread_id=None: 0)
+
+    at = _run_app()
+
+    assert at.exception == []
+    assert len(at.info) == 1
+    guidance = at.info[0].value
+    assert "ようこそ" in guidance
+    assert "アップロード" in guidance
+    assert "ベクトルDB" in guidance
+    assert "質問" in guidance
+
+
+def test_empty_state_guidance_disappears_on_rerun_after_first_question(monkeypatch):
+    """境界値: 初回訪問の状態から実際に1件質問すると、ガイダンス表示の判定
+    （_render_empty_state_guidance）はチャット入力欄より前に行われるため、
+    質問直後の同一スクリプト実行内では回答と一緒にまだガイダンスが表示され続ける
+    （session_state.messagesへの追記はガイダンス評価より後に行われるため）。
+    その後もう一度スクリプトが再実行されると、messagesが埋まっているため
+    ガイダンスは表示されなくなる。"""
+    monkeypatch.setattr(ingest, "list_indexed_files", lambda: [{"name": "dummy.txt", "chunk_count": 1}])
+    monkeypatch.setattr(memory, "conversation_count", lambda thread_id=None: 0)
+    fake_agent = _FakeAgent(answer="回答です")
+    monkeypatch.setattr(rag_chain, "build_agent", lambda thread_id=None: fake_agent)
+
+    at = _run_app()
+    assert len(at.info) == 1  # 質問前は初回訪問ガイダンスが出ている
+
+    at = at.chat_input[0].set_value("質問です").run()
+    assert at.exception == []
+    assert len(at.session_state["messages"]) == 2
+    # 質問直後のこの実行では、ガイダンス評価が新規メッセージ追記より前に
+    # 行われるため、回答と一緒にまだガイダンスが残っている。
+    assert len(at.info) == 1
+
+    at = at.run()
+
+    assert at.exception == []
+    assert at.info == []
+
+
+def test_empty_state_guidance_not_retriggered_by_new_chat_when_other_threads_exist(monkeypatch):
+    """境界値（回帰確認）: 「新しい会話を始める」で現在のスレッドのmessagesが空に
+    なっても、他スレッドに既に会話ログがある（conversation_count(thread_id=None)が
+    0件でない）場合は、初回訪問と誤判定されずガイダンスは表示されない
+    （_render_empty_state_guidanceのdocstring記載の設計意図の確認）。"""
+    monkeypatch.setattr(ingest, "list_indexed_files", lambda: [{"name": "dummy.txt", "chunk_count": 1}])
+    monkeypatch.setattr(memory, "conversation_count", lambda thread_id=None: 3)
+
+    at = _run_app()
+    assert at.info == []
+
+    new_chat_button = next(b for b in at.sidebar.button if "新しい会話" in b.label)
+    at = new_chat_button.click().run()
+
+    assert at.exception == []
+    assert at.session_state["messages"] == []
+    assert at.info == []
