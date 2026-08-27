@@ -211,6 +211,31 @@ def test_delete_indexed_file_returns_false_for_bare_dotdot(fake_data_env):
     assert result is False
 
 
+def test_delete_indexed_file_returns_false_for_empty_string(fake_data_env):
+    # 空文字列はsafe_relative_dest()がDATA_DIR自身を指すパスを返してしまうため、
+    # is_file()チェックが無いとIsADirectoryErrorが送出されてしまう。
+    result = ingest.delete_indexed_file("")
+
+    assert result is False
+
+
+def test_delete_indexed_file_returns_false_for_current_dir(fake_data_env):
+    result = ingest.delete_indexed_file(".")
+
+    assert result is False
+
+
+def test_delete_indexed_file_returns_false_for_existing_directory(fake_data_env):
+    data_dir = fake_data_env
+    subdir = data_dir / "manuals"
+    subdir.mkdir()
+
+    result = ingest.delete_indexed_file("manuals")
+
+    assert result is False
+    assert subdir.exists()
+
+
 def test_delete_indexed_file_deletes_file_in_subfolder(fake_data_env):
     # サブフォルダ配下に手動配置されたファイル（list_indexed_files()がサブフォルダ込みの
     # 相対パスで返すもの）を指定した場合、そのサブフォルダ内の対象ファイルが正しく削除される。
