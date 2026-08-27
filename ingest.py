@@ -755,10 +755,11 @@ def delete_indexed_file(name: str) -> bool:
     ここではmanifest・ベクトルDBの更新は行わない。呼び出し元がこの後sync_data_dir()を
     呼ぶことで、ファイル消失が検知されDB・manifestから自動的に除外される。
     相対パスはサブフォルダ（例: "manuals/spec.pdf"）を含みうるため、safe_upload_dest()
-    ではなくsafe_relative_dest()でパスを解決する。対象が存在しない場合はFalseを返す。
+    ではなくsafe_relative_dest()でパスを解決する。対象が存在しない、またはディレクトリ
+    （空文字列や"."を渡した場合など）を指す場合はFalseを返す。
     """
     path = safe_relative_dest(name)
-    if path is None or not path.exists():
+    if path is None or not path.is_file():
         return False
     path.unlink()
     return True
