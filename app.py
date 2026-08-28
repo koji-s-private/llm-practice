@@ -273,6 +273,17 @@ def _format_thread_label(thread: dict) -> str:
     return f"{timestamp}｜{snippet}（{thread['count']}件）"
 
 
+def _filter_threads(threads: list[dict], keyword: str) -> list[dict]:
+    """スレッド一覧を、最初の質問文（first_question）に対するキーワードの部分一致で絞り込む。
+
+    大文字小文字は区別しない。keywordが空文字列（前後空白のみを含む）の場合は絞り込まず全件返す。
+    """
+    keyword = keyword.strip().lower()
+    if not keyword:
+        return threads
+    return [t for t in threads if t["first_question"] and keyword in t["first_question"].lower()]
+
+
 def _conversation_to_markdown(messages: list, thread_id: str) -> str:
     """現在のスレッドの会話履歴（HumanMessage/AIMessage）をエクスポート用のMarkdownに整形する。"""
     lines = [
@@ -485,24 +496,34 @@ with st.sidebar:
     if not past_threads:
         st.caption("まだ保存された会話スレッドはありません。")
     else:
-        thread_labels = {t["thread_id"]: _format_thread_label(t) for t in past_threads}
-        selected_thread_id = st.selectbox(
-            "過去のスレッドを選んで再開",
-            options=list(thread_labels.keys()),
-            format_func=lambda tid: thread_labels[tid],
-            index=None,
-            placeholder="スレッドを選択...",
-            key="thread_selector",
+        search_keyword = st.text_input(
+            "スレッドを検索",
+            key="thread_search",
+            placeholder="🔍 質問内容で絞り込み...",
             label_visibility="collapsed",
         )
-        # 選択値が現在表示中のスレッドと異なる場合のみ切り替える。同じ場合はスキップし、
-        # 選択操作以外の理由での再実行（他のウィジェット操作等）で毎回再構築されないようにする。
-        if selected_thread_id and selected_thread_id != st.session_state.thread_id:
-            _switch_thread(selected_thread_id)
-            # 新しい会話を始める場合と同様、エージェント構築に失敗した場合はrerunせず
-            # st.error()の描画をこの回の実行内に残す。
-            if st.session_state.agent is not None:
-                st.rerun()
+        filtered_threads = _filter_threads(past_threads, search_keyword)
+        if not filtered_threads:
+            st.caption("該当する会話スレッドが見つかりませんでした。")
+        else:
+            thread_labels = {t["thread_id"]: _format_thread_label(t) for t in filtered_threads}
+            selected_thread_id = st.selectbox(
+                "過去のスレッドを選んで再開",
+                options=list(thread_labels.keys()),
+                format_func=lambda tid: thread_labels[tid],
+                index=None,
+                placeholder="スレッドを選択...",
+                key="thread_selector",
+                label_visibility="collapsed",
+            )
+            # 選択値が現在表示中のスレッドと異なる場合のみ切り替える。同じ場合はスキップし、
+            # 選択操作以外の理由での再実行（他のウィジェット操作等）で毎回再構築されないようにする。
+            if selected_thread_id and selected_thread_id != st.session_state.thread_id:
+                _switch_thread(selected_thread_id)
+                # 新しい会話を始める場合と同様、エージェント構築に失敗した場合はrerunせず
+                # st.error()の描画をこの回の実行内に残す。
+                if st.session_state.agent is not None:
+                    st.rerun()
 
     st.divider()
     # 「会話ID」という生のID文字列を主語にした表示ではなく、「今の会話を記憶に残すか」
