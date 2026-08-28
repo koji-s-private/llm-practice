@@ -2091,6 +2091,96 @@ def test_past_threads_empty_state_shows_caption_and_no_selectbox():
     assert at.sidebar.selectbox == []
 
 
+def test_filter_threads_empty_keyword_returns_all_threads():
+    """正常系: キーワードが空文字列（または空白のみ）の場合は絞り込まず全件返す。"""
+    import app
+
+    threads = [
+        {"thread_id": "a", "first_question": "RAGとは何ですか"},
+        {"thread_id": "b", "first_question": "Streamlitの使い方"},
+    ]
+
+    assert app._filter_threads(threads, "") == threads
+    assert app._filter_threads(threads, "   ") == threads
+
+
+def test_filter_threads_matches_case_insensitively():
+    """正常系: first_questionへの部分一致（大文字小文字を区別しない）で絞り込む。"""
+    import app
+
+    threads = [
+        {"thread_id": "a", "first_question": "RAGとは何ですか"},
+        {"thread_id": "b", "first_question": "Streamlitの使い方"},
+    ]
+
+    assert app._filter_threads(threads, "rag") == [threads[0]]
+    assert app._filter_threads(threads, "streamlit") == [threads[1]]
+    assert app._filter_threads(threads, "使い方") == [threads[1]]
+
+
+def test_filter_threads_no_match_returns_empty_list():
+    """境界値: 一致するスレッドが無い場合は空リストを返す。"""
+    import app
+
+    threads = [{"thread_id": "a", "first_question": "RAGとは何ですか"}]
+
+    assert app._filter_threads(threads, "存在しないキーワード") == []
+
+
+def test_filter_threads_skips_threads_without_first_question():
+    """境界値: first_questionがNone/空文字列のスレッドはキーワード指定時にマッチさせない。"""
+    import app
+
+    threads = [
+        {"thread_id": "a", "first_question": None},
+        {"thread_id": "b", "first_question": ""},
+        {"thread_id": "c", "first_question": "RAGとは何ですか"},
+    ]
+
+    assert app._filter_threads(threads, "rag") == [threads[2]]
+
+
+def test_filter_threads_uppercase_keyword_matches_lowercase_text():
+    """境界値: キーワード側が大文字でも、first_question側が小文字でも一致する
+    （大文字小文字を区別しないことをキーワード側の大文字化でも確認する）。"""
+    import app
+
+    threads = [{"thread_id": "a", "first_question": "streamlitの使い方"}]
+
+    assert app._filter_threads(threads, "STREAMLIT") == [threads[0]]
+
+
+def test_filter_threads_strips_surrounding_whitespace_before_matching():
+    """境界値: キーワードの前後に空白があっても、strip後の文字列で部分一致判定する。"""
+    import app
+
+    threads = [{"thread_id": "a", "first_question": "RAGとは何ですか"}]
+
+    assert app._filter_threads(threads, "  rag  ") == [threads[0]]
+
+
+def test_filter_threads_matches_substring_in_middle_of_text():
+    """境界値: 先頭・末尾ではなく文中に含まれる部分一致でもマッチする。"""
+    import app
+
+    threads = [{"thread_id": "a", "first_question": "RAGとは何ですか"}]
+
+    assert app._filter_threads(threads, "とは") == [threads[0]]
+
+
+def test_filter_threads_returns_multiple_matches_preserving_order():
+    """正常系: 複数のスレッドがキーワードに一致する場合、元の順序を保ったまま全件返す。"""
+    import app
+
+    threads = [
+        {"thread_id": "a", "first_question": "RAGの使い方"},
+        {"thread_id": "b", "first_question": "Streamlitの使い方"},
+        {"thread_id": "c", "first_question": "全く関係ない話題"},
+    ]
+
+    assert app._filter_threads(threads, "使い方") == [threads[0], threads[1]]
+
+
 def test_past_threads_selectbox_shows_formatted_labels_when_threads_exist(monkeypatch):
     """正常系: 過去スレッドが存在する場合、案内キャプションの代わりにselectboxが表示され、
     各選択肢は「日時｜質問の要約（件数）」の形式でラベル付けされる。"""
@@ -2124,6 +2214,98 @@ def test_past_threads_selectbox_shows_formatted_labels_when_threads_exist(monkey
         "2024-01-01 09:00｜質問A（2件）",
         "2024-01-02 09:00｜質問B（1件）",
     ]
+
+
+def test_thread_search_input_narrows_down_selectbox_options(monkeypatch):
+    """正常系: サイドバーの検索テキスト入力にキーワードを入力すると、
+    selectboxの選択肢がfirst_questionの部分一致で絞り込まれる。"""
+    from datetime import datetime
+
+    monkeypatch.setattr(
+        memory,
+        "list_threads",
+        lambda: [
+            {
+                "thread_id": "thread-a",
+                "created_at": datetime(2024, 1, 1, 9, 0),
+                "first_question": "RAGとは何ですか",
+                "count": 2,
+            },
+            {
+                "thread_id": "thread-b",
+                "created_at": datetime(2024, 1, 2, 9, 0),
+                "first_question": "Streamlitの使い方",
+                "count": 1,
+            },
+        ],
+    )
+
+    at = _run_app()
+    assert at.exception == []
+    assert len(at.sidebar.selectbox[0].options) == 2
+
+    at = at.sidebar.text_input(key="thread_search").set_value("RAG").run()
+
+    assert at.exception == []
+    assert at.sidebar.selectbox[0].options == ["2024-01-01 09:00｜RAGとは何ですか（2件）"]
+
+
+def test_thread_search_input_no_match_shows_caption_and_no_selectbox(monkeypatch):
+    """境界値: 検索キーワードに一致するスレッドが無い場合、案内キャプションが表示され
+    selectboxは描画されない。"""
+    from datetime import datetime
+
+    monkeypatch.setattr(
+        memory,
+        "list_threads",
+        lambda: [
+            {
+                "thread_id": "thread-a",
+                "created_at": datetime(2024, 1, 1, 9, 0),
+                "first_question": "RAGとは何ですか",
+                "count": 2,
+            },
+        ],
+    )
+
+    at = _run_app()
+    at = at.sidebar.text_input(key="thread_search").set_value("存在しないキーワード").run()
+
+    assert at.exception == []
+    assert any("該当する会話スレッドが見つかりませんでした。" in c.value for c in at.sidebar.caption)
+    assert at.sidebar.selectbox == []
+
+
+def test_thread_search_input_whitespace_only_keyword_shows_all_threads(monkeypatch):
+    """境界値: 検索欄に空白のみを入力した場合は絞り込まれず、全件がselectboxに残る。"""
+    from datetime import datetime
+
+    monkeypatch.setattr(
+        memory,
+        "list_threads",
+        lambda: [
+            {
+                "thread_id": "thread-a",
+                "created_at": datetime(2024, 1, 1, 9, 0),
+                "first_question": "RAGとは何ですか",
+                "count": 2,
+            },
+            {
+                "thread_id": "thread-b",
+                "created_at": datetime(2024, 1, 2, 9, 0),
+                "first_question": "Streamlitの使い方",
+                "count": 1,
+            },
+        ],
+    )
+
+    at = _run_app()
+    at = at.sidebar.text_input(key="thread_search").set_value("   ").run()
+
+    assert at.exception == []
+    assert not any("該当する会話スレッドが見つかりませんでした。" in c.value for c in at.sidebar.caption)
+    assert len(at.sidebar.selectbox) == 1
+    assert len(at.sidebar.selectbox[0].options) == 2
 
 
 def test_selecting_past_thread_restores_history_and_rebuilds_agent(monkeypatch):
