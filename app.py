@@ -323,12 +323,17 @@ def _render_indexed_file_list() -> None:
         name = file_info["name"]
         pending_key = f"pending_delete_{name}"
         download_key = f"pending_download_{name}"
-        col_label, col_download, col_button = st.columns([5, 1, 1])
+        # ボタン列を1カラムにまとめて内部で2分割することで、列数が増えても
+        # ラベル列の比率（5:1）を維持し、チャンク数バッジが折り返さないようにする。
+        col_label, col_actions = st.columns([5, 1])
         col_label.markdown(f"📄 {name}　`{file_info['chunk_count']}チャンク`")
+        col_download, col_delete = col_actions.columns(2)
         if col_download.button("⬇️", key=f"download_button_{name}", help=f"{name} をダウンロード"):
             st.session_state[download_key] = True
-        if col_button.button("🗑️", key=f"delete_button_{name}", help=f"{name} を削除"):
+            st.session_state.pop(pending_key, None)
+        if col_delete.button("🗑️", key=f"delete_button_{name}", help=f"{name} を削除"):
             st.session_state[pending_key] = True
+            st.session_state.pop(download_key, None)
 
         if st.session_state.get(download_key):
             file_path = safe_relative_dest(name)

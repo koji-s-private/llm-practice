@@ -2707,6 +2707,39 @@ def test_cancel_download_closes_download_button(tmp_path, monkeypatch):
     assert "pending_download_report.txt" not in at.session_state
 
 
+def test_download_and_delete_confirmations_are_mutually_exclusive(tmp_path, monkeypatch):
+    """正常系: ダウンロード確認と削除確認は同時に開かず、片方を開くともう片方が閉じる。"""
+    data_dir = tmp_path / "data"
+    data_dir.mkdir(parents=True)
+    (data_dir / "report.txt").write_bytes(b"hello world")
+    monkeypatch.setattr(ingest, "DATA_DIR", data_dir)
+    monkeypatch.setattr(ingest, "list_indexed_files", lambda: [{"name": "report.txt", "chunk_count": 2}])
+    _capture_download_button_media(monkeypatch)
+
+    at = _run_app()
+    delete_button = next(b for b in at.sidebar.button if b.key == "delete_button_report.txt")
+    at = delete_button.click().run()
+    assert len(at.sidebar.warning) == 1
+    assert "pending_delete_report.txt" in at.session_state
+
+    download_button = next(b for b in at.sidebar.button if b.key == "download_button_report.txt")
+    at = download_button.click().run()
+
+    assert at.exception == []
+    assert "pending_download_report.txt" in at.session_state
+    assert "pending_delete_report.txt" not in at.session_state
+    assert at.sidebar.warning == []
+    assert len([b for b in at.sidebar.download_button if b.key == "confirm_download_report.txt"]) == 1
+
+    delete_button = next(b for b in at.sidebar.button if b.key == "delete_button_report.txt")
+    at = delete_button.click().run()
+
+    assert at.exception == []
+    assert "pending_delete_report.txt" in at.session_state
+    assert "pending_download_report.txt" not in at.session_state
+    assert [b for b in at.sidebar.download_button if b.key == "confirm_download_report.txt"] == []
+
+
 # --- 11. build_agent()呼び出しのtry/except保護（_build_agent_safely） ---
 #
 # app.py はbuild_agent()を直接呼ばず、_build_agent_safely()経由で呼び出す
