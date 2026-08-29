@@ -24,6 +24,7 @@ Google Driveとの連携（設定方法はdocs/google-drive-setup.md参照）を
 """
 
 import json
+import mimetypes
 from datetime import datetime
 from pathlib import Path
 
@@ -52,6 +53,7 @@ from ingest import (
     delete_indexed_file,
     list_indexed_files,
     resolve_upload_dest,
+    safe_relative_dest,
     sync_data_dir,
 )
 from memory import conversation_count, list_threads, load_conversation, new_thread_id, save_conversation
@@ -303,10 +305,13 @@ def _conversation_to_markdown(messages: list, thread_id: str) -> str:
 
 
 def _render_indexed_file_list() -> None:
-    """インデックス済みファイルの一覧を表示し、各ファイルの削除ボタンから個別削除できるようにする。
+    """インデックス済みファイルの一覧を表示し、各ファイルのダウンロード・削除ボタンから個別に操作できるようにする。
 
     誤操作でファイルを消してしまわないよう、削除は「削除ボタン→確認ボタン」の2段階にする。
     確認待ちの状態はセッションに保持し、削除完了・キャンセルのいずれかで解除する。
+    ダウンロードも同様に2段階（ボタン→実際のdownload_button表示）にし、
+    ボタンを押したファイルのみを都度読み込むことで、一覧表示のたびに
+    全ファイルをメモリへ展開してしまうのを避ける。
     """
     indexed_files = list_indexed_files()
     if not indexed_files:
@@ -317,10 +322,39 @@ def _render_indexed_file_list() -> None:
     for file_info in indexed_files:
         name = file_info["name"]
         pending_key = f"pending_delete_{name}"
-        col_label, col_button = st.columns([5, 1])
+        download_key = f"pending_download_{name}"
+        # ボタン列を1カラムにまとめて内部で2分割することで、列数が増えても
+        # ラベル列の比率（5:1）を維持し、チャンク数バッジが折り返さないようにする。
+        col_label, col_actions = st.columns([5, 1])
         col_label.markdown(f"📄 {name}　`{file_info['chunk_count']}チャンク`")
-        if col_button.button("🗑️", key=f"delete_button_{name}", help=f"{name} を削除"):
+        col_download, col_delete = col_actions.columns(2)
+        if col_download.button("⬇️", key=f"download_button_{name}", help=f"{name} をダウンロード"):
+            st.session_state[download_key] = True
+            st.session_state.pop(pending_key, None)
+        if col_delete.button("🗑️", key=f"delete_button_{name}", help=f"{name} を削除"):
             st.session_state[pending_key] = True
+            st.session_state.pop(download_key, None)
+
+        if st.session_state.get(download_key):
+            file_path = safe_relative_dest(name)
+            if file_path is None or not file_path.is_file():
+                st.error(f"「{name}」の実体が見つかりません（削除済みの可能性があります）。")
+                st.session_state.pop(download_key, None)
+            else:
+                # ファイル内容の読み込みはダウンロードボタン押下後にのみ行い、
+                # 一覧表示のたびに全ファイルをメモリへ載せないようにする。
+                mime_type, _ = mimetypes.guess_type(file_path.name)
+                col_download_action, col_download_close = st.columns([4, 1])
+                col_download_action.download_button(
+                    "クリックしてダウンロード",
+                    data=file_path.read_bytes(),
+                    file_name=file_path.name,
+                    mime=mime_type or "application/octet-stream",
+                    key=f"confirm_download_{name}",
+                )
+                if col_download_close.button("✕", key=f"cancel_download_{name}", help="ダウンロード欄を閉じる"):
+                    st.session_state.pop(download_key, None)
+                    st.rerun()
 
         if st.session_state.get(pending_key):
             st.warning(f"「{name}」を削除します。この操作は取り消せません。よろしいですか？")
