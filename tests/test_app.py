@@ -3652,5 +3652,3 @@ def test_empty_state_guidance_not_retriggered_by_new_chat_when_other_threads_exi
     assert at.exception == []
     assert at.session_state["messages"] == []
     assert at.info == []
-
-
