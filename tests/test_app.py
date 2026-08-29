@@ -2599,6 +2599,114 @@ def test_cancel_delete_does_not_call_delete_indexed_file(monkeypatch):
     assert at.sidebar.warning == []
 
 
+# --- 10b. サイドバーのインデックス済みファイル一覧・ダウンロード機能（Issue #209） ---
+
+
+def _capture_download_button_media(monkeypatch):
+    """st.download_button()に渡された実データ(bytes)・ファイル名・MIMEタイプを捕捉する。
+
+    streamlit.testing.v1.AppTestはdownload_buttonのプロトコル上、実際のバイト列を
+    直接は公開しないため、内部で使われるMediaFileManager.add()を差し替えて記録する。
+    """
+    import streamlit.runtime.media_file_manager as media_file_manager
+
+    captured = {}
+    original_add = media_file_manager.MediaFileManager.add
+
+    def capturing_add(self, data, mimetype, coordinates, file_name=None, is_for_static_download=False):
+        captured["data"] = data
+        captured["mimetype"] = mimetype
+        captured["file_name"] = file_name
+        return original_add(
+            self, data, mimetype, coordinates, file_name=file_name, is_for_static_download=is_for_static_download
+        )
+
+    monkeypatch.setattr(media_file_manager.MediaFileManager, "add", capturing_add)
+    return captured
+
+
+def test_download_button_click_shows_download_button_with_file_content(tmp_path, monkeypatch):
+    """正常系: ダウンロードボタン(⬇️)を押すと、対象ファイルの実体をread_bytes()で読み込んだ上で
+    st.download_buttonが表示され、正しいファイル内容・ファイル名・MIMEタイプが設定される。"""
+    data_dir = tmp_path / "data"
+    data_dir.mkdir(parents=True)
+    (data_dir / "report.pdf").write_bytes(b"%PDF-1.4 dummy content")
+    monkeypatch.setattr(ingest, "DATA_DIR", data_dir)
+    monkeypatch.setattr(ingest, "list_indexed_files", lambda: [{"name": "report.pdf", "chunk_count": 2}])
+    captured = _capture_download_button_media(monkeypatch)
+
+    at = _run_app()
+    download_button = next(b for b in at.sidebar.button if b.key == "download_button_report.pdf")
+    at = download_button.click().run()
+
+    assert at.exception == []
+    assert at.error == []
+    confirm_buttons = [b for b in at.sidebar.download_button if b.key == "confirm_download_report.pdf"]
+    assert len(confirm_buttons) == 1
+    assert captured["data"] == b"%PDF-1.4 dummy content"
+    assert captured["file_name"] == "report.pdf"
+    assert captured["mimetype"] == "application/pdf"
+
+
+def test_download_button_unknown_extension_falls_back_to_octet_stream(tmp_path, monkeypatch):
+    """境界値: mimetypes.guess_type()で種類を推測できない拡張子の場合、
+    MIMEタイプはapplication/octet-streamにフォールバックする。"""
+    data_dir = tmp_path / "data"
+    data_dir.mkdir(parents=True)
+    (data_dir / "report.unknownext").write_bytes(b"binary-ish content")
+    monkeypatch.setattr(ingest, "DATA_DIR", data_dir)
+    monkeypatch.setattr(ingest, "list_indexed_files", lambda: [{"name": "report.unknownext", "chunk_count": 1}])
+    captured = _capture_download_button_media(monkeypatch)
+
+    at = _run_app()
+    download_button = next(b for b in at.sidebar.button if b.key == "download_button_report.unknownext")
+    at = download_button.click().run()
+
+    assert at.exception == []
+    assert captured["mimetype"] == "application/octet-stream"
+
+
+def test_download_button_missing_file_shows_error_without_crashing(tmp_path, monkeypatch):
+    """異常系: manifestには存在するがdata/配下に実体が無い場合（削除済み等）、
+    クラッシュせずst.errorが表示され、download_buttonも表示されない。"""
+    data_dir = tmp_path / "data"
+    data_dir.mkdir(parents=True)
+    monkeypatch.setattr(ingest, "DATA_DIR", data_dir)
+    monkeypatch.setattr(ingest, "list_indexed_files", lambda: [{"name": "ghost.txt", "chunk_count": 1}])
+
+    at = _run_app()
+    download_button = next(b for b in at.sidebar.button if b.key == "download_button_ghost.txt")
+    at = download_button.click().run()
+
+    assert at.exception == []
+    assert any("ghost.txt" in e.value for e in at.sidebar.error)
+    assert [b for b in at.sidebar.download_button if b.key == "confirm_download_ghost.txt"] == []
+    assert "pending_download_ghost.txt" not in at.session_state
+
+
+def test_cancel_download_closes_download_button(tmp_path, monkeypatch):
+    """正常系: ダウンロード欄の「✕」を押すとdownload_buttonが消え、
+    セッションの表示状態もクリアされる。"""
+    data_dir = tmp_path / "data"
+    data_dir.mkdir(parents=True)
+    (data_dir / "report.txt").write_bytes(b"hello world")
+    monkeypatch.setattr(ingest, "DATA_DIR", data_dir)
+    monkeypatch.setattr(ingest, "list_indexed_files", lambda: [{"name": "report.txt", "chunk_count": 2}])
+    _capture_download_button_media(monkeypatch)
+
+    at = _run_app()
+    download_button = next(b for b in at.sidebar.button if b.key == "download_button_report.txt")
+    at = download_button.click().run()
+    assert len([b for b in at.sidebar.download_button if b.key == "confirm_download_report.txt"]) == 1
+
+    cancel_button = next(b for b in at.sidebar.button if b.key == "cancel_download_report.txt")
+    at = cancel_button.click().run()
+
+    assert at.exception == []
+    assert [b for b in at.sidebar.download_button if b.key == "confirm_download_report.txt"] == []
+    assert "pending_download_report.txt" not in at.session_state
+
+
 # --- 11. build_agent()呼び出しのtry/except保護（_build_agent_safely） ---
 #
 # app.py はbuild_agent()を直接呼ばず、_build_agent_safely()経由で呼び出す
@@ -3544,3 +3652,5 @@ def test_empty_state_guidance_not_retriggered_by_new_chat_when_other_threads_exi
     assert at.exception == []
     assert at.session_state["messages"] == []
     assert at.info == []
+
+
