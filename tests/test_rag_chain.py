@@ -497,6 +497,121 @@ def test_get_vectorstore_docstring_documents_known_chromadb_cve():
     assert "persist_directory" in docstring
 
 
+# --- _PrefixedEmbeddings（intfloat/multilingual-e5-*向けのquery/passageプレフィックス付与） ---
+
+
+class _FakeInnerEmbeddings:
+    """HuggingFaceEmbeddingsの代わりに使うダミー。渡されたテキストをそのまま記録する。"""
+
+    def __init__(self):
+        self.embed_documents_calls = []
+        self.embed_query_calls = []
+
+    def embed_documents(self, texts):
+        self.embed_documents_calls.append(texts)
+        return [[0.0] for _ in texts]
+
+    def embed_query(self, text):
+        self.embed_query_calls.append(text)
+        return [0.0]
+
+
+def test_prefixed_embeddings_prepends_passage_prefix_to_documents():
+    inner = _FakeInnerEmbeddings()
+    embeddings = rag_chain._PrefixedEmbeddings(inner)
+
+    embeddings.embed_documents(["文書A", "文書B"])
+
+    assert inner.embed_documents_calls == [
+        [rag_chain.EMBEDDING_PASSAGE_PREFIX + "文書A", rag_chain.EMBEDDING_PASSAGE_PREFIX + "文書B"]
+    ]
+
+
+def test_prefixed_embeddings_prepends_query_prefix_to_query():
+    inner = _FakeInnerEmbeddings()
+    embeddings = rag_chain._PrefixedEmbeddings(inner)
+
+    embeddings.embed_query("検索したい質問")
+
+    assert inner.embed_query_calls == [rag_chain.EMBEDDING_QUERY_PREFIX + "検索したい質問"]
+
+
+def test_prefixed_embeddings_does_not_mutate_original_texts():
+    # 埋め込み計算用にプレフィックスを付けるのはembed_documents/embed_query呼び出し内だけであり、
+    # 呼び出し元が渡したリストや文字列自体は変更されないこと（呼び出し元がpage_contentの
+    # リストをそのまま再利用しても、保存対象の本文にプレフィックスが混入しないことの確認）。
+    inner = _FakeInnerEmbeddings()
+    embeddings = rag_chain._PrefixedEmbeddings(inner)
+    texts = ["文書A"]
+
+    embeddings.embed_documents(texts)
+
+    assert texts == ["文書A"]
+
+
+def test_prefixed_embeddings_embed_documents_handles_empty_list():
+    inner = _FakeInnerEmbeddings()
+    embeddings = rag_chain._PrefixedEmbeddings(inner)
+
+    result = embeddings.embed_documents([])
+
+    assert inner.embed_documents_calls == [[]]
+    assert result == []
+
+
+def test_prefixed_embeddings_embed_documents_handles_empty_string_element():
+    inner = _FakeInnerEmbeddings()
+    embeddings = rag_chain._PrefixedEmbeddings(inner)
+
+    embeddings.embed_documents([""])
+
+    assert inner.embed_documents_calls == [[rag_chain.EMBEDDING_PASSAGE_PREFIX]]
+
+
+def test_prefixed_embeddings_embed_query_handles_empty_string():
+    inner = _FakeInnerEmbeddings()
+    embeddings = rag_chain._PrefixedEmbeddings(inner)
+
+    embeddings.embed_query("")
+
+    assert inner.embed_query_calls == [rag_chain.EMBEDDING_QUERY_PREFIX]
+
+
+def test_prefixed_embeddings_embed_documents_handles_many_documents():
+    inner = _FakeInnerEmbeddings()
+    embeddings = rag_chain._PrefixedEmbeddings(inner)
+    texts = [f"文書{i}" for i in range(50)]
+
+    embeddings.embed_documents(texts)
+
+    assert inner.embed_documents_calls == [[rag_chain.EMBEDDING_PASSAGE_PREFIX + text for text in texts]]
+
+
+def test_prefixed_embeddings_embed_documents_returns_inner_result_unchanged():
+    # 元のHuggingFaceEmbeddings（inner）が返したベクトルをそのまま呼び出し元へ返す
+    # （ラッパーがベクトル自体には手を加えないこと）を確認する。
+    inner = _FakeInnerEmbeddings()
+    embeddings = rag_chain._PrefixedEmbeddings(inner)
+
+    result = embeddings.embed_documents(["文書A", "文書B"])
+
+    assert result == [[0.0], [0.0]]
+
+
+def test_prefixed_embeddings_delegates_to_same_inner_instance_across_calls():
+    # embed_documents/embed_queryのいずれも、コンストラクタで渡した同一のinnerインスタンスに
+    # 委譲していること（呼び出しごとに新しいHuggingFaceEmbeddingsを作り直したりしないこと）。
+    inner = _FakeInnerEmbeddings()
+    embeddings = rag_chain._PrefixedEmbeddings(inner)
+
+    embeddings.embed_documents(["文書A"])
+    embeddings.embed_query("質問")
+
+    assert embeddings._inner is inner
+    assert len(inner.embed_documents_calls) == 1
+    assert len(inner.embed_query_calls) == 1
+
+
 # --- get_embeddings / get_vectorstore のlru_cacheキャッシュ ---
 
 
@@ -518,6 +633,26 @@ class _FakeChromaStore:
     def __init__(self, **kwargs):
         _FakeChromaStore.instances += 1
         self.kwargs = kwargs
+
+
+def test_get_embeddings_wraps_huggingface_embeddings_with_prefix_and_correct_model(monkeypatch):
+    """get_embeddings()が、正しいモデル名・正規化オプションでHuggingFaceEmbeddingsを構築し、
+    _PrefixedEmbeddingsでラップして返すことを確認する（プレフィックス付与が実際に機能する
+    ための前提条件）。
+    """
+    monkeypatch.setattr(rag_chain, "HuggingFaceEmbeddings", _FakeEmbeddings)
+    rag_chain.get_embeddings.cache_clear()
+    try:
+        embeddings = rag_chain.get_embeddings()
+
+        assert isinstance(embeddings, rag_chain._PrefixedEmbeddings)
+        assert isinstance(embeddings._inner, _FakeEmbeddings)
+        assert embeddings._inner.kwargs == {
+            "model_name": rag_chain.EMBEDDING_MODEL_NAME,
+            "encode_kwargs": {"normalize_embeddings": True},
+        }
+    finally:
+        rag_chain.get_embeddings.cache_clear()
 
 
 def test_get_embeddings_returns_same_instance_across_calls(monkeypatch):

@@ -27,6 +27,7 @@ from pathlib import Path
 from langchain.agents import create_agent
 from langchain.tools import tool
 from langchain_chroma import Chroma
+from langchain_core.embeddings import Embeddings
 from langchain_huggingface import HuggingFaceEmbeddings
 
 from setup import model
@@ -38,22 +39,32 @@ COLLECTION_NAME = "llm_practice_docs"
 # ingest.py側のRecursiveCharacterTextSplitterもこの値を参照しており、1チャンクは最大でもこの文字数に収まる。
 CHUNK_SIZE = 1000
 
-# 無料・ローカルで動く埋め込みモデル（LangChain公式ドキュメントのデフォルト例と同じ）
-EMBEDDING_MODEL_NAME = "sentence-transformers/all-mpnet-base-v2"
+# 無料・ローカルで動く埋め込みモデル。本アプリのドキュメント・質問はほぼ日本語のため、
+# 英語中心のsentence-transformers/all-mpnet-base-v2から多言語対応モデルに変更した
+# （scripts/evaluate_retrieval.pyでの比較評価で適合率・再現率とも明確に改善したため）。
+EMBEDDING_MODEL_NAME = "intfloat/multilingual-e5-base"
+
+# intfloat/multilingual-e5-* 系は、検索クエリ側に "query: "、文書側に "passage: " を
+# 先頭に付けて埋め込むことが前提の設計（付けないと本来の検索性能が出ない。公式モデルカード記載、
+# config_sentence_transformers.jsonにはprompts定義が無くREADMEにのみ明記されている）。
+# ドキュメント本文（page_content）自体には残したくない（画面表示・LLM採点にそのまま使われるため）
+# ので、_PrefixedEmbeddingsで埋め込み計算の直前にだけ付与する。EMBEDDING_MODEL_NAMEを
+# プレフィックス不要なモデルに戻す場合は、この2定数と_PrefixedEmbeddingsの利用も見直すこと。
+EMBEDDING_QUERY_PREFIX = "query: "
+EMBEDDING_PASSAGE_PREFIX = "passage: "
 
 # 一次検索（ベクトル類似度）で候補として広めに拾ってくる件数。最終的な絞り込みは
 # 後段のLLM採点（_grade_relevance）に任せるため、ここは再現率重視で広めにとる。
-# scripts/evaluate_retrieval.pyでの評価（4/8/12を比較）では、8→12にしても再現率は
-# 伸びず適合率が悪化する一方、4に絞ると再現率が明確に落ちるため8を維持している。
+# scripts/evaluate_retrieval.pyのCANDIDATE_K/THRESHOLDグリッドサーチ（4/8/12を比較）で
+# 適合率・再現率のバランスを確認した上でこの値を採用している。埋め込みモデルを変更した
+# 場合は、この値も再度グリッドサーチで見直すのが望ましい。
 CANDIDATE_K = 8
 
 # 一次検索の粗いフィルタ用のL2距離上限（明らかに無関係なものだけを間引き、最終判定は
 # LLM採点に任せる）。Chromaのデフォルト距離関数（hnswlibの"l2"）は平方根を取らない
 # 二乗ユークリッド距離であり、正規化済み埋め込み同士では 2 - 2cosθ に等しいため、
-# 理論上のレンジは0（完全一致）〜4（真逆）となる。
-# scripts/evaluate_retrieval.pyでの評価では1.0/1.3/1.5のどの値でも精度がほぼ
-# 変化しなかった（日本語の短文では距離がこの範囲でほとんど分離できない）ため、
-# 取りこぼしリスクの小さい緩めの1.3を維持している。
+# 理論上のレンジは0（完全一致）〜4（真逆）となる。取りこぼしリスクの小さい緩めの値として
+# 1.3を採用している（同上のグリッドサーチ参照）。
 RECALL_DISTANCE_THRESHOLD = 1.3
 
 # LLM採点（_grade_relevance）で「関連あり」と判定された文書のうち、実際にretrieve_contextが
@@ -90,17 +101,36 @@ SYSTEM_PROMPT = (
 GLOBAL_THREAD_ID = "global"
 
 
+class _PrefixedEmbeddings(Embeddings):
+    """埋め込み計算の直前にだけquery/passageプレフィックスを付与するラッパー。
+
+    ChromaはDocumentのpage_contentをそのまま保存用テキストとして使い、embed_documents()/
+    embed_query()の戻り値（ベクトル）だけを埋め込みとして使う。そのためこのラッパーを介しても
+    保存される本文にはプレフィックスが残らない。
+    """
+
+    def __init__(self, inner: HuggingFaceEmbeddings):
+        self._inner = inner
+
+    def embed_documents(self, texts: list[str]) -> list[list[float]]:
+        return self._inner.embed_documents([EMBEDDING_PASSAGE_PREFIX + text for text in texts])
+
+    def embed_query(self, text: str) -> list[float]:
+        return self._inner.embed_query(EMBEDDING_QUERY_PREFIX + text)
+
+
 @lru_cache(maxsize=1)
-def get_embeddings() -> HuggingFaceEmbeddings:
+def get_embeddings() -> Embeddings:
     """ローカル埋め込みモデルを返す（APIキー不要、初回はモデルを自動ダウンロード）。
 
     モデルのロードは軽くないため、lru_cacheでプロセス内に1つだけ保持し
     再ロードを防ぐ（Streamlitに依存しないモジュールレベルのキャッシュ）。
     """
-    return HuggingFaceEmbeddings(
+    inner = HuggingFaceEmbeddings(
         model_name=EMBEDDING_MODEL_NAME,
         encode_kwargs={"normalize_embeddings": True},
     )
+    return _PrefixedEmbeddings(inner)
 
 
 @lru_cache(maxsize=1)

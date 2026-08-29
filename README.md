@@ -237,7 +237,7 @@ HTTP API層を提供する。
 | [Ollama](https://ollama.com/) | LLMをローカルPC上で無料実行するためのランタイム（アプリ本体とは別プロセスで起動） | `setup.py`が`localhost:11434`への接続有無で起動を検知し、起動していれば回答生成・関連度採点に最優先で使用 |
 | [Chroma](https://www.trychroma.com/)（`langchain-chroma`） | ドキュメントのベクトル（埋め込み）を保存し、類似検索するローカル動作のベクトルDB | `rag_chain.py`の`get_vectorstore()`でChromaインスタンスを生成。`chroma_db/`フォルダにローカル永続化（`ingest.py`のデータ同期、`rag_chain.py`の検索ツールから利用） |
 | `langchain-huggingface` | Hugging Face製の埋め込みモデルをLangChain経由で使うための連携パッケージ | `rag_chain.py`の`get_embeddings()`（`HuggingFaceEmbeddings`） |
-| `sentence-transformers` | 埋め込みモデル（`sentence-transformers/all-mpnet-base-v2`）を実際にロード・推論するエンジン（`langchain-huggingface`の内部で使用） | `rag_chain.py`の`get_embeddings()`が指定するモデルの実行エンジン |
+| `sentence-transformers` | 埋め込みモデル（`intfloat/multilingual-e5-base`、日本語を含む多言語対応）を実際にロード・推論するエンジン（`langchain-huggingface`の内部で使用） | `rag_chain.py`の`get_embeddings()`が指定するモデルの実行エンジン |
 | `langchain-text-splitters` | 長いドキュメントを検索・埋め込みに適したチャンク（断片）に分割するツール | `ingest.py`の`sync_data_dir()`（`RecursiveCharacterTextSplitter`でチャンク分割） |
 | [filelock](https://py-filelock.readthedocs.io/) | クロスプラットフォーム対応のファイルロックライブラリ | `ingest.py`の`sync_data_dir()`。複数タブ（複数Streamlitセッション）や複数プロセスから同時に呼ばれても、manifest.json読み込み〜ベクトルDB更新〜書き込みを1つずつ排他的に実行するために使用（`chroma_db/sync.lock`） |
 
@@ -315,7 +315,7 @@ LangChain関連は短期間で破壊的変更が入った実績がある（`Retr
 LangChainは1.0でメジャーアップデートされており、旧来の `RetrievalQA` や `create_retrieval_chain`
 （現在は `langchain_classic` に移動した非推奨扱いのAPI）は使用していません。
 
-- **埋め込み（検索用）**: HuggingFaceのローカルモデル（`sentence-transformers/all-mpnet-base-v2`）を使用。
+- **埋め込み（検索用）**: HuggingFaceのローカルモデル（`intfloat/multilingual-e5-base`、日本語を含む多言語対応）を使用。
   APIキー不要・無料・オフラインで動作し、埋め込みのたびに課金が発生しません。
 - **回答生成・検索判断**: `setup.py` が 1) Ollama（ローカルで起動していれば最優先・無料） 2) `ANTHROPIC_API_KEY`
   （Claude, claude-sonnet-5） 3) `OPENAI_API_KEY`（OpenAI, gpt-5-chat-latest）の順に自動フォールバックします。
@@ -508,7 +508,7 @@ API変更が頻繁なので、動作がおかしくなったときはまずこ�
 | PDFが読み込めない（それ以外のエラー） | `langchain-community`（PDF読み込みに使用、2026年6月にsunset）の不具合の可能性。`pip install --upgrade pymupdf langchain-community` を試す |
 | PDFのテキストが文字化けする・図解のラベルが読めない | まずPyMuPDFで再取得を試みるので `rm -rf chroma_db && python ingest.py` で再インデックスしてみる。改善しない場合は`docling`/`langchain-docling`をインストールすると図解・スキャンPDF向けの高品質フォールバックが有効になる（`pip install docling langchain-docling`、初回はモデルダウンロードあり） |
 | DBの内容がおかしい・壊れた | 上記「DBをリセットしたい場合」を参照 |
-| 初回起動が遅い | 初回のみ埋め込みモデル（`sentence-transformers/all-mpnet-base-v2`、約420MB）を自動ダウンロードするため。2回目以降はキャッシュされ高速化されます |
+| 初回起動が遅い | 初回のみ埋め込みモデル（`intfloat/multilingual-e5-base`、約1.1GB）を自動ダウンロードするため。2回目以降はキャッシュされ高速化されます |
 | Ollamaを入れたのに課金APIが使われる | `ollama serve` が起動しているか確認（`ollama list` でエラーが出ないか）。`.env`に`DISABLE_OLLAMA=true`が残っていないかも確認 |
 | `.venv`を有効化したのに `ModuleNotFoundError` や pyenv側のパッケージが読まれる | `which python`と`which streamlit`を比較。`python`は`.venv/bin/python`なのに`streamlit`だけpyenvのshimを指している場合、`streamlit run app.py`ではなく`python -m streamlit run app.py`を使う |
 | アップデート後、以前は答えられていた内容に急に答えられなくなった | 会話スレッド分離機能の追加などでDBの内部構造が変わった可能性。上記「DBをリセットしたい場合」で `chroma_db` を作り直す |
