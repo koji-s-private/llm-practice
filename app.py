@@ -56,7 +56,15 @@ from ingest import (
     safe_relative_dest,
     sync_data_dir,
 )
-from memory import conversation_count, list_threads, load_conversation, new_thread_id, save_conversation
+from memory import (
+    conversation_count,
+    list_threads,
+    load_conversation,
+    load_thread_title,
+    new_thread_id,
+    save_conversation,
+    save_thread_title,
+)
 from rag_chain import build_agent
 from source_formatting import format_snippet as _format_snippet
 from source_formatting import format_source_label as _format_source_label
@@ -273,6 +281,19 @@ def _format_thread_label(thread: dict) -> str:
     timestamp = thread["created_at"].strftime("%Y-%m-%d %H:%M")
     snippet = _format_snippet(thread["first_question"], limit=24) if thread["first_question"] else "(質問内容なし)"
     return f"{timestamp}｜{snippet}（{thread['count']}件）"
+
+
+def _thread_display_label(thread: dict) -> str:
+    """過去スレッド選択UIに表示するラベルを作る。
+
+    ユーザーがタイトルを設定済みなら、それを主表示にし自動生成ラベルを補助的に添える。
+    未設定の場合は従来通り _format_thread_label() の自動生成ラベルのみを使う。
+    """
+    title = load_thread_title(thread["thread_id"])
+    auto_label = _format_thread_label(thread)
+    if title:
+        return f"📌 {title}（{auto_label}）"
+    return auto_label
 
 
 def _filter_threads(threads: list[dict], keyword: str) -> list[dict]:
@@ -540,7 +561,7 @@ with st.sidebar:
         if not filtered_threads:
             st.caption("該当する会話スレッドが見つかりませんでした。")
         else:
-            thread_labels = {t["thread_id"]: _format_thread_label(t) for t in filtered_threads}
+            thread_labels = {t["thread_id"]: _thread_display_label(t) for t in filtered_threads}
             selected_thread_id = st.selectbox(
                 "過去のスレッドを選んで再開",
                 options=list(thread_labels.keys()),
@@ -558,6 +579,22 @@ with st.sidebar:
                 # st.error()の描画をこの回の実行内に残す。
                 if st.session_state.agent is not None:
                     st.rerun()
+
+        # タイトル編集は「保存済みの会話ログを持つスレッド」に対してのみ意味を持つため、
+        # 検索フィルタ前のpast_threadsで現在のスレッドの存在有無を判定する。
+        current_thread = next((t for t in past_threads if t["thread_id"] == st.session_state.thread_id), None)
+        if current_thread is not None:
+            with st.expander("✏️ このスレッドのタイトルを編集", expanded=False):
+                with st.form(key=f"thread_title_form_{st.session_state.thread_id}"):
+                    title_input = st.text_input(
+                        "タイトル",
+                        value=load_thread_title(st.session_state.thread_id) or "",
+                        placeholder="例: 経費精算の質問",
+                        label_visibility="collapsed",
+                    )
+                    if st.form_submit_button("💾 タイトルを保存"):
+                        save_thread_title(st.session_state.thread_id, title_input)
+                        st.rerun()
 
     st.divider()
     # 「会話ID」という生のID文字列を主語にした表示ではなく、「今の会話を記憶に残すか」

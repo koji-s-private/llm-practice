@@ -23,6 +23,10 @@ logger = logging.getLogger(__name__)
 
 CONVERSATIONS_DIR = Path(__file__).parent / "data" / "conversations"
 
+# スレッドタイトルの保存先ファイル名（質問・回答のMarkdownファイルとは別管理にすることで、
+# 既存の会話ログの形式・解析ロジックに一切影響しないようにする）。
+THREAD_TITLE_FILENAME = "title.txt"
+
 # 会話ログMarkdownの質問・回答見出し（本文中の区切り位置の目印として使う）。
 _QUESTION_HEADER = "## 質問\n\n"
 _ANSWER_HEADER = "\n\n## 回答\n\n"
@@ -217,6 +221,36 @@ def load_conversation(thread_id: str) -> list[dict]:
         question, answer = _extract_qa(content)
         conversations.append({"question": question, "answer": answer, "created_at": _parse_created_at(f)})
     return conversations
+
+
+def save_thread_title(thread_id: str, title: str) -> None:
+    """スレッドにユーザー任意のタイトルを設定する。
+
+    前後の空白を取り除いた結果が空文字列になる場合は「未設定」として扱い、
+    既存のタイトルファイルがあれば削除する（自動生成ラベルへのフォールバックに戻す）。
+    """
+    thread_dir = CONVERSATIONS_DIR / _validate_thread_id(thread_id)
+    title_path = thread_dir / THREAD_TITLE_FILENAME
+    title = title.strip()
+    if not title:
+        title_path.unlink(missing_ok=True)
+        return
+
+    thread_dir.mkdir(parents=True, exist_ok=True)
+    tmp_path = title_path.with_suffix(".txt.tmp")
+    tmp_path.write_text(title, encoding="utf-8")
+    os.replace(tmp_path, title_path)
+
+
+def load_thread_title(thread_id: str) -> str | None:
+    """保存済みのスレッドタイトルを返す。未設定・読み込み失敗の場合はNoneを返す。"""
+    title_path = CONVERSATIONS_DIR / _validate_thread_id(thread_id) / THREAD_TITLE_FILENAME
+    if not title_path.exists():
+        return None
+    content = _read_text_safe(title_path)
+    if content is None:
+        return None
+    return content.strip() or None
 
 
 def conversation_count(thread_id: str | None = None) -> int:

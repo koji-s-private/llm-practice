@@ -462,6 +462,123 @@ def test_extract_qa_falls_back_to_regex_when_length_metadata_is_inconsistent(tmp
     ]
 
 
+# --- save_thread_title() / load_thread_title()（スレッドの任意タイトル） ---
+
+
+class TestThreadTitle:
+    def test_load_thread_title_returns_none_when_not_saved(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(memory, "CONVERSATIONS_DIR", tmp_path)
+        memory.save_conversation("Q", "A", thread_id="thread-a")
+
+        assert memory.load_thread_title("thread-a") is None
+
+    def test_save_and_load_thread_title_roundtrip(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(memory, "CONVERSATIONS_DIR", tmp_path)
+        memory.save_conversation("Q", "A", thread_id="thread-a")
+
+        memory.save_thread_title("thread-a", "経費精算について")
+
+        assert memory.load_thread_title("thread-a") == "経費精算について"
+
+    def test_save_and_load_thread_title_roundtrip_with_emoji(self, tmp_path, monkeypatch):
+        """境界値: 絵文字（サロゲートペア）を含むタイトルも欠損なく保存・読込できる。"""
+        monkeypatch.setattr(memory, "CONVERSATIONS_DIR", tmp_path)
+        memory.save_conversation("Q", "A", thread_id="thread-a")
+
+        memory.save_thread_title("thread-a", "経費精算 🎉📌")
+
+        assert memory.load_thread_title("thread-a") == "経費精算 🎉📌"
+
+    def test_save_thread_title_strips_surrounding_whitespace(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(memory, "CONVERSATIONS_DIR", tmp_path)
+        memory.save_conversation("Q", "A", thread_id="thread-a")
+
+        memory.save_thread_title("thread-a", "  タイトル  ")
+
+        assert memory.load_thread_title("thread-a") == "タイトル"
+
+    def test_save_thread_title_overwrites_existing_title(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(memory, "CONVERSATIONS_DIR", tmp_path)
+        memory.save_conversation("Q", "A", thread_id="thread-a")
+        memory.save_thread_title("thread-a", "最初のタイトル")
+
+        memory.save_thread_title("thread-a", "上書き後のタイトル")
+
+        assert memory.load_thread_title("thread-a") == "上書き後のタイトル"
+
+    @pytest.mark.parametrize("blank_title", ["", "   ", "\n\t"])
+    def test_save_thread_title_treats_blank_as_unset(self, tmp_path, monkeypatch, blank_title):
+        """境界値: 空文字列・空白のみのタイトルは「未設定」として扱い保存しない。"""
+        monkeypatch.setattr(memory, "CONVERSATIONS_DIR", tmp_path)
+        memory.save_conversation("Q", "A", thread_id="thread-a")
+
+        memory.save_thread_title("thread-a", blank_title)
+
+        assert memory.load_thread_title("thread-a") is None
+
+    def test_save_thread_title_blank_deletes_previously_saved_title(self, tmp_path, monkeypatch):
+        """境界値: 既にタイトルが設定済みのスレッドに空文字列を保存すると未設定に戻る。"""
+        monkeypatch.setattr(memory, "CONVERSATIONS_DIR", tmp_path)
+        memory.save_conversation("Q", "A", thread_id="thread-a")
+        memory.save_thread_title("thread-a", "設定済みタイトル")
+
+        memory.save_thread_title("thread-a", "   ")
+
+        assert memory.load_thread_title("thread-a") is None
+
+    def test_thread_titles_are_isolated_per_thread(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(memory, "CONVERSATIONS_DIR", tmp_path)
+        memory.save_conversation("Q1", "A1", thread_id="thread-a")
+        memory.save_conversation("Q2", "A2", thread_id="thread-b")
+
+        memory.save_thread_title("thread-a", "スレッドAのタイトル")
+
+        assert memory.load_thread_title("thread-a") == "スレッドAのタイトル"
+        assert memory.load_thread_title("thread-b") is None
+
+    def test_load_thread_title_returns_none_when_thread_dir_missing(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(memory, "CONVERSATIONS_DIR", tmp_path)
+
+        assert memory.load_thread_title("no-such-thread") is None
+
+    def test_save_thread_title_creates_thread_dir_if_missing(self, tmp_path, monkeypatch):
+        """境界値: スレッドフォルダがまだ無い状態でもタイトル保存自体はクラッシュしない。"""
+        monkeypatch.setattr(memory, "CONVERSATIONS_DIR", tmp_path)
+
+        memory.save_thread_title("new-thread", "タイトル")
+
+        assert memory.load_thread_title("new-thread") == "タイトル"
+
+    def test_load_thread_title_returns_none_for_corrupted_file(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(memory, "CONVERSATIONS_DIR", tmp_path)
+        thread_dir = tmp_path / "thread-a"
+        thread_dir.mkdir()
+        (thread_dir / memory.THREAD_TITLE_FILENAME).write_bytes(b"\xff\xfe broken")
+
+        assert memory.load_thread_title("thread-a") is None
+
+    def test_save_thread_title_rejects_invalid_thread_id(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(memory, "CONVERSATIONS_DIR", tmp_path)
+
+        with pytest.raises(ValueError):
+            memory.save_thread_title("../../etc/passwd", "タイトル")
+
+    def test_load_thread_title_rejects_invalid_thread_id(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(memory, "CONVERSATIONS_DIR", tmp_path)
+
+        with pytest.raises(ValueError):
+            memory.load_thread_title("../../etc/passwd")
+
+    def test_save_thread_title_no_leftover_tmp_file(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(memory, "CONVERSATIONS_DIR", tmp_path)
+        memory.save_conversation("Q", "A", thread_id="thread-a")
+
+        memory.save_thread_title("thread-a", "タイトル")
+
+        tmp_files = list((tmp_path / "thread-a").glob("*.txt.tmp"))
+        assert tmp_files == []
+
+
 # --- _validate_thread_id() / thread_id のパストラバーサル対策 ---
 
 

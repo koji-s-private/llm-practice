@@ -16,7 +16,8 @@ app.py が直接 import している以下のシンボルを monkeypatch で軽�
 - `rag_chain.build_agent`（フェイクエージェントを返す。`.invoke()` の成功/失敗を
   テストごとに切り替える）
 - `memory.new_thread_id` / `memory.conversation_count` / `memory.save_conversation` /
-  `memory.list_threads` / `memory.load_conversation`
+  `memory.list_threads` / `memory.load_conversation` / `memory.load_thread_title` /
+  `memory.save_thread_title`
   （`memory.save_conversation` は実際の実装と同様、保存先ファイルパス(Path)を返す）
 
 app.py はモジュールトップレベルで `from ingest import ... sync_data_dir` のように
@@ -156,6 +157,8 @@ def _patch_light_dependencies(monkeypatch):
     monkeypatch.setattr(memory, "save_conversation", lambda *a, **k: _FAKE_SAVED_CONVERSATION_PATH)
     monkeypatch.setattr(memory, "list_threads", lambda: [])
     monkeypatch.setattr(memory, "load_conversation", lambda thread_id: [])
+    monkeypatch.setattr(memory, "load_thread_title", lambda thread_id: None)
+    monkeypatch.setattr(memory, "save_thread_title", lambda thread_id, title: None)
 
 
 def _run_app() -> AppTest:
@@ -2306,6 +2309,118 @@ def test_thread_search_input_whitespace_only_keyword_shows_all_threads(monkeypat
     assert not any("該当する会話スレッドが見つかりませんでした。" in c.value for c in at.sidebar.caption)
     assert len(at.sidebar.selectbox) == 1
     assert len(at.sidebar.selectbox[0].options) == 2
+
+
+def test_past_thread_label_uses_saved_title_when_set(monkeypatch):
+    """正常系: タイトルが設定済みのスレッドは、自動生成ラベルの代わりにタイトルを主表示にする。"""
+    from datetime import datetime
+
+    monkeypatch.setattr(
+        memory,
+        "list_threads",
+        lambda: [
+            {
+                "thread_id": "thread-a",
+                "created_at": datetime(2024, 1, 1, 9, 0),
+                "first_question": "質問A",
+                "count": 2,
+            }
+        ],
+    )
+    monkeypatch.setattr(memory, "load_thread_title", lambda thread_id: "経費精算について")
+
+    at = _run_app()
+
+    assert at.exception == []
+    assert at.sidebar.selectbox[0].options == ["📌 経費精算について（2024-01-01 09:00｜質問A（2件））"]
+
+
+def test_past_thread_label_falls_back_to_auto_label_when_title_unset(monkeypatch):
+    """正常系: タイトル未設定のスレッドは従来通り自動生成ラベルのみが使われる
+    （デフォルトフィクスチャで memory.load_thread_title は None を返す）。"""
+    from datetime import datetime
+
+    monkeypatch.setattr(
+        memory,
+        "list_threads",
+        lambda: [
+            {
+                "thread_id": "thread-a",
+                "created_at": datetime(2024, 1, 1, 9, 0),
+                "first_question": "質問A",
+                "count": 2,
+            }
+        ],
+    )
+
+    at = _run_app()
+
+    assert at.exception == []
+    assert at.sidebar.selectbox[0].options == ["2024-01-01 09:00｜質問A（2件）"]
+
+
+def test_thread_title_edit_form_hidden_when_current_thread_has_no_saved_conversation():
+    """境界値: 現在のスレッド（st.session_state.thread_id）が保存済みスレッド一覧に
+    無い場合（会話ログがまだ0件の新規スレッド等）、タイトル編集フォームは表示されない
+    （デフォルトフィクスチャで memory.list_threads は [] を返す）。"""
+    at = _run_app()
+
+    assert at.exception == []
+    assert not any("このスレッドのタイトルを編集" in e.label for e in at.sidebar.expander)
+
+
+def test_thread_title_edit_form_shown_for_current_thread(monkeypatch):
+    """正常系: 現在のスレッドが保存済みスレッド一覧に含まれる場合、
+    タイトル編集フォーム（テキスト入力＋保存ボタン）が表示される。"""
+    from datetime import datetime
+
+    monkeypatch.setattr(
+        memory,
+        "list_threads",
+        lambda: [
+            {
+                "thread_id": "thread-test",  # autouseフィクスチャのnew_thread_idが返す固定値
+                "created_at": datetime(2024, 1, 1, 9, 0),
+                "first_question": "質問A",
+                "count": 1,
+            }
+        ],
+    )
+
+    at = _run_app()
+
+    assert at.exception == []
+    assert any("このスレッドのタイトルを編集" in e.label for e in at.sidebar.expander)
+
+
+def test_saving_thread_title_calls_save_thread_title_with_current_thread_id(monkeypatch):
+    """正常系: タイトル編集フォームで保存ボタンを押すと、現在のスレッドIDと
+    入力したタイトルで memory.save_thread_title() が呼ばれる。"""
+    from datetime import datetime
+
+    monkeypatch.setattr(
+        memory,
+        "list_threads",
+        lambda: [
+            {
+                "thread_id": "thread-test",
+                "created_at": datetime(2024, 1, 1, 9, 0),
+                "first_question": "質問A",
+                "count": 1,
+            }
+        ],
+    )
+    save_calls = []
+    monkeypatch.setattr(memory, "save_thread_title", lambda thread_id, title: save_calls.append((thread_id, title)))
+
+    at = _run_app()
+    title_input = next(t for t in at.sidebar.text_input if t.label == "タイトル")
+    title_input.set_value("新しいタイトル")
+    submit_button = next(b for b in at.sidebar.button if b.label == "💾 タイトルを保存")
+    at = submit_button.click().run()
+
+    assert at.exception == []
+    assert save_calls == [("thread-test", "新しいタイトル")]
 
 
 def test_selecting_past_thread_restores_history_and_rebuilds_agent(monkeypatch):
