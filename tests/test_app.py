@@ -2395,7 +2395,13 @@ def test_thread_title_edit_form_shown_for_current_thread(monkeypatch):
 
 def test_saving_thread_title_calls_save_thread_title_with_current_thread_id(monkeypatch):
     """正常系: タイトル編集フォームで保存ボタンを押すと、現在のスレッドIDと
-    入力したタイトルで memory.save_thread_title() が呼ばれる。"""
+    入力したタイトルで memory.save_thread_title() が呼ばれる。
+
+    保存後に専用の st.toast() も呼んでいるが、AppTest は st.rerun() 直前に呼んだ
+    トーストを最終的なスクリプト実行結果には反映しないため（他の同種フロー
+    （削除確定・Google Drive同期）のテストも同じ理由でトースト検証を行っていない）、
+    ここでは save_thread_title の呼び出しのみを検証する。
+    """
     from datetime import datetime
 
     monkeypatch.setattr(
@@ -2421,6 +2427,70 @@ def test_saving_thread_title_calls_save_thread_title_with_current_thread_id(monk
 
     assert at.exception == []
     assert save_calls == [("thread-test", "新しいタイトル")]
+
+
+def test_thread_selectbox_shows_current_thread_preselected_with_updated_title_after_save(monkeypatch):
+    """回帰防止: タイトル保存直後のrerunでも、selectboxが現在のスレッドを選択状態のまま保持し、
+    表示ラベルにも保存直後の新しいタイトルが反映される。
+
+    Streamlitのselectboxはkeyが変わらない限り閉じた状態の表示文字列を再計算しないことがあるため、
+    ラベルが変わるタイミングでkeyも変え、indexで選択状態を明示的に復元することで対処している。
+    """
+    from datetime import datetime
+
+    monkeypatch.setattr(
+        memory,
+        "list_threads",
+        lambda: [
+            {
+                "thread_id": "thread-test",
+                "created_at": datetime(2024, 1, 1, 9, 0),
+                "first_question": "質問A",
+                "count": 1,
+            }
+        ],
+    )
+    current_title = {"value": None}
+    monkeypatch.setattr(memory, "load_thread_title", lambda thread_id: current_title["value"])
+    monkeypatch.setattr(memory, "save_thread_title", lambda thread_id, title: current_title.__setitem__("value", title))
+
+    at = _run_app()
+    title_input = next(t for t in at.sidebar.text_input if t.label == "タイトル")
+    title_input.set_value("新しいタイトル")
+    submit_button = next(b for b in at.sidebar.button if b.label == "💾 タイトルを保存")
+    at = submit_button.click().run()
+
+    assert at.exception == []
+    assert at.sidebar.selectbox[0].value == "thread-test"
+    assert "新しいタイトル" in at.sidebar.selectbox[0].options[0]
+
+
+def test_past_thread_label_truncates_long_title_so_auto_label_stays_visible(monkeypatch):
+    """境界値: タイトルが長い場合、selectboxの限られた幅で自動ラベルが隠れてしまわないよう
+    タイトル部分を上限文字数で切り詰める。"""
+    from datetime import datetime
+
+    long_title = "経費精算まわりの質問と回答についての非常に長いタイトルの例です" * 2
+    monkeypatch.setattr(
+        memory,
+        "list_threads",
+        lambda: [
+            {
+                "thread_id": "thread-a",
+                "created_at": datetime(2024, 1, 1, 9, 0),
+                "first_question": "質問A",
+                "count": 2,
+            }
+        ],
+    )
+    monkeypatch.setattr(memory, "load_thread_title", lambda thread_id: long_title)
+
+    at = _run_app()
+
+    assert at.exception == []
+    label = at.sidebar.selectbox[0].options[0]
+    assert "2024-01-01 09:00｜質問A（2件）" in label
+    assert long_title not in label
 
 
 def test_selecting_past_thread_restores_history_and_rebuilds_agent(monkeypatch):
