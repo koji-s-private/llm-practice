@@ -116,6 +116,34 @@ def test_removed_file_is_deleted_from_store_and_manifest(fake_env):
     assert manifest == {}
 
 
+def test_thread_title_file_is_excluded_from_sync(fake_env):
+    """会話スレッドのタイトルファイル（title.txt）は拡張子が.txtでもLOADERS対象だが、
+    通常ドキュメントではなくUI表示専用のメタデータのため同期対象に含めない
+    （含めるとタイトル文字列がベクトルDBに埋め込まれ、検索結果に混入してしまう）。"""
+    data_dir, store = fake_env
+    _write(data_dir, f"{ingest.CONVERSATIONS_DIRNAME}/thread-a/title.txt", "経費精算についての質問")
+    md_path = f"{ingest.CONVERSATIONS_DIRNAME}/thread-a/20240101_000000_000000_q.md"
+    _write(data_dir, md_path, "通常の会話ログです。" * 5)
+
+    result = ingest.sync_data_dir(verbose=False)
+
+    assert result == {"added": [md_path], "updated": [], "removed": [], "failed": []}
+    manifest = json.loads(ingest.MANIFEST_PATH.read_text(encoding="utf-8"))
+    assert all(not name.endswith("title.txt") for name in manifest)
+    assert all("経費精算についての質問" not in doc.page_content for doc in store.docs_by_id.values())
+
+
+def test_thread_title_file_does_not_affect_signature(fake_env):
+    """data_dir_signature()もtitle.txtを対象外とするため、タイトルの保存だけでは
+    シグネチャが変化しない（app.pyの軽量変更検知による不要な再同期を防ぐため）。"""
+    data_dir, _store = fake_env
+    signature_before = ingest.data_dir_signature()
+
+    _write(data_dir, f"{ingest.CONVERSATIONS_DIRNAME}/thread-a/title.txt", "経費精算についての質問")
+
+    assert ingest.data_dir_signature() == signature_before
+
+
 class _FailingLoader:
     """load() で必ず例外を送出するダミーローダー（LOADERSの差し替え用）。
 

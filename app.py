@@ -56,7 +56,15 @@ from ingest import (
     safe_relative_dest,
     sync_data_dir,
 )
-from memory import conversation_count, list_threads, load_conversation, new_thread_id, save_conversation
+from memory import (
+    conversation_count,
+    list_threads,
+    load_conversation,
+    load_thread_title,
+    new_thread_id,
+    save_conversation,
+    save_thread_title,
+)
 from rag_chain import build_agent
 from source_formatting import format_snippet as _format_snippet
 from source_formatting import format_source_label as _format_source_label
@@ -251,9 +259,9 @@ def _start_new_chat() -> None:
     st.session_state.thread_id = new_thread_id()
     st.session_state.messages = []
     st.session_state.agent = _build_agent_safely(st.session_state.thread_id)
-    # スレッド選択のselectboxが古いスレッドの選択状態を保持したままだと、次の再実行時に
-    # 「選択値 != 新しいthread_id」と誤判定されて選択スレッドへ引き戻されてしまうためリセットする。
-    st.session_state.pop("thread_selector", None)
+    # スレッド選択selectboxのkeyはthread_idを含めて動的に生成しているため（_thread_selector_key参照）、
+    # thread_id発行後に描画される次のselectboxは自動的に新しいkeyの真新しいウィジェットになり、
+    # 古いスレッドの選択状態を引き継がない。
 
 
 def _format_message_timestamp(timestamp: datetime | None) -> str | None:
@@ -273,6 +281,37 @@ def _format_thread_label(thread: dict) -> str:
     timestamp = thread["created_at"].strftime("%Y-%m-%d %H:%M")
     snippet = _format_snippet(thread["first_question"], limit=24) if thread["first_question"] else "(質問内容なし)"
     return f"{timestamp}｜{snippet}（{thread['count']}件）"
+
+
+_THREAD_TITLE_DISPLAY_LIMIT = 20
+
+
+def _thread_display_label(thread: dict) -> str:
+    """過去スレッド選択UIに表示するラベルを作る。
+
+    ユーザーがタイトルを設定済みなら、それを主表示にし自動生成ラベルを補助的に添える。
+    未設定の場合は従来通り _format_thread_label() の自動生成ラベルのみを使う。
+    タイトルが長いと自動ラベル側がselectboxの限られた幅で見えなくなるため、
+    自動ラベルと同様に上限文字数で切り詰める。
+    """
+    title = load_thread_title(thread["thread_id"])
+    auto_label = _format_thread_label(thread)
+    if title:
+        snippet = _format_snippet(title, limit=_THREAD_TITLE_DISPLAY_LIMIT)
+        return f"📌 {snippet}（{auto_label}）"
+    return auto_label
+
+
+def _thread_selector_key(thread_id: str, thread_labels: dict) -> str:
+    """過去スレッド選択selectboxのwidget keyを、現在アクティブなスレッドの表示ラベルを
+    含めて組み立てる。
+
+    Streamlitのselectboxは、keyが変わらない限り選択中オプションの閉じた状態の表示文字列を
+    再計算しないことがあるため、ラベルの内容そのものをkeyに含めることで、タイトル保存直後の
+    ような「同じスレッドのままラベルだけが変わった」ケースでもウィジェットを再マウントさせ、
+    表示を最新化する。
+    """
+    return f"thread_selector_{thread_id}_{thread_labels.get(thread_id, '')}"
 
 
 def _filter_threads(threads: list[dict], keyword: str) -> list[dict]:
@@ -513,6 +552,9 @@ if "processed_upload_ids" not in st.session_state:
     st.session_state.processed_upload_ids = set()
 
 with st.sidebar:
+    if "_thread_title_saved_message" in st.session_state:
+        st.toast(st.session_state.pop("_thread_title_saved_message"), icon="✅")
+
     st.caption(f"🤖 使用中のモデル: {setup.current_model_label()}")
     _show_provider_fallback_warning()
 
@@ -540,14 +582,20 @@ with st.sidebar:
         if not filtered_threads:
             st.caption("該当する会話スレッドが見つかりませんでした。")
         else:
-            thread_labels = {t["thread_id"]: _format_thread_label(t) for t in filtered_threads}
+            thread_labels = {t["thread_id"]: _thread_display_label(t) for t in filtered_threads}
+            thread_ids = list(thread_labels.keys())
+            # 現在表示中のスレッドが選択肢に含まれる場合はそれを初期選択にする。含まれない
+            # 場合（新規スレッド・検索で絞り込まれ非表示等）は従来通りプレースホルダーを表示する。
+            active_index = (
+                thread_ids.index(st.session_state.thread_id) if st.session_state.thread_id in thread_ids else None
+            )
             selected_thread_id = st.selectbox(
                 "過去のスレッドを選んで再開",
-                options=list(thread_labels.keys()),
+                options=thread_ids,
                 format_func=lambda tid: thread_labels[tid],
-                index=None,
+                index=active_index,
                 placeholder="スレッドを選択...",
-                key="thread_selector",
+                key=_thread_selector_key(st.session_state.thread_id, thread_labels),
                 label_visibility="collapsed",
             )
             # 選択値が現在表示中のスレッドと異なる場合のみ切り替える。同じ場合はスキップし、
@@ -558,6 +606,25 @@ with st.sidebar:
                 # st.error()の描画をこの回の実行内に残す。
                 if st.session_state.agent is not None:
                     st.rerun()
+
+        # タイトル編集は「保存済みの会話ログを持つスレッド」に対してのみ意味を持つため、
+        # 検索フィルタ前のpast_threadsで現在のスレッドの存在有無を判定する。
+        current_thread = next((t for t in past_threads if t["thread_id"] == st.session_state.thread_id), None)
+        if current_thread is not None:
+            with st.expander("✏️ このスレッドのタイトルを編集", expanded=False):
+                with st.form(key=f"thread_title_form_{st.session_state.thread_id}"):
+                    title_input = st.text_input(
+                        "タイトル",
+                        value=load_thread_title(st.session_state.thread_id) or "",
+                        placeholder="例: 経費精算の質問",
+                        label_visibility="collapsed",
+                    )
+                    if st.form_submit_button("💾 タイトルを保存"):
+                        save_thread_title(st.session_state.thread_id, title_input)
+                        # st.toast()の直後にst.rerun()すると描画が間に合わず消えてしまうため、
+                        # メッセージをセッションに残し、rerun後の描画タイミングでトーストを出す。
+                        st.session_state["_thread_title_saved_message"] = "タイトルを保存しました"
+                        st.rerun()
 
     st.divider()
     # 「会話ID」という生のID文字列を主語にした表示ではなく、「今の会話を記憶に残すか」

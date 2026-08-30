@@ -23,7 +23,9 @@ data/ 直下だけでなく、data/conversations/<thread_id>/ のようなサブ
 （app.py のファイルアップロード機能・会話自動保存機能で使用）。会話ログはそのスレッドIDを
 チャンクのメタデータ(thread_id)として付与し、rag_chain.build_agent(thread_id) が
 「共通ナレッジ＋そのスレッドの会話ログ」だけを検索できるようにしている
-（別スレッドの会話ログが回答に混ざらないようにするため）。
+（別スレッドの会話ログが回答に混ざらないようにするため）。同フォルダ内の title.txt
+（memory.save_thread_title()の保存先）は拡張子が.txtでも通常ドキュメントではないため、
+_is_indexable_file()で取り込み対象から除外している。
 
 PDFの読み込みは2段構成:
   1) PyMuPDF（高速）でまず抽出する。
@@ -52,6 +54,7 @@ from langchain_community.document_loaders import BSHTMLLoader, CSVLoader, Docx2t
 from langchain_core.documents import Document
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 
+from memory import THREAD_TITLE_FILENAME
 from rag_chain import CHUNK_SIZE, COLLECTION_NAME, GLOBAL_THREAD_ID, PERSIST_DIR, get_vectorstore
 
 try:
@@ -463,6 +466,22 @@ def _extract_docling_page(metadata: dict) -> int | None:
     return min(page_numbers) - 1
 
 
+def _is_indexable_file(path: Path) -> bool:
+    """sync_data_dir()/data_dir_signature()が取り込み対象とすべきファイルかどうかを判定する。
+
+    拡張子がLOADERSに対応しているだけでなく、data/conversations/<thread_id>/title.txt
+    （memory.save_thread_title()の保存先）は通常ドキュメントではなくUI表示専用のメタデータ
+    のため、拡張子が一致していても対象から除外する（含めるとタイトル文字列がベクトルDBに
+    埋め込まれ、検索結果に混入してしまう）。
+    """
+    if path.suffix.lower() not in LOADERS:
+        return False
+    rel_parts = path.relative_to(DATA_DIR).parts
+    if len(rel_parts) >= 3 and rel_parts[0] == CONVERSATIONS_DIRNAME and rel_parts[-1] == THREAD_TITLE_FILENAME:
+        return False
+    return True
+
+
 def _thread_id_for(rel_path: str) -> str:
     """相対パスから会話スレッドIDを判定する。
 
@@ -496,7 +515,7 @@ def data_dir_signature() -> tuple[int, float]:
     """
     if not DATA_DIR.exists():
         return (0, 0.0)
-    target_files = [f for f in DATA_DIR.rglob("*") if f.is_file() and f.suffix.lower() in LOADERS]
+    target_files = [f for f in DATA_DIR.rglob("*") if f.is_file() and _is_indexable_file(f)]
     if not target_files:
         return (0, 0.0)
     latest_mtime = max(f.stat().st_mtime for f in target_files)
@@ -688,7 +707,7 @@ def _sync_data_dir_locked(verbose: bool) -> dict:
 
     # data/ 直下だけでなく、data/conversations/ などのサブフォルダも再帰的に走査する
     current_files = {
-        str(f.relative_to(DATA_DIR)): f for f in DATA_DIR.rglob("*") if f.is_file() and f.suffix.lower() in LOADERS
+        str(f.relative_to(DATA_DIR)): f for f in DATA_DIR.rglob("*") if f.is_file() and _is_indexable_file(f)
     }
 
     result = {"added": [], "updated": [], "removed": [], "failed": []}
