@@ -2493,6 +2493,101 @@ def test_past_thread_label_truncates_long_title_so_auto_label_stays_visible(monk
     assert long_title not in label
 
 
+def test_thread_display_label_title_of_exactly_20_chars_is_not_truncated(monkeypatch):
+    """境界値: タイトルがちょうど上限文字数(20文字)の場合は切り詰めず、"..."も付かない。"""
+    from datetime import datetime
+
+    import app
+
+    title = "あ" * 20
+    monkeypatch.setattr(app, "load_thread_title", lambda thread_id: title)
+    thread = {
+        "thread_id": "thread-a",
+        "created_at": datetime(2024, 1, 1, 9, 0),
+        "first_question": "質問A",
+        "count": 1,
+    }
+
+    label = app._thread_display_label(thread)
+
+    assert f"📌 {title}" in label
+    assert "..." not in label
+
+
+def test_thread_display_label_title_of_21_chars_is_truncated_with_ellipsis(monkeypatch):
+    """境界値: タイトルが上限文字数を1文字超える(21文字)場合、20文字に切り詰められ"..."が付く。"""
+    from datetime import datetime
+
+    import app
+
+    title = "あ" * 21
+    monkeypatch.setattr(app, "load_thread_title", lambda thread_id: title)
+    thread = {
+        "thread_id": "thread-a",
+        "created_at": datetime(2024, 1, 1, 9, 0),
+        "first_question": "質問A",
+        "count": 1,
+    }
+
+    label = app._thread_display_label(thread)
+
+    assert f"📌 {'あ' * 20}..." in label
+    assert title not in label
+
+
+def test_thread_display_label_emoji_title_truncates_without_raising(monkeypatch):
+    """境界値: タイトルに絵文字が含まれていても例外を送出せず切り詰められる。"""
+    from datetime import datetime
+
+    import app
+
+    title = "🎉" * 30
+    monkeypatch.setattr(app, "load_thread_title", lambda thread_id: title)
+    thread = {
+        "thread_id": "thread-a",
+        "created_at": datetime(2024, 1, 1, 9, 0),
+        "first_question": "質問A",
+        "count": 1,
+    }
+
+    label = app._thread_display_label(thread)
+
+    assert label.startswith("📌 ")
+    assert label.endswith("...（2024-01-01 09:00｜質問A（1件））")
+    assert title not in label
+
+
+def test_thread_selector_key_changes_when_active_thread_label_changes():
+    """回帰防止: 同じthread_idでもラベルが変わればselectboxのwidget keyも変わる
+    （タイトル保存直後にselectboxを再マウントさせて表示を最新化するため）。"""
+    import app
+
+    key_before = app._thread_selector_key("thread-a", {"thread-a": "旧ラベル"})
+    key_after = app._thread_selector_key("thread-a", {"thread-a": "新ラベル"})
+
+    assert key_before != key_after
+
+
+def test_thread_selector_key_is_unique_per_thread_even_with_same_label():
+    """境界値: 複数スレッドが存在する場合、ラベルが同一でもthread_idが異なればkeyも異なる。"""
+    import app
+
+    key_a = app._thread_selector_key("thread-a", {"thread-a": "同じラベル", "thread-b": "同じラベル"})
+    key_b = app._thread_selector_key("thread-b", {"thread-a": "同じラベル", "thread-b": "同じラベル"})
+
+    assert key_a != key_b
+
+
+def test_thread_selector_key_falls_back_gracefully_when_active_thread_has_no_label():
+    """境界値: アクティブなthread_idがthread_labelsに存在しない場合
+    （タイトル未設定・新規スレッド等）でも例外を送出せず空文字列として扱う。"""
+    import app
+
+    key = app._thread_selector_key("thread-new", {"thread-a": "ラベルA"})
+
+    assert key == "thread_selector_thread-new_"
+
+
 def test_selecting_past_thread_restores_history_and_rebuilds_agent(monkeypatch):
     """正常系: 過去スレッドをselectboxで選ぶと、そのスレッドIDに切り替わり、
     load_conversationの内容がチャット履歴として復元され、エージェントも
