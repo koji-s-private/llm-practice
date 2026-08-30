@@ -2395,12 +2395,8 @@ def test_thread_title_edit_form_shown_for_current_thread(monkeypatch):
 
 def test_saving_thread_title_calls_save_thread_title_with_current_thread_id(monkeypatch):
     """正常系: タイトル編集フォームで保存ボタンを押すと、現在のスレッドIDと
-    入力したタイトルで memory.save_thread_title() が呼ばれる。
-
-    保存後に専用の st.toast() も呼んでいるが、AppTest は st.rerun() 直前に呼んだ
-    トーストを最終的なスクリプト実行結果には反映しないため（他の同種フロー
-    （削除確定・Google Drive同期）のテストも同じ理由でトースト検証を行っていない）、
-    ここでは save_thread_title の呼び出しのみを検証する。
+    入力したタイトルで memory.save_thread_title() が呼ばれ、次の描画で保存完了の
+    トーストが表示された上でセッション状態のメッセージがクリアされる。
     """
     from datetime import datetime
 
@@ -2427,6 +2423,9 @@ def test_saving_thread_title_calls_save_thread_title_with_current_thread_id(monk
 
     assert at.exception == []
     assert save_calls == [("thread-test", "新しいタイトル")]
+    assert len(at.toast) == 1
+    assert at.toast[0].value == "タイトルを保存しました"
+    assert "_thread_title_saved_message" not in at.session_state
 
 
 def test_thread_selectbox_shows_current_thread_preselected_with_updated_title_after_save(monkeypatch):

@@ -552,6 +552,9 @@ if "processed_upload_ids" not in st.session_state:
     st.session_state.processed_upload_ids = set()
 
 with st.sidebar:
+    if "_thread_title_saved_message" in st.session_state:
+        st.toast(st.session_state.pop("_thread_title_saved_message"), icon="✅")
+
     st.caption(f"🤖 使用中のモデル: {setup.current_model_label()}")
     _show_provider_fallback_warning()
 
@@ -618,10 +621,9 @@ with st.sidebar:
                     )
                     if st.form_submit_button("💾 タイトルを保存"):
                         save_thread_title(st.session_state.thread_id, title_input)
-                        # st.success()は直後のst.rerun()で描画が打ち切られ画面に残らないため、
-                        # rerunをまたいでも表示され続けるst.toast()で保存専用のフィードバックを出す
-                        # （data/自動同期由来の汎用トーストと区別できるようメッセージを分ける）。
-                        st.toast("タイトルを保存しました", icon="✅")
+                        # st.toast()の直後にst.rerun()すると描画が間に合わず消えてしまうため、
+                        # メッセージをセッションに残し、rerun後の描画タイミングでトーストを出す。
+                        st.session_state["_thread_title_saved_message"] = "タイトルを保存しました"
                         st.rerun()
 
     st.divider()
