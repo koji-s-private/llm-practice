@@ -551,6 +551,84 @@ def test_load_pdf_does_not_append_table_markdown_for_table_less_pdf(monkeypatch,
     assert "|" not in docs[0].page_content
 
 
+def _make_two_column_pdf(path, *, right_first: bool):
+    """2カラムレイアウトの合成PDFをfitzで生成する。
+
+    right_first=Trueの場合、右カラムのテキストボックスを左カラムより先に描画し、
+    PDF内部のコンテンツストリーム順を「右→左」に意図的に入れ替える
+    （右カラムのテキストオブジェクトが先に書き込まれた実際のPDFを模す）。
+    """
+    import fitz
+
+    doc = fitz.open()
+    page = doc.new_page(width=595, height=842)
+    left_text = "これは左カラムの本文です。" * 6
+    right_text = "これは右カラムの本文です。" * 6
+    left_rect = fitz.Rect(50, 50, 280, 780)
+    right_rect = fitz.Rect(315, 50, 545, 780)
+
+    if right_first:
+        page.insert_textbox(right_rect, right_text, fontsize=11, fontname="japan")
+        page.insert_textbox(left_rect, left_text, fontsize=11, fontname="japan")
+    else:
+        page.insert_textbox(left_rect, left_text, fontsize=11, fontname="japan")
+        page.insert_textbox(right_rect, right_text, fontsize=11, fontname="japan")
+
+    doc.save(str(path))
+    return left_text, right_text
+
+
+def test_load_pdf_fixes_reading_order_when_right_column_written_first(monkeypatch, tmp_path):
+    # 右カラムのテキストオブジェクトが左カラムより先にコンテンツストリームへ書き込まれた
+    # 2カラムPDFでは、素朴な抽出だと右→左の順に読み取られ意味不明な文になる。
+    # 列のX座標クラスタリングにより左カラム→右カラムの順で抽出できることを確認する。
+    pdf_path = tmp_path / "two_column.pdf"
+    left_text, right_text = _make_two_column_pdf(pdf_path, right_first=True)
+
+    monkeypatch.setattr(ingest, "DOCLING_AVAILABLE", False)
+
+    docs = ingest._load_pdf(pdf_path, verbose=False)
+
+    assert len(docs) == 1
+    content = docs[0].page_content
+    left_pos = content.find("左カラムの本文です")
+    right_pos = content.find("右カラムの本文です")
+    assert left_pos != -1
+    assert right_pos != -1
+    assert left_pos < right_pos
+
+
+def test_load_pdf_keeps_natural_order_when_left_column_written_first(monkeypatch, tmp_path):
+    # 元々左→右の順で書き込まれた2カラムPDFでも、修正後の読み取り順が壊れないことを確認する
+    # （回帰防止: 列クラスタリング適用後も正常なケースの順序は変わらない）。
+    pdf_path = tmp_path / "two_column_normal.pdf"
+    _make_two_column_pdf(pdf_path, right_first=False)
+
+    monkeypatch.setattr(ingest, "DOCLING_AVAILABLE", False)
+
+    docs = ingest._load_pdf(pdf_path, verbose=False)
+
+    assert len(docs) == 1
+    content = docs[0].page_content
+    left_pos = content.find("左カラムの本文です")
+    right_pos = content.find("右カラムの本文です")
+    assert left_pos != -1
+    assert right_pos != -1
+    assert left_pos < right_pos
+
+
+def test_detect_pdf_column_split_ignores_single_column_table_page(tmp_path):
+    # 罫線表を含む単一カラムの行政資料風ページでは、行全体に広がるブロックが
+    # X区間を1つに結合するため2カラムと誤検出されないことを確認する。
+    pdf_path = tmp_path / "report.pdf"
+    _make_administrative_report_pdf(pdf_path)
+
+    import fitz
+
+    with fitz.open(str(pdf_path)) as pdf:
+        assert ingest._detect_pdf_column_split(pdf[0]) is None
+
+
 def test_extract_docling_page_returns_page_from_single_prov():
     # dl_meta.doc_items[].prov[].page_no（1始まり）が単一の場合、0始まりに正規化して返す
     metadata = {

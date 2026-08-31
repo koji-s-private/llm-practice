@@ -249,6 +249,87 @@ MIN_CHARS_PER_PAGE_FOR_FAST_PATH = 40
 # ヘッダー行と数値の対応関係を保ったまま抽出できる（表が無いページでは何も追加されない）。
 PDF_EXTRACT_TABLES_FORMAT = "markdown"
 
+# 2カラムレイアウトの列間に十分な余白（gutter）がある場合のみ2カラムと判定するための
+# 最小幅（pt）。段落間の通常のインデント幅程度の狭い空白まで2カラムと誤検出しないための閾値。
+PDF_COLUMN_GUTTER_MIN_WIDTH = 20.0
+
+
+def _detect_pdf_column_split(page) -> float | None:
+    """ページ内のテキストブロックのX座標分布から2カラムレイアウトの境界を検出する。
+
+    全ブロックのX方向の区間をマージし、ページ中央付近（30%〜70%）に十分な幅の
+    空白帯（gutter）を挟んでちょうど2つの領域に分かれる場合のみ2カラムと判定する。
+    見出し・罫線表のように段組みをまたいで幅広く広がるブロックが1つでもあると
+    区間が結合されて1領域になるため、単一カラムの文書や表・見出しを含むページを
+    誤って2カラムと判定しない（`get_text(sort=True)`のような全文ソートで見出し・表の
+    順序が崩れる副作用を避けつつ、2カラム崩れだけを検出するための保守的な閾値）。
+    """
+    blocks = [b for b in page.get_text("blocks") if b[4].strip()]
+    if len(blocks) < 2:
+        return None
+
+    intervals = sorted((b[0], b[2]) for b in blocks)
+    merged: list[tuple[float, float]] = []
+    for x0, x1 in intervals:
+        if merged and x0 <= merged[-1][1]:
+            merged[-1] = (merged[-1][0], max(merged[-1][1], x1))
+        else:
+            merged.append((x0, x1))
+
+    if len(merged) != 2:
+        return None
+
+    (_, left_x1), (right_x0, _) = merged
+    gutter_width = right_x0 - left_x1
+    gutter_center = (left_x1 + right_x0) / 2
+    page_width = page.rect.width
+    if gutter_width < PDF_COLUMN_GUTTER_MIN_WIDTH:
+        return None
+    if not (page_width * 0.3 <= gutter_center <= page_width * 0.7):
+        return None
+    return gutter_center
+
+
+def _reorder_two_column_page_text(page, split_x: float) -> str:
+    """検出した列境界でページを左右にクリップして再抽出し、左カラム→右カラムの順に連結する。
+
+    get_text(clip=...)は指定領域に含まれる要素だけに絞り込むがブロックの生成順は変えないため、
+    左右を別々に抽出してから連結することで「右カラムのテキストオブジェクトが左カラムより
+    先にコンテンツストリームへ書き込まれている」場合の読み取り順崩れだけを解消できる。
+    """
+    height = page.rect.height
+    left_text = page.get_text(clip=(0, 0, split_x, height)).strip()
+    right_text = page.get_text(clip=(split_x, 0, page.rect.width, height)).strip()
+    return f"{left_text}\n\n{right_text}"
+
+
+def _fix_two_column_pages(path: Path, docs: list[Document]) -> list[Document]:
+    """2カラムレイアウトと判定できるページに限り、列単位で再抽出して読み取り順を修正する。
+
+    extract_tables="markdown"によるMarkdown表は本文の特定位置に追記されており、
+    ページ全体を再構築すると追記位置がずれる恐れがあるため、Markdown表が
+    含まれるらしいページ（"|"を含むページ）は対象から除外する（安全側に倒す）。
+    再抽出に失敗しても取り込み全体は止めず、元のdocsをそのまま返す。
+    """
+    import pymupdf
+
+    try:
+        with pymupdf.open(str(path)) as pdf:
+            for doc in docs:
+                page_number = doc.metadata.get("page")
+                if not isinstance(page_number, int) or not (0 <= page_number < len(pdf)):
+                    continue
+                if "|" in doc.page_content:
+                    continue
+                split_x = _detect_pdf_column_split(pdf[page_number])
+                if split_x is None:
+                    continue
+                doc.page_content = _reorder_two_column_page_text(pdf[page_number], split_x)
+    except Exception as e:
+        logger.warning("%s の2カラムレイアウト判定中にエラーが発生したためスキップします: %s", path, e)
+    return docs
+
+
 # Doclingフォールバック（DOC_CHUNKS）は段落・テーブルセル単位の細切れDocumentを返し、
 # そのままsplitterに渡すとチャンクが細かくなりすぎる（splitterはDocumentをまたいで
 # マージしない）ため、splitterのchunk_sizeと同じ目安文字数でまとめ直す。
@@ -363,6 +444,7 @@ def _load_pdf(path: Path, verbose: bool = True) -> list:
         _log_progress(verbose, "    → Doclingで%d文字を抽出しました。", docling_chars)
         return docling_docs
 
+    fast_docs = _fix_two_column_pages(path, fast_docs)
     total_chars = sum(len(d.page_content.strip()) for d in fast_docs)
     avg_chars_per_page = total_chars / max(len(fast_docs), 1)
 
