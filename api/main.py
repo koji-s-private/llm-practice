@@ -36,7 +36,7 @@ from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 from pydantic import BaseModel
 
 from history_utils import _windowed_history
-from ingest import delete_indexed_file, list_indexed_files, resolve_upload_dest, sync_data_dir
+from ingest import SUPPORTED_EXTENSIONS, delete_indexed_file, list_indexed_files, resolve_upload_dest, sync_data_dir
 from memory import CONVERSATIONS_DIR, THREAD_ID_PATTERN, conversation_count, new_thread_id, save_conversation
 from rag_chain import build_agent
 from source_formatting import format_snippet as _format_snippet
@@ -240,16 +240,20 @@ async def upload_files(files: list[UploadFile] = File(default=[])) -> dict:
 
     同名ファイルが既にある場合はresolve_upload_dest()が連番サフィックス付きの別名を
     返すため、無警告での上書きは発生しない。呼び出し元は各要素のrenamedを見て
-    リネームされた旨をユーザーに案内できる。保存先の解決（パストラバーサル検証含む）を
+    リネームされた旨をユーザーに案内できる。保存先の解決（パストラバーサル検証・拡張子検証含む）を
     全ファイル分先に済ませてから書き込むことで、一部のファイルだけ不正で拒否された際に
-    他のファイルだけ保存済みという中途半端な状態を残さないようにしている。
+    他のファイルだけ保存済みという中途半端な状態を残さないようにしている（ただし書き込み中の
+    I/Oエラー自体まではこの検証で防げない）。
     """
     destinations: list[tuple[UploadFile, Path]] = []
     saved_paths: set[Path] = set()
     for file in files:
-        dest = resolve_upload_dest(file.filename or "", taken_paths=saved_paths)
+        filename = file.filename or ""
+        if Path(filename).suffix.lower() not in SUPPORTED_EXTENSIONS:
+            raise HTTPException(status_code=400, detail=f"対応していないファイル形式です: {filename}")
+        dest = resolve_upload_dest(filename, taken_paths=saved_paths)
         if dest is None:
-            raise HTTPException(status_code=400, detail=f"不正なファイル名です: {file.filename}")
+            raise HTTPException(status_code=400, detail=f"不正なファイル名です: {filename}")
         saved_paths.add(dest)
         destinations.append((file, dest))
 
@@ -280,9 +284,14 @@ def _validate_file_name(name: str) -> None:
         raise HTTPException(status_code=400, detail="ファイル名の形式が不正です")
 
 
-@app.delete("/api/files/{name}", response_model=DeleteFileResponse)
+@app.delete("/api/files/{name:path}", response_model=DeleteFileResponse)
 def delete_file(name: str) -> dict:
-    """インデックス済みファイルをdata/から削除し、ベクトルDBに反映する。"""
+    """インデックス済みファイルをdata/から削除し、ベクトルDBに反映する。
+
+    name はGoogle Drive同期ファイルのようなサブフォルダ付き相対パス（例:
+    "google_drive/foo.pdf"）もありうるため、デフォルトのstrコンバータ（"/"を含む値に
+    マッチしない）ではなくpathコンバータを使い、"/"を含む名前もルーティングできるようにする。
+    """
     _validate_file_name(name)
     if not delete_indexed_file(name):
         raise HTTPException(status_code=404, detail=f"ファイルが見つかりません: {name}")

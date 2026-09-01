@@ -127,4 +127,19 @@ describe('FileManager', () => {
       expect(screen.getByText('インデックス済みのファイルはまだありません。')).toBeInTheDocument(),
     )
   })
+
+  it('削除に失敗した場合エラーメッセージを表示する', async () => {
+    const user = userEvent.setup()
+    vi.spyOn(filesApi, 'fetchIndexedFiles').mockResolvedValue([{ name: 'old.txt', chunk_count: 1 }])
+    vi.spyOn(filesApi, 'deleteIndexedFile').mockRejectedValue(new Error('削除失敗'))
+
+    renderFileManager()
+    await screen.findByText(/old\.txt/)
+
+    await user.click(screen.getByRole('button', { name: 'old.txt を削除' }))
+    await user.click(screen.getByRole('button', { name: '削除する' }))
+
+    expect(await screen.findByText('削除失敗')).toBeInTheDocument()
+    expect(screen.getAllByText(/old\.txt/).length).toBeGreaterThan(0)
+  })
 })

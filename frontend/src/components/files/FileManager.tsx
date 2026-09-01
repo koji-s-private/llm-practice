@@ -73,6 +73,11 @@ export function FileManager() {
           インデックス済みのファイルはまだありません。
         </p>
       )}
+      {deleteMutation.isError && (
+        <p className="text-destructive text-xs">
+          {errorMessage(deleteMutation.error, 'ファイルの削除に失敗しました')}
+        </p>
+      )}
       {filesQuery.data && filesQuery.data.length > 0 && (
         <ul className="flex flex-col gap-2">
           {filesQuery.data.map((file) => (

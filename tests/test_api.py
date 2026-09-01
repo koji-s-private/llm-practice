@@ -624,6 +624,61 @@ def test_upload_files_with_empty_file_list_does_not_trigger_sync(client, monkeyp
     assert sync_calls == []
 
 
+def test_upload_files_rejects_unsupported_extension(client, monkeypatch, tmp_path):
+    """異常系: app.py（st.file_uploader）と同じ許可拡張子リストに無い拡張子は400で拒否され、
+    resolve_upload_dest()呼び出しやdata/への書き込みに到達しない（見えないゴミファイルを防ぐ）。"""
+    resolve_calls = []
+    sync_calls = []
+    monkeypatch.setattr(
+        api_main,
+        "resolve_upload_dest",
+        lambda filename, taken_paths=None: resolve_calls.append(filename) or tmp_path / filename,
+    )
+    monkeypatch.setattr(api_main, "sync_data_dir", lambda verbose=False: sync_calls.append(verbose) or {})
+
+    response = client.post(
+        "/api/files/upload",
+        files=[("files", ("malware.exe", b"MZ", "application/octet-stream"))],
+    )
+
+    assert response.status_code == 400
+    assert resolve_calls == []
+    assert sync_calls == []
+    assert not (tmp_path / "malware.exe").exists()
+
+
+def test_upload_files_does_not_save_any_file_when_one_has_unsupported_extension(client, monkeypatch, tmp_path):
+    """異常系: 複数ファイル中1件でも許可拡張子外なら、他の正常なファイルも保存されない
+    （不正なファイル名の場合と同じロールバック方針）。"""
+    monkeypatch.setattr(api_main, "resolve_upload_dest", lambda filename, taken_paths=None: tmp_path / filename)
+    monkeypatch.setattr(api_main, "sync_data_dir", lambda verbose=False: {})
+
+    response = client.post(
+        "/api/files/upload",
+        files=[
+            ("files", ("valid.txt", b"content", "text/plain")),
+            ("files", ("malware.exe", b"MZ", "application/octet-stream")),
+        ],
+    )
+
+    assert response.status_code == 400
+    assert not (tmp_path / "valid.txt").exists()
+
+
+@pytest.mark.parametrize("filename", ["report.PDF", "notes.TXT", "sheet.XLSX"])
+def test_upload_files_accepts_supported_extension_case_insensitively(client, monkeypatch, tmp_path, filename):
+    """境界値: 拡張子の大文字小文字は区別しない。"""
+    monkeypatch.setattr(api_main, "resolve_upload_dest", lambda name, taken_paths=None: tmp_path / name)
+    monkeypatch.setattr(api_main, "sync_data_dir", lambda verbose=False: {})
+
+    response = client.post(
+        "/api/files/upload",
+        files=[("files", (filename, b"content", "application/octet-stream"))],
+    )
+
+    assert response.status_code == 200
+
+
 # --- DELETE /api/files/{name} ---
 
 
@@ -663,6 +718,43 @@ def test_delete_file_rejects_path_traversal_name(client, monkeypatch, name):
     monkeypatch.setattr(api_main, "delete_indexed_file", _fake_delete)
 
     response = client.delete(f"/api/files/{name}")
+
+    assert response.status_code in (400, 404)
+    assert called["count"] == 0
+
+
+def test_delete_file_accepts_subfolder_relative_path(client, monkeypatch):
+    """正常系: Google Drive同期ファイル（list_indexed_files()が"google_drive/xxx.pdf"のような
+    相対パスで返すもの）も、URLエンコードした"/"を含む名前でdelete_indexed_file()まで到達し削除できる。"""
+    sync_calls = []
+    received_names = []
+
+    def _fake_delete(name):
+        received_names.append(name)
+        return True
+
+    monkeypatch.setattr(api_main, "delete_indexed_file", _fake_delete)
+    monkeypatch.setattr(api_main, "sync_data_dir", lambda verbose=False: sync_calls.append(verbose) or {})
+
+    response = client.delete("/api/files/google_drive%2Ffoo.pdf")
+
+    assert response.status_code == 200
+    assert response.json() == {"name": "google_drive/foo.pdf"}
+    assert received_names == ["google_drive/foo.pdf"]
+    assert sync_calls == [False]
+
+
+def test_delete_file_rejects_path_traversal_in_subfolder(client, monkeypatch):
+    """異常系: サブフォルダ対応後も"../"を含む相対パスはdelete_indexed_file()を呼ばず拒否される。"""
+    called = {"count": 0}
+
+    def _fake_delete(name):
+        called["count"] += 1
+        return False
+
+    monkeypatch.setattr(api_main, "delete_indexed_file", _fake_delete)
+
+    response = client.delete("/api/files/google_drive%2F..%2F..%2Fetc%2Fpasswd")
 
     assert response.status_code in (400, 404)
     assert called["count"] == 0
