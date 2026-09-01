@@ -2506,3 +2506,9 @@ def test_unrelated_load_failure_log_does_not_include_encoding_hint(fake_env, mon
     warnings = [r.getMessage() for r in caplog.records if r.levelname == "WARNING"]
     assert len(warnings) == 1
     assert "文字エンコーディングを自動判定できませんでした" not in warnings[0]
+
+
+def test_supported_extensions_matches_loaders_keys():
+    """SUPPORTED_EXTENSIONSはapp.py/api/main.pyが許可拡張子として参照する単一のソースであり、
+    LOADERSの対応拡張子とズレてはならない。"""
+    assert set(ingest.SUPPORTED_EXTENSIONS) == set(ingest.LOADERS.keys())

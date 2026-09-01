@@ -239,6 +239,10 @@ LOADERS = {
     ".htm": _load_html,
 }
 
+# アップロード時に許可する拡張子（先頭の"."付き）。app.py（st.file_uploaderのtype引数）と
+# api/main.py（POST /api/files/upload）の両方がここを参照し、許可拡張子の二重管理を避ける。
+SUPPORTED_EXTENSIONS = tuple(LOADERS.keys())
+
 # 1ページあたりの抽出文字数がこれ未満の場合、「うまくテキスト抽出できていない
 # （図解・スキャンPDFの疑いがある）」とみなしDoclingでの再解析を試みる。
 MIN_CHARS_PER_PAGE_FOR_FAST_PATH = 40

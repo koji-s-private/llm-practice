@@ -193,9 +193,11 @@ Streamlit版（`app.py`）と本APIは同じ `data/` / `chroma_db/` を参照す
 
 ### フロントエンド基盤・チャットUI
 
-[docs/frontend-tech-policy.md](docs/frontend-tech-policy.md)の移行計画Step2（基盤構築）・Step3（チャットUI実装）
-として追加。`frontend/`配下にVite + React + TypeScriptでチャット画面（`POST /api/chat`のSSEストリーミング表示・
-Markdown/コードブロック表示・参照元表示）を実装した。会話の一覧・切り替え・削除等の会話管理UIは未実装（Step5以降）。
+[docs/frontend-tech-policy.md](docs/frontend-tech-policy.md)の移行計画Step2（基盤構築）・Step3（チャットUI実装）・
+Step4（ファイル管理UI実装）として追加。`frontend/`配下にVite + React + TypeScriptでチャット画面
+（`POST /api/chat`のSSEストリーミング表示・Markdown/コードブロック表示・参照元表示）と、
+インデックス済みファイルの一覧・アップロード・削除を行うファイル管理UI（`GET/POST/DELETE /api/files*`）を
+実装した。会話の一覧・切り替え・削除等の会話管理UIは未実装（Step5以降）。
 Streamlit版（`app.py`）は移行完了まで並存する。使用技術の詳細は[frontend/README.md](frontend/README.md)を参照。
 
 | ライブラリ | 役割 | このプロジェクトでの使用箇所 |
@@ -206,6 +208,7 @@ Streamlit版（`app.py`）は移行完了まで並存する。使用技術の詳
 | [TanStack Query](https://tanstack.com/query) | API通信のキャッシュ・再試行等を扱うデータ取得・状態管理ライブラリ | `frontend/src/main.tsx`（`QueryClientProvider`）、`frontend/src/components/chat/Chat.tsx`（会話スレッド発行 `POST /api/conversations/new`） |
 | [react-markdown](https://github.com/remarkjs/react-markdown) | チャット回答本文のMarkdown描画 | `frontend/src/components/chat/MarkdownContent.tsx` |
 | [react-syntax-highlighter](https://github.com/react-syntax-highlighter/react-syntax-highlighter) | コードブロックのシンタックスハイライト | `frontend/src/components/chat/MarkdownContent.tsx` |
+| [react-dropzone](https://react-dropzone.js.org/) | ファイル管理UIのドラッグ&ドロップ・複数選択アップロード | `frontend/src/components/files/FileDropzone.tsx` |
 | [ESLint](https://eslint.org/) + [Prettier](https://prettier.io/) | フロントエンドの静的解析・コードフォーマット | `frontend/eslint.config.ts` / `frontend/.prettierrc.json` |
 | [Vitest](https://vitest.dev/) + [React Testing Library](https://testing-library.com/react) | コンポーネント単体テスト | `frontend/src/App.test.tsx` |
 | [Playwright](https://playwright.dev/)（Node版） | E2Eテスト（ローカル実行のみ、無料） | `frontend/e2e/app.spec.ts` |
@@ -220,6 +223,7 @@ HTTP API層を提供する。
 |---|---|---|
 | [FastAPI](https://fastapi.tiangolo.com/) | Python製のWeb APIフレームワーク（型ヒントベースのリクエスト/レスポンス検証、`StreamingResponse`によるストリーミング配信に対応） | `api/main.py`。`ingest.py` / `rag_chain.py` / `memory.py` をラップするエンドポイント（`/api/chat` / `/api/sync` / `/api/conversations/*`）を定義 |
 | [uvicorn](https://www.uvicorn.org/)（`uvicorn[standard]`） | FastAPIアプリをローカルで起動するASGIサーバー | `uvicorn api.main:app --reload` でローカル起動（詳細は「[バックエンドAPI（FastAPI）を起動する場合](#バックエンドapifastapiを起動する場合)」） |
+| [python-multipart](https://github.com/Kludex/python-multipart) | multipart/form-dataのファイルアップロード解析に必要（FastAPIの`UploadFile`受け取りに必須の依存） | `api/main.py`のファイルアップロードエンドポイント |
 
 ### LLMエージェント・オーケストレーション（LangChain）
 

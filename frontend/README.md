@@ -3,7 +3,8 @@
 Doclore（ローカルRAGチャットアプリ）の新フロントエンド（Vite + React + TypeScript）です。
 既存のStreamlit版（ルートの `app.py`）を置き換える移行計画（[docs/frontend-tech-policy.md](../docs/frontend-tech-policy.md)）
 のStep2で基盤を構築し、Step3で `POST /api/chat` を呼び出すチャットUI（メッセージ入力・
-SSEストリーミング表示・Markdown/コードブロック表示・参照元表示）を実装しました。
+SSEストリーミング表示・Markdown/コードブロック表示・参照元表示）を、Step4で
+ファイル管理UI（`GET/POST/DELETE /api/files*`。アップロード・一覧表示・削除）を実装しました。
 会話の一覧・切り替え・削除等の会話管理UIは未実装（Step5以降）です。
 
 ## 使用技術
@@ -17,6 +18,7 @@ SSEストリーミング表示・Markdown/コードブロック表示・参照�
 | バックエンドAPI呼び出し                | 素の`fetch`                                                                                                                          | `src/lib/api.ts` / `src/lib/chat.ts`。`api/main.py`（FastAPI）のエンドポイントを呼び出す薄いラッパー。`chat.ts`は`POST /api/chat`のSSEレスポンスを`fetch` + `ReadableStream`でパースする                 |
 | Markdown表示                           | [react-markdown](https://github.com/remarkjs/react-markdown)                                                                         | `src/components/chat/MarkdownContent.tsx`。チャット回答本文（Markdown）を描画                                                                                                                            |
 | コードブロックのシンタックスハイライト | [react-syntax-highlighter](https://github.com/react-syntax-highlighter/react-syntax-highlighter) + `@types/react-syntax-highlighter` | `src/components/chat/MarkdownContent.tsx`。react-markdownの`code`コンポーネントを差し替えてコードブロックを装飾                                                                                          |
+| ファイルアップロード                   | [react-dropzone](https://react-dropzone.js.org/)                                                                                     | `src/components/files/FileDropzone.tsx`。ドラッグ&ドロップ・複数ファイル選択に対応したアップロードUI                                                                                                     |
 | 静的解析                               | [ESLint](https://eslint.org/)（Flat Config） + [Prettier](https://prettier.io/)                                                      | `eslint.config.ts` / `.prettierrc.json`                                                                                                                                                                  |
 | 単体テスト                             | [Vitest](https://vitest.dev/) + [React Testing Library](https://testing-library.com/react)                                           | `vite.config.ts`の`test`設定、`src/App.test.tsx`                                                                                                                                                         |
 | E2Eテスト                              | [Playwright](https://playwright.dev/)（ローカル実行）                                                                                | `playwright.config.ts`、`e2e/app.spec.ts`                                                                                                                                                                |
