@@ -223,6 +223,7 @@ HTTP API層を提供する。
 |---|---|---|
 | [FastAPI](https://fastapi.tiangolo.com/) | Python製のWeb APIフレームワーク（型ヒントベースのリクエスト/レスポンス検証、`StreamingResponse`によるストリーミング配信に対応） | `api/main.py`。`ingest.py` / `rag_chain.py` / `memory.py` をラップするエンドポイント（`/api/chat` / `/api/sync` / `/api/conversations/*`）を定義 |
 | [uvicorn](https://www.uvicorn.org/)（`uvicorn[standard]`） | FastAPIアプリをローカルで起動するASGIサーバー | `uvicorn api.main:app --reload` でローカル起動（詳細は「[バックエンドAPI（FastAPI）を起動する場合](#バックエンドapifastapiを起動する場合)」） |
+| [python-multipart](https://github.com/Kludex/python-multipart) | multipart/form-dataのファイルアップロード解析に必要（FastAPIの`UploadFile`受け取りに必須の依存） | `api/main.py`のファイルアップロードエンドポイント |
 
 ### LLMエージェント・オーケストレーション（LangChain）
 
