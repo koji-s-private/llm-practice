@@ -35,6 +35,7 @@ streamlit==1.61.1
 # バックエンドAPI（フロントエンド移行 Step1）
 fastapi==0.141.1
 uvicorn[standard]==0.52.1
+python-multipart==0.0.32          # multipart/form-dataのファイルアップロード解析（フロントエンド移行 Step4）
 
 # 環境変数読み込み
 python-dotenv==1.2.2

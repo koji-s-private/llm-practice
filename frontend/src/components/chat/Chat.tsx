@@ -3,6 +3,8 @@ import { useCallback, useState } from 'react'
 import { ChatInput } from '@/components/chat/ChatInput'
 import { ChatMessageList } from '@/components/chat/ChatMessageList'
 import type { DisplayMessage } from '@/components/chat/types'
+import { FileManager } from '@/components/files/FileManager'
+import { Button } from '@/components/ui/button'
 import { type ChatMessage, type ChatStreamEvent, createNewThread, streamChat } from '@/lib/chat'
 
 function toHistory(messages: DisplayMessage[]): ChatMessage[] {
@@ -38,6 +40,7 @@ export function Chat() {
 
   const [messages, setMessages] = useState<DisplayMessage[]>([])
   const [isSending, setIsSending] = useState(false)
+  const [isFileManagerOpen, setIsFileManagerOpen] = useState(false)
 
   const handleSubmit = useCallback(
     async (text: string) => {
@@ -79,14 +82,29 @@ export function Chat() {
 
   return (
     <div className="mx-auto flex h-svh w-full max-w-3xl flex-col">
-      <header className="border-b p-4">
-        <h1 className="text-xl font-semibold">Doclore</h1>
-        {newThread.isError && (
-          <p className="text-destructive text-xs">
-            会話の初期化に失敗しました: {newThread.error.message}
-          </p>
-        )}
+      <header className="flex items-center justify-between gap-2 border-b p-4">
+        <div>
+          <h1 className="text-xl font-semibold">Doclore</h1>
+          {newThread.isError && (
+            <p className="text-destructive text-xs">
+              会話の初期化に失敗しました: {newThread.error.message}
+            </p>
+          )}
+        </div>
+        <Button
+          variant="outline"
+          size="sm"
+          onClick={() => setIsFileManagerOpen((open) => !open)}
+          aria-expanded={isFileManagerOpen}
+        >
+          📁 ファイル管理
+        </Button>
       </header>
+      {isFileManagerOpen && (
+        <div className="max-h-80 overflow-y-auto border-b">
+          <FileManager />
+        </div>
+      )}
       <ChatMessageList messages={messages} />
       <ChatInput onSubmit={(text) => void handleSubmit(text)} disabled={!threadId || isSending} />
     </div>

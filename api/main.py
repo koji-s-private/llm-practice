@@ -15,7 +15,9 @@
     2. 受信し終えた回答全文を POST /api/conversations/save で会話ログとして保存する
        （Streamlit版の `save_conversation` 呼び出しに相当。呼ぶかどうかはフロントエンド側の
        「今の会話を記憶として保存する」設定に委ねる）。
-    3. data/ 配下のファイルを追加・削除した後は POST /api/sync を呼び、ベクトルDBに反映する。
+    3. GET /api/files でインデックス済みファイル一覧を取得し、POST /api/files/upload・
+       DELETE /api/files/{name} でファイルの追加・削除を行う（いずれもDB反映まで
+       サーバー側で完結するため、フロントエンドから別途 POST /api/sync を呼ぶ必要はない）。
 
 ホスティングはローカル起動のみを前提としており、外部・クラウドへの追加送信は行わない
 （AGENTS.mdの無料制約）。
@@ -23,9 +25,10 @@
 
 import json
 from collections.abc import Generator
+from pathlib import Path
 from typing import Literal
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, File, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 from langchain_core.documents import Document
@@ -33,7 +36,7 @@ from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 from pydantic import BaseModel
 
 from history_utils import _windowed_history
-from ingest import sync_data_dir
+from ingest import delete_indexed_file, list_indexed_files, resolve_upload_dest, sync_data_dir
 from memory import CONVERSATIONS_DIR, THREAD_ID_PATTERN, conversation_count, new_thread_id, save_conversation
 from rag_chain import build_agent
 from source_formatting import format_snippet as _format_snippet
@@ -193,6 +196,98 @@ class SyncResult(BaseModel):
 def sync() -> dict:
     """data/ 配下ドキュメントをベクトルDBに同期する（ingest.sync_data_dir()のラッパー）。"""
     return sync_data_dir(verbose=False)
+
+
+# --- data/ 配下ファイルの管理（一覧・アップロード・削除） ---
+
+
+class IndexedFile(BaseModel):
+    """インデックス済みファイル1件分の情報。"""
+
+    name: str
+    chunk_count: int
+
+
+class IndexedFilesResponse(BaseModel):
+    """GET /api/files のレスポンスボディ。"""
+
+    files: list[IndexedFile]
+
+
+@app.get("/api/files", response_model=IndexedFilesResponse)
+def get_indexed_files() -> dict:
+    """インデックス済みファイルの一覧を取得する（ingest.list_indexed_files()のラッパー）。"""
+    return {"files": list_indexed_files()}
+
+
+class UploadedFile(BaseModel):
+    """アップロードされたファイル1件分の保存結果。"""
+
+    original_name: str
+    saved_name: str
+    renamed: bool
+
+
+class UploadFilesResponse(BaseModel):
+    """POST /api/files/upload のレスポンスボディ。"""
+
+    uploaded: list[UploadedFile]
+
+
+@app.post("/api/files/upload", response_model=UploadFilesResponse)
+async def upload_files(files: list[UploadFile] = File(default=[])) -> dict:
+    """複数ファイルをdata/へ保存し、ベクトルDBに反映する（app.pyのアップロード処理相当）。
+
+    同名ファイルが既にある場合はresolve_upload_dest()が連番サフィックス付きの別名を
+    返すため、無警告での上書きは発生しない。呼び出し元は各要素のrenamedを見て
+    リネームされた旨をユーザーに案内できる。保存先の解決（パストラバーサル検証含む）を
+    全ファイル分先に済ませてから書き込むことで、一部のファイルだけ不正で拒否された際に
+    他のファイルだけ保存済みという中途半端な状態を残さないようにしている。
+    """
+    destinations: list[tuple[UploadFile, Path]] = []
+    saved_paths: set[Path] = set()
+    for file in files:
+        dest = resolve_upload_dest(file.filename or "", taken_paths=saved_paths)
+        if dest is None:
+            raise HTTPException(status_code=400, detail=f"不正なファイル名です: {file.filename}")
+        saved_paths.add(dest)
+        destinations.append((file, dest))
+
+    uploaded = []
+    for file, dest in destinations:
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        dest.write_bytes(await file.read())
+        uploaded.append(
+            {"original_name": file.filename, "saved_name": dest.name, "renamed": dest.name != file.filename}
+        )
+
+    if uploaded:
+        sync_data_dir(verbose=False)
+    return {"uploaded": uploaded}
+
+
+class DeleteFileResponse(BaseModel):
+    """DELETE /api/files/{name} のレスポンスボディ。"""
+
+    name: str
+
+
+def _validate_file_name(name: str) -> None:
+    """delete_file()の入力検証。delete_indexed_file()側のsafe_relative_dest()による
+    パストラバーサル対策に加え、API層でも空文字・"."・".."を含む相対パスを早期に弾く。
+    """
+    if not name or name in (".", "..") or ".." in Path(name).parts:
+        raise HTTPException(status_code=400, detail="ファイル名の形式が不正です")
+
+
+@app.delete("/api/files/{name}", response_model=DeleteFileResponse)
+def delete_file(name: str) -> dict:
+    """インデックス済みファイルをdata/から削除し、ベクトルDBに反映する。"""
+    _validate_file_name(name)
+    if not delete_indexed_file(name):
+        raise HTTPException(status_code=404, detail=f"ファイルが見つかりません: {name}")
+    sync_data_dir(verbose=False)
+    return {"name": name}
 
 
 # --- 会話ログ（memory.py）の参照・保存 ---
