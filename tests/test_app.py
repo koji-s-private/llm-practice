@@ -3244,10 +3244,11 @@ def test_provider_fallback_warning_hidden_when_provider_unset(monkeypatch):
     assert not any("有料API" in w.value for w in at.sidebar.warning)
 
 
-@pytest.mark.parametrize("provider", ["anthropic", "openai"])
-def test_provider_fallback_warning_shown_with_reason_when_using_paid_api(monkeypatch, provider):
+@pytest.mark.parametrize(("provider", "provider_label"), [("anthropic", "Anthropic"), ("openai", "OpenAI")])
+def test_provider_fallback_warning_shown_with_reason_when_using_paid_api(monkeypatch, provider, provider_label):
     """異常系: Ollamaが利用できず有料APIへフォールバックした場合、サイドバーに
-    プロバイダ名とフォールバック理由を含む警告バナーが表示される。"""
+    プロバイダ名を含む短い警告バナーが表示され、フォールバック理由はcaptionに分離される
+    （警告本文が長文化してサイドバーが縦に間延びしないようにするため）。"""
     import setup
 
     monkeypatch.setattr(setup, "CURRENT_PROVIDER", provider)
@@ -3258,8 +3259,10 @@ def test_provider_fallback_warning_shown_with_reason_when_using_paid_api(monkeyp
     assert at.exception == []
     fallback_warnings = [w.value for w in at.sidebar.warning if "有料API" in w.value]
     assert len(fallback_warnings) == 1
-    assert provider in fallback_warnings[0]
-    assert "Ollamaサーバーに接続できません" in fallback_warnings[0]
+    assert provider_label in fallback_warnings[0]
+    assert "Ollamaサーバーに接続できません" not in fallback_warnings[0]
+    reason_captions = [c.value for c in at.sidebar.caption if "Ollamaサーバーに接続できません" in c.value]
+    assert len(reason_captions) == 1
 
 
 def test_provider_fallback_warning_shown_without_reason_when_reason_missing(monkeypatch):
@@ -3275,7 +3278,40 @@ def test_provider_fallback_warning_shown_without_reason_when_reason_missing(monk
     assert at.exception == []
     fallback_warnings = [w.value for w in at.sidebar.warning if "有料API" in w.value]
     assert len(fallback_warnings) == 1
-    assert "anthropic" in fallback_warnings[0]
+    assert "Anthropic" in fallback_warnings[0]
+    assert not any("理由:" in c.value for c in at.sidebar.caption)
+
+
+def test_provider_fallback_warning_unknown_provider_falls_back_to_raw_string(monkeypatch):
+    """境界値: CURRENT_PROVIDER が _PROVIDER_LABELS に存在しない想定外の文字列でも、
+    KeyErrorにならずプロバイダ名をそのまま表示する。"""
+    import setup
+
+    monkeypatch.setattr(setup, "CURRENT_PROVIDER", "mystery-provider")
+    monkeypatch.setattr(setup, "CURRENT_PROVIDER_FALLBACK_REASON", None)
+
+    at = _run_app()
+
+    assert at.exception == []
+    fallback_warnings = [w.value for w in at.sidebar.warning if "有料API" in w.value]
+    assert len(fallback_warnings) == 1
+    assert "mystery-provider" in fallback_warnings[0]
+
+
+def test_provider_fallback_warning_empty_reason_string_hides_caption(monkeypatch):
+    """境界値: フォールバック理由が空文字列の場合も、Noneの場合と同様にcaptionを出さない。"""
+    import setup
+
+    monkeypatch.setattr(setup, "CURRENT_PROVIDER", "openai")
+    monkeypatch.setattr(setup, "CURRENT_PROVIDER_FALLBACK_REASON", "")
+
+    at = _run_app()
+
+    assert at.exception == []
+    fallback_warnings = [w.value for w in at.sidebar.warning if "有料API" in w.value]
+    assert len(fallback_warnings) == 1
+    assert "OpenAI" in fallback_warnings[0]
+    assert not any("理由:" in c.value for c in at.sidebar.caption)
 
 
 # --- 13. サイドバーの会話エクスポート（ダウンロード）ボタン ---
