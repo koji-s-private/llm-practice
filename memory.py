@@ -12,12 +12,15 @@
   検索対象にでき、無関係な別スレッドの会話が回答に混ざらないようにしている。
 """
 
+import json
 import logging
 import os
 import re
 import uuid
 from datetime import datetime
 from pathlib import Path
+
+from langchain_core.documents import Document
 
 logger = logging.getLogger(__name__)
 
@@ -27,15 +30,18 @@ CONVERSATIONS_DIR = Path(__file__).parent / "data" / "conversations"
 # 既存の会話ログの形式・解析ロジックに一切影響しないようにする）。
 THREAD_TITLE_FILENAME = "title.txt"
 
-# 会話ログMarkdownの質問・回答見出し（本文中の区切り位置の目印として使う）。
+# 会話ログMarkdownの質問・回答・参照元見出し（本文中の区切り位置の目印として使う）。
 _QUESTION_HEADER = "## 質問\n\n"
 _ANSWER_HEADER = "\n\n## 回答\n\n"
+_SOURCES_HEADER = "\n\n## 参照元\n\n"
 
-# save_conversation()が書き込む「質問文字数」「回答文字数」のメタデータ行。見出しの
-# 正規表現マッチではなく記録済みの文字数ぶんをそのまま切り出すことで、本文中に
+# save_conversation()が書き込む「質問文字数」「回答文字数」「参照元文字数」のメタデータ行。
+# 見出しの正規表現マッチではなく記録済みの文字数ぶんをそのまま切り出すことで、本文中に
 # "## 質問"/"## 回答"に類する文字列が偶然含まれていても正確に復元できる。
+# 参照元文字数の行が無いファイルは旧形式（sources未対応）として扱い、空リストにフォールバックする。
 _QUESTION_LENGTH_PATTERN = re.compile(r"^- 質問文字数: (\d+)$", re.MULTILINE)
 _ANSWER_LENGTH_PATTERN = re.compile(r"^- 回答文字数: (\d+)$", re.MULTILINE)
+_SOURCES_LENGTH_PATTERN = re.compile(r"^- 参照元文字数: (\d+)$", re.MULTILINE)
 
 # 文字数メタデータが無い旧形式ファイル向けのフォールバック（非貪欲マッチのため
 # 本文に類似の文字列が含まれる場合は途中で切れうるが、後方互換のため残す）。
@@ -72,13 +78,31 @@ def _slugify_snippet(text: str, length: int = 20) -> str:
     return snippet or "conversation"
 
 
-def save_conversation(question: str, answer: str, thread_id: str, is_fallback: bool = False) -> Path:
+def _serialize_sources(sources: list) -> str:
+    """参照元DocumentのリストをMarkdown内に埋め込むためJSON文字列へ変換する。"""
+    return json.dumps(
+        [{"metadata": doc.metadata, "page_content": doc.page_content} for doc in sources],
+        ensure_ascii=False,
+    )
+
+
+def save_conversation(
+    question: str,
+    answer: str,
+    thread_id: str,
+    is_fallback: bool = False,
+    sources: list | None = None,
+) -> Path:
     """1回分の質問・回答を Markdown ファイルとして data/conversations/<thread_id>/ に保存する。
 
     is_fallback: ドキュメントに根拠が見つからず一般知識で回答した場合は True を渡す。
     Markdown本文にメタデータ行として書き込み、ingest.sync_data_dir() がチャンクの
     メタデータ(is_fallback)に反映する。これにより、根拠のない回答が以降の検索結果に
     再ヒットして裏付けありのように扱われることを防ぐ（rag_chain.retrieve_context側で除外）。
+
+    sources: 回答の根拠として使われた langchain_core.documents.Document 互換のリスト
+    （.metadata / .page_content を持つオブジェクト）。指定しない/空の場合は参照元セクション
+    自体を書き込まず、load_conversation()側は旧形式ファイルと同じく空リストを返す。
 
     戻り値: 保存したファイルのパス。呼び出し側が ingest.sync_data_dir() を呼べば
     ベクトルDBに反映される。
@@ -90,14 +114,24 @@ def save_conversation(question: str, answer: str, thread_id: str, is_fallback: b
     filename = f"{now.strftime('%Y%m%d_%H%M%S')}_{uuid.uuid4().hex[:6]}_{_slugify_snippet(question)}.md"
     path = thread_dir / filename
 
-    content = (
+    sources_json = _serialize_sources(sources) if sources else None
+
+    metadata_lines = (
         f"# 会話ログ\n\n"
         f"- 日時: {now.strftime('%Y-%m-%d %H:%M:%S')}\n"
         f"- 一般知識フォールバック: {'true' if is_fallback else 'false'}\n"
         f"- 質問文字数: {len(question)}\n"
-        f"- 回答文字数: {len(answer)}\n\n"
-        f"{_QUESTION_HEADER}{question}{_ANSWER_HEADER}{answer}\n"
+        f"- 回答文字数: {len(answer)}\n"
     )
+    if sources_json is not None:
+        metadata_lines += f"- 参照元文字数: {len(sources_json)}\n"
+    metadata_lines += "\n"
+
+    body = f"{_QUESTION_HEADER}{question}{_ANSWER_HEADER}{answer}\n"
+    if sources_json is not None:
+        body += f"{_SOURCES_HEADER}{sources_json}\n"
+
+    content = metadata_lines + body
     # 書き込み中のプロセス終了で内容が途中で切れたファイルが残らないよう、一時ファイルに
     # 書いてからos.replace()でアトミックに配置する（ingest._save_manifest()と同じパターン）。
     tmp_path = path.with_suffix(".md.tmp")
@@ -155,6 +189,28 @@ def _extract_question(content: str) -> str:
     return question
 
 
+def _extract_sources(content: str) -> list[Document]:
+    """会話ログMarkdownの本文から参照元セクションを抜き出し、Documentのリストに復元する。
+
+    参照元文字数の記録が無い（旧形式、またはsourcesを保存しなかった）場合は空リストを返す。
+    JSONとして壊れている場合もクラッシュさせず空リストにフォールバックする。
+    """
+    len_match = _SOURCES_LENGTH_PATTERN.search(content)
+    if not len_match:
+        return []
+    start = content.find(_SOURCES_HEADER)
+    if start == -1:
+        return []
+    start += len(_SOURCES_HEADER)
+    end = start + int(len_match.group(1))
+    try:
+        raw_sources = json.loads(content[start:end])
+        return [Document(page_content=s["page_content"], metadata=s["metadata"]) for s in raw_sources]
+    except (ValueError, KeyError, TypeError) as e:
+        logger.warning("参照元情報の復元に失敗したため空として扱います: %s", e)
+        return []
+
+
 def _parse_created_at(path: Path) -> datetime:
     """ファイル名の先頭（save_conversationが付与するタイムスタンプ）から作成日時を復元する。
 
@@ -207,7 +263,8 @@ def load_conversation(thread_id: str) -> list[dict]:
     """指定スレッドの会話ログを時系列順（古い→新しい）に読み込んで返す。
 
     過去スレッドを再開する際、チャット画面に会話履歴を再現するために使う。
-    各要素は {"question": str, "answer": str, "created_at": datetime} の形式。
+    各要素は {"question": str, "answer": str, "created_at": datetime, "sources": list[Document]} の形式。
+    sourcesは旧形式ファイル・未保存の場合は空リストになる。
     """
     thread_dir = CONVERSATIONS_DIR / _validate_thread_id(thread_id)
     if not thread_dir.exists():
@@ -219,7 +276,14 @@ def load_conversation(thread_id: str) -> list[dict]:
         if content is None:
             continue
         question, answer = _extract_qa(content)
-        conversations.append({"question": question, "answer": answer, "created_at": _parse_created_at(f)})
+        conversations.append(
+            {
+                "question": question,
+                "answer": answer,
+                "created_at": _parse_created_at(f),
+                "sources": _extract_sources(content),
+            }
+        )
     return conversations
 
 

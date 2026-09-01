@@ -510,7 +510,8 @@ def _switch_thread(thread_id: str) -> None:
         if turn["question"]:
             messages.append(HumanMessage(content=turn["question"], additional_kwargs=timestamp_kwargs))
         if turn["answer"]:
-            messages.append(AIMessage(content=turn["answer"], additional_kwargs=timestamp_kwargs))
+            answer_kwargs = {**timestamp_kwargs, "sources": turn.get("sources") or []}
+            messages.append(AIMessage(content=turn["answer"], additional_kwargs=answer_kwargs))
     st.session_state.messages = messages
     st.session_state.agent = _build_agent_safely(thread_id)
 
@@ -842,5 +843,7 @@ if user_input:
         # ではなく保存した1ファイルだけをその場でDB反映）。sourcesが空＝根拠なしの一般知識回答
         # なのでis_fallbackとして記録し、以降の検索対象から除外できるようにする。
         if st.session_state.auto_save_memory:
-            saved_path = save_conversation(user_input, answer, st.session_state.thread_id, is_fallback=not sources)
+            saved_path = save_conversation(
+                user_input, answer, st.session_state.thread_id, is_fallback=not sources, sources=sources
+            )
             _sync_saved_conversation(saved_path, failed_sync_warning_slot)
