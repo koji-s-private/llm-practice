@@ -23,6 +23,7 @@
 
 import json
 from collections.abc import Generator
+from typing import Literal
 
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
@@ -90,7 +91,7 @@ def _validate_thread_id(thread_id: str) -> str:
 class ChatMessage(BaseModel):
     """会話履歴1件分（role: "user" または "assistant"）。"""
 
-    role: str
+    role: Literal["user", "assistant"]
     content: str
 
 

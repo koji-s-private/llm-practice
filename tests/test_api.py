@@ -223,6 +223,68 @@ def test_chat_converts_history_roles_to_langchain_messages(client, monkeypatch):
     assert input_messages[2].content == "今回の質問"
 
 
+def test_chat_rejects_history_with_invalid_role(client, monkeypatch):
+    """異常系: history[].role が "user"/"assistant" 以外の想定外の値の場合、
+    エージェントを呼び出す前に422で拒否される（想定外roleの無条件AIMessage化を防ぐ）。"""
+    fake_agent = _FakeAgent(chunks=[_FakeChunk("応答")])
+    monkeypatch.setattr(api_main, "build_agent", lambda thread_id: fake_agent)
+
+    history = [{"role": "system", "content": "不正なrole"}]
+    response = client.post("/api/chat", json={"thread_id": "thread-1", "message": "質問", "history": history})
+
+    assert response.status_code == 422
+    assert fake_agent.stream_calls == []
+
+
+@pytest.mark.parametrize(
+    "role",
+    [
+        "System",  # 大文字小文字違い（"user"/"assistant"と完全一致しない）
+        "",  # 空文字
+        "tool",
+        123,
+        None,
+    ],
+)
+def test_chat_rejects_history_with_various_invalid_roles(client, monkeypatch, role):
+    """異常系/境界値: 大文字小文字違い・空文字・非文字列・Noneなど、"user"/"assistant"
+    に完全一致しないroleはすべて422で拒否され、エージェントは呼ばれない。"""
+    fake_agent = _FakeAgent(chunks=[_FakeChunk("応答")])
+    monkeypatch.setattr(api_main, "build_agent", lambda thread_id: fake_agent)
+
+    history = [{"role": role, "content": "不正なrole"}]
+    response = client.post("/api/chat", json={"thread_id": "thread-1", "message": "質問", "history": history})
+
+    assert response.status_code == 422
+    assert fake_agent.stream_calls == []
+
+
+def test_chat_rejects_history_item_missing_role(client, monkeypatch):
+    """境界値: history[]の要素にroleキー自体が無い場合も、必須フィールド欠落として422になる。"""
+    fake_agent = _FakeAgent(chunks=[_FakeChunk("応答")])
+    monkeypatch.setattr(api_main, "build_agent", lambda thread_id: fake_agent)
+
+    history = [{"content": "roleが無い"}]
+    response = client.post("/api/chat", json={"thread_id": "thread-1", "message": "質問", "history": history})
+
+    assert response.status_code == 422
+    assert fake_agent.stream_calls == []
+
+
+def test_chat_accepts_empty_history_array(client, monkeypatch):
+    """境界値: historyが明示的に空配列の場合は正常に処理され、今回のmessageのみがagentに渡る。"""
+    fake_agent = _FakeAgent(chunks=[_FakeChunk("応答")])
+    monkeypatch.setattr(api_main, "build_agent", lambda thread_id: fake_agent)
+
+    response = client.post("/api/chat", json={"thread_id": "thread-1", "message": "質問", "history": []})
+
+    assert response.status_code == 200
+    input_messages = fake_agent.stream_calls[0]["input"]["messages"]
+    assert len(input_messages) == 1
+    assert type(input_messages[0]).__name__ == "HumanMessage"
+    assert input_messages[0].content == "質問"
+
+
 # --- POST /api/chat: 会話履歴のウィンドウイング（history_utils._windowed_history） ---
 
 
