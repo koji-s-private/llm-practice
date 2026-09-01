@@ -281,6 +281,16 @@ def test_grade_relevance_truncates_content_beyond_chunk_size(monkeypatch):
     assert marker not in captured_prompt["value"]
 
 
+# --- SYSTEM_PROMPT（一般知識フォールバック時の挙動） ---
+
+
+def test_system_prompt_prohibits_url_suggestion_in_general_knowledge_fallback():
+    """一般知識フォールバック時に、URLを提示して自分で調べさせるのではなく、
+    一般知識の内容そのものを回答に含めるよう明示的に指示していることを確認する。"""
+    assert "URLを提示して自分で調べるよう促すのではなく" in rag_chain.SYSTEM_PROMPT
+    assert "一般知識の内容そのものを回答に含めてください" in rag_chain.SYSTEM_PROMPT
+
+
 # --- retrieve_context (build_agent の中で作られる検索ツール) ---
 
 
