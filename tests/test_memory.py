@@ -2,9 +2,11 @@
 
 import logging
 import os
+import re
 from datetime import datetime
 
 import pytest
+from langchain_core.documents import Document
 
 import memory
 
@@ -256,17 +258,19 @@ def test_load_conversation_extracts_question_and_answer(tmp_path, monkeypatch):
 
     conversations = memory.load_conversation("thread-a")
 
-    assert conversations == [{"question": "質問内容", "answer": "回答内容", "created_at": datetime(2024, 1, 1, 9, 0)}]
+    assert conversations == [
+        {"question": "質問内容", "answer": "回答内容", "created_at": datetime(2024, 1, 1, 9, 0), "sources": []}
+    ]
 
 
 def test_load_conversation_created_at_has_expected_keys(tmp_path, monkeypatch):
-    """境界値: load_conversation()の各要素は question/answer/created_at の3キーのみを持つ。"""
+    """境界値: load_conversation()の各要素は question/answer/created_at/sources の4キーのみを持つ。"""
     monkeypatch.setattr(memory, "CONVERSATIONS_DIR", tmp_path)
     _write_log(tmp_path, "thread-a", "20240101_090000_aaa111_q.md", question="質問内容", answer="回答内容")
 
     conversations = memory.load_conversation("thread-a")
 
-    assert set(conversations[0].keys()) == {"question", "answer", "created_at"}
+    assert set(conversations[0].keys()) == {"question", "answer", "created_at", "sources"}
     assert isinstance(conversations[0]["created_at"], datetime)
 
 
@@ -318,7 +322,7 @@ def test_load_conversation_returns_empty_strings_when_content_malformed(tmp_path
 
     conversations = memory.load_conversation("thread-a")
 
-    assert conversations == [{"question": "", "answer": "", "created_at": datetime(2024, 1, 1, 9, 0)}]
+    assert conversations == [{"question": "", "answer": "", "created_at": datetime(2024, 1, 1, 9, 0), "sources": []}]
 
 
 def test_load_conversation_ignores_non_markdown_files(tmp_path, monkeypatch):
@@ -362,6 +366,7 @@ def test_load_conversation_normal_case_without_heading_like_strings(tmp_path, mo
             "question": "Pythonとは何ですか？",
             "answer": "Pythonはプログラミング言語です。",
             "created_at": memory._parse_created_at(path),
+            "sources": [],
         }
     ]
 
@@ -376,7 +381,9 @@ def test_load_conversation_question_containing_answer_heading_is_restored_correc
 
     conversations = memory.load_conversation("thread-a")
 
-    assert conversations == [{"question": question, "answer": answer, "created_at": memory._parse_created_at(path)}]
+    assert conversations == [
+        {"question": question, "answer": answer, "created_at": memory._parse_created_at(path), "sources": []}
+    ]
 
 
 def test_load_conversation_answer_containing_question_heading_is_restored_correctly(tmp_path, monkeypatch):
@@ -388,7 +395,9 @@ def test_load_conversation_answer_containing_question_heading_is_restored_correc
 
     conversations = memory.load_conversation("thread-a")
 
-    assert conversations == [{"question": question, "answer": answer, "created_at": memory._parse_created_at(path)}]
+    assert conversations == [
+        {"question": question, "answer": answer, "created_at": memory._parse_created_at(path), "sources": []}
+    ]
 
 
 def test_load_conversation_both_question_and_answer_contain_heading_like_strings(tmp_path, monkeypatch):
@@ -401,7 +410,9 @@ def test_load_conversation_both_question_and_answer_contain_heading_like_strings
 
     conversations = memory.load_conversation("thread-a")
 
-    assert conversations == [{"question": question, "answer": answer, "created_at": memory._parse_created_at(path)}]
+    assert conversations == [
+        {"question": question, "answer": answer, "created_at": memory._parse_created_at(path), "sources": []}
+    ]
 
 
 def test_list_threads_first_question_correct_when_question_contains_answer_heading(tmp_path, monkeypatch):
@@ -425,7 +436,7 @@ def test_extract_qa_legacy_format_without_length_metadata_falls_back_to_regex(tm
     conversations = memory.load_conversation("thread-a")
 
     assert conversations == [
-        {"question": "旧形式の質問", "answer": "旧形式の回答", "created_at": datetime(2024, 1, 1, 9, 0)}
+        {"question": "旧形式の質問", "answer": "旧形式の回答", "created_at": datetime(2024, 1, 1, 9, 0), "sources": []}
     ]
 
 
@@ -458,8 +469,150 @@ def test_extract_qa_falls_back_to_regex_when_length_metadata_is_inconsistent(tmp
 
     # フォールバックの正規表現でも本文自体は問題なく復元できる（見出し文字列を含まないため）
     assert conversations == [
-        {"question": "質問本文", "answer": "回答本文", "created_at": memory._parse_created_at(saved_path)}
+        {
+            "question": "質問本文",
+            "answer": "回答本文",
+            "created_at": memory._parse_created_at(saved_path),
+            "sources": [],
+        }
     ]
+
+
+# --- sources（参照元ドキュメント）の永続化・復元 ---
+
+
+def test_save_conversation_without_sources_omits_sources_section(tmp_path, monkeypatch):
+    """sourcesを渡さない場合、参照元セクションはMarkdownに書き込まれない。"""
+    monkeypatch.setattr(memory, "CONVERSATIONS_DIR", tmp_path)
+
+    path = memory.save_conversation(question="質問", answer="回答", thread_id="thread-a")
+
+    content = path.read_text(encoding="utf-8")
+    assert "## 参照元" not in content
+    assert "参照元文字数" not in content
+
+
+def test_save_conversation_with_empty_sources_list_omits_sources_section(tmp_path, monkeypatch):
+    monkeypatch.setattr(memory, "CONVERSATIONS_DIR", tmp_path)
+
+    path = memory.save_conversation(question="質問", answer="回答", thread_id="thread-a", sources=[])
+
+    content = path.read_text(encoding="utf-8")
+    assert "## 参照元" not in content
+
+
+def test_save_and_load_conversation_roundtrips_sources(tmp_path, monkeypatch):
+    """正常系: sources付きで保存した会話が、Document互換のオブジェクトとして復元される。"""
+    monkeypatch.setattr(memory, "CONVERSATIONS_DIR", tmp_path)
+    sources = [
+        Document(page_content="本文1", metadata={"source": "data/a.txt"}),
+        Document(page_content="本文2", metadata={"source": "data/b.pdf", "page": 3}),
+    ]
+
+    memory.save_conversation(question="質問", answer="回答", thread_id="thread-a", sources=sources)
+    conversations = memory.load_conversation("thread-a")
+
+    loaded_sources = conversations[0]["sources"]
+    assert len(loaded_sources) == 2
+    assert loaded_sources[0].page_content == "本文1"
+    assert loaded_sources[0].metadata == {"source": "data/a.txt"}
+    assert loaded_sources[1].page_content == "本文2"
+    assert loaded_sources[1].metadata == {"source": "data/b.pdf", "page": 3}
+
+
+def test_load_conversation_without_sources_returns_empty_list(tmp_path, monkeypatch):
+    monkeypatch.setattr(memory, "CONVERSATIONS_DIR", tmp_path)
+    memory.save_conversation(question="質問", answer="回答", thread_id="thread-a")
+
+    conversations = memory.load_conversation("thread-a")
+
+    assert conversations[0]["sources"] == []
+
+
+def test_load_conversation_legacy_file_without_sources_section_returns_empty_sources(tmp_path, monkeypatch):
+    """後方互換性: sources未対応の旧形式ファイルも、sourcesは空リストとしてクラッシュせず読み込める。"""
+    monkeypatch.setattr(memory, "CONVERSATIONS_DIR", tmp_path)
+    _write_log(tmp_path, "thread-a", "20240101_090000_aaa111_q.md", question="旧形式の質問", answer="旧形式の回答")
+
+    conversations = memory.load_conversation("thread-a")
+
+    assert conversations[0]["sources"] == []
+
+
+def test_load_conversation_falls_back_to_empty_sources_when_json_is_corrupted(tmp_path, monkeypatch):
+    """異常系: 参照元文字数メタデータはあるがJSONとして壊れている場合もクラッシュせず空リストにする。"""
+    monkeypatch.setattr(memory, "CONVERSATIONS_DIR", tmp_path)
+    saved_path = memory.save_conversation(
+        question="質問",
+        answer="回答",
+        thread_id="thread-a",
+        sources=[Document(page_content="本文", metadata={"source": "data/a.txt"})],
+    )
+    content = saved_path.read_text(encoding="utf-8")
+    broken = re.sub(r"(## 参照元\n\n).*", r"\1{not valid json", content, flags=re.DOTALL)
+    # 壊れたJSONの文字数に合わせてメタデータの参照元文字数も更新しておく
+    broken_json_len = len(broken.split("## 参照元\n\n", 1)[1])
+    broken = re.sub(r"- 参照元文字数: \d+", f"- 参照元文字数: {broken_json_len}", broken)
+    saved_path.write_text(broken, encoding="utf-8")
+
+    conversations = memory.load_conversation("thread-a")
+
+    assert conversations[0]["sources"] == []
+    assert conversations[0]["question"] == "質問"
+    assert conversations[0]["answer"] == "回答"
+
+
+def test_save_conversation_sources_length_metadata_matches_json_length(tmp_path, monkeypatch):
+    monkeypatch.setattr(memory, "CONVERSATIONS_DIR", tmp_path)
+    sources = [Document(page_content="本文", metadata={"source": "data/a.txt"})]
+
+    path = memory.save_conversation(question="質問", answer="回答", thread_id="thread-a", sources=sources)
+
+    content = path.read_text(encoding="utf-8")
+    expected_json = memory._serialize_sources(sources)
+    assert f"- 参照元文字数: {len(expected_json)}" in content
+
+
+def test_save_and_load_conversation_roundtrips_sources_with_special_characters(tmp_path, monkeypatch):
+    """境界値: metadata/page_contentに日本語・ダブルクォート・改行が含まれていても、
+    JSON往復（save→load）で情報が壊れずそのまま復元される。"""
+    monkeypatch.setattr(memory, "CONVERSATIONS_DIR", tmp_path)
+    sources = [
+        Document(
+            page_content='複数行の本文です。\n"引用符"も含みます。\n日本語もOK。',
+            metadata={"source": '特殊/"文字".txt', "note": "改行\nあり"},
+        )
+    ]
+
+    memory.save_conversation(question="質問", answer="回答", thread_id="thread-a", sources=sources)
+    conversations = memory.load_conversation("thread-a")
+
+    loaded = conversations[0]["sources"][0]
+    assert loaded.page_content == sources[0].page_content
+    assert loaded.metadata == sources[0].metadata
+
+
+def test_load_conversation_falls_back_to_empty_sources_when_json_entry_missing_key(tmp_path, monkeypatch):
+    """異常系: JSONとしては妥当だが必須キー（page_content等）が一部欠損している場合も
+    クラッシュせず空リストにフォールバックする。"""
+    monkeypatch.setattr(memory, "CONVERSATIONS_DIR", tmp_path)
+    saved_path = memory.save_conversation(
+        question="質問",
+        answer="回答",
+        thread_id="thread-a",
+        sources=[Document(page_content="本文", metadata={"source": "data/a.txt"})],
+    )
+    content = saved_path.read_text(encoding="utf-8")
+    partial_json = '[{"metadata": {"source": "data/a.txt"}}]'
+    replaced = re.sub(r"(## 参照元\n\n).*(\n)$", rf"\g<1>{partial_json}\g<2>", content, flags=re.DOTALL)
+    replaced = re.sub(r"- 参照元文字数: \d+", f"- 参照元文字数: {len(partial_json)}", replaced)
+    saved_path.write_text(replaced, encoding="utf-8")
+
+    conversations = memory.load_conversation("thread-a")
+
+    assert conversations[0]["sources"] == []
+    assert conversations[0]["question"] == "質問"
+    assert conversations[0]["answer"] == "回答"
 
 
 # --- save_thread_title() / load_thread_title()（スレッドの任意タイトル） ---
@@ -685,7 +838,9 @@ class TestLoadConversationThreadIdValidation:
 
         conversations = memory.load_conversation(thread_id)
 
-        assert conversations == [{"question": "質問", "answer": "回答", "created_at": datetime(2024, 1, 1, 9, 0)}]
+        assert conversations == [
+            {"question": "質問", "answer": "回答", "created_at": datetime(2024, 1, 1, 9, 0), "sources": []}
+        ]
 
     def test_accepts_hyphen_and_underscore_thread_id(self, tmp_path, monkeypatch):
         monkeypatch.setattr(memory, "CONVERSATIONS_DIR", tmp_path)
@@ -693,7 +848,9 @@ class TestLoadConversationThreadIdValidation:
 
         conversations = memory.load_conversation("my-thread_01")
 
-        assert conversations == [{"question": "質問", "answer": "回答", "created_at": datetime(2024, 1, 1, 9, 0)}]
+        assert conversations == [
+            {"question": "質問", "answer": "回答", "created_at": datetime(2024, 1, 1, 9, 0), "sources": []}
+        ]
 
     def test_rejects_path_traversal_thread_id(self, tmp_path, monkeypatch):
         monkeypatch.setattr(memory, "CONVERSATIONS_DIR", tmp_path)
@@ -920,8 +1077,8 @@ class TestLoadConversationWithCorruptedFile:
         conversations = memory.load_conversation("thread-a")
 
         assert conversations == [
-            {"question": "1番目", "answer": "回答1", "created_at": datetime(2024, 1, 1, 9, 0)},
-            {"question": "3番目", "answer": "回答3", "created_at": datetime(2024, 1, 1, 10, 0)},
+            {"question": "1番目", "answer": "回答1", "created_at": datetime(2024, 1, 1, 9, 0), "sources": []},
+            {"question": "3番目", "answer": "回答3", "created_at": datetime(2024, 1, 1, 10, 0), "sources": []},
         ]
 
     def test_logs_warning_but_does_not_raise(self, tmp_path, monkeypatch, caplog):
@@ -989,5 +1146,5 @@ class TestSaveConversationAtomicWrite:
         conversations = memory.load_conversation("thread-a")
 
         assert conversations == [
-            {"question": "質問A", "answer": "回答A", "created_at": memory._parse_created_at(saved_path)}
+            {"question": "質問A", "answer": "回答A", "created_at": memory._parse_created_at(saved_path), "sources": []}
         ]

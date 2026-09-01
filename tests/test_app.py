@@ -1345,6 +1345,25 @@ def test_post_chat_saves_conversation_and_syncs_single_file_immediately(monkeypa
     assert messages[1].content == "回答"
 
 
+def test_post_chat_saves_conversation_with_accumulated_sources(monkeypatch):
+    """正常系: チャット応答後のsave_conversation呼び出しに、そのターンで蓄積した
+    sources（Documentのリスト）がそのままキーワード引数として渡される。"""
+    doc = _FakeSourceDoc(page_content="根拠の内容", metadata={"source": "doc1.txt"})
+    fake_agent = _FakeAgentWithSources(answer="文書に基づく回答", artifact=[doc])
+    monkeypatch.setattr(rag_chain, "build_agent", lambda thread_id=None: fake_agent)
+
+    save_calls = []
+    monkeypatch.setattr(memory, "save_conversation", lambda *a, **k: save_calls.append((a, k)) or Path("/tmp/x.md"))
+
+    at = _run_app()
+    at.chat_input[0].set_value("質問です").run()
+
+    assert at.exception == []
+    assert len(save_calls) == 1
+    _args, kwargs = save_calls[0]
+    assert kwargs["sources"] == [doc]
+
+
 def test_post_chat_add_single_conversation_file_success_updates_signature_immediately(monkeypatch):
     """正常系: add_single_conversation_file が成功（added/updated/unchanged）すると、
     次回のrerunを待たずに同じturn内で st.session_state.data_dir_signature が
@@ -3571,9 +3590,9 @@ def test_sources_do_not_mix_across_multiple_turns(monkeypatch):
 
 
 def test_switching_to_past_thread_with_legacy_ai_message_does_not_crash(monkeypatch):
-    """異常系（回帰防止）: _switch_thread()がload_conversation()から復元するAIMessageは
-    additional_kwargsに"sources"キーを持たない旧形式のままだが、再描画ループでの
-    .get("sources")呼び出しはNoneを返すだけでクラッシュせず、参照元expanderも表示されない。"""
+    """異常系（回帰防止）: load_conversation()が"sources"キーを持たない旧形式の要素を
+    返しても、_switch_thread()はクラッシュせず空リストとして扱い、参照元expanderも
+    表示されない。"""
     from datetime import datetime
 
     monkeypatch.setattr(
@@ -3605,10 +3624,59 @@ def test_switching_to_past_thread_with_legacy_ai_message_does_not_crash(monkeypa
     messages = at.session_state["messages"]
     assert len(messages) == 2
     restored_ai_message = messages[1]
-    assert restored_ai_message.additional_kwargs.get("sources") is None
+    assert restored_ai_message.additional_kwargs.get("sources") == []
 
     expanders = [e for e in at.expander if "参照した箇所を見る" in e.label]
     assert expanders == []
+
+
+def test_switching_to_past_thread_restores_sources_expander(monkeypatch):
+    """正常系（回帰確認）: load_conversation()がsources付きの要素を返す場合、
+    _switch_thread()経由で復元したAIMessageでも参照元expanderが表示される。"""
+    from datetime import datetime
+
+    doc = _FakeSourceDoc(page_content="過去ターンの参照内容", metadata={"source": "past.txt"})
+
+    monkeypatch.setattr(
+        memory,
+        "list_threads",
+        lambda: [
+            {
+                "thread_id": "thread-past",
+                "created_at": datetime(2024, 1, 1, 9, 0),
+                "first_question": "過去の質問",
+                "count": 1,
+            }
+        ],
+    )
+    monkeypatch.setattr(
+        memory,
+        "load_conversation",
+        lambda thread_id: (
+            [
+                {
+                    "question": "過去の質問",
+                    "answer": "過去の回答",
+                    "created_at": datetime(2024, 1, 1, 9, 0),
+                    "sources": [doc],
+                }
+            ]
+            if thread_id == "thread-past"
+            else []
+        ),
+    )
+
+    at = _run_app()
+    at = at.sidebar.selectbox[0].select("thread-past").run()
+
+    assert at.exception == []
+    expanders = [e for e in at.expander if "参照した箇所を見る" in e.label]
+    assert len(expanders) == 1
+    assert any("past.txt" in m.value for m in expanders[0].markdown)
+
+    messages = at.session_state["messages"]
+    ai_message = [m for m in messages if isinstance(m, AIMessage)][0]
+    assert ai_message.additional_kwargs["sources"] == [doc]
 
 
 # --- 15. 回答の根拠バッジ（ドキュメント根拠 / 一般知識） ---
@@ -3668,8 +3736,9 @@ def test_answer_badge_persists_after_next_turn_rerun(monkeypatch):
 
 
 def test_answer_badge_shows_general_knowledge_for_legacy_message_without_sources_key(monkeypatch):
-    """異常系（回帰防止）: additional_kwargsに"sources"キーを持たない旧形式のAIMessage
-    （_switch_thread()経由で復元されたもの）でも、クラッシュせず「一般知識」バッジとして扱われる。"""
+    """異常系（回帰防止）: load_conversation()が"sources"キーを持たない旧形式の要素を
+    返す場合（_switch_thread()経由で復元されたもの）でも、クラッシュせず「一般知識」
+    バッジとして扱われる。"""
     from datetime import datetime
 
     monkeypatch.setattr(
