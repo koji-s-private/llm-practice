@@ -25,6 +25,9 @@ chroma_db/
 # 会話ログ（個人の実際のやり取りのため除外）
 data/conversations/
 
+# 回答フィードバック（個人の実際の質問・回答内容を含むため除外）
+data/feedback.jsonl
+
 # Google Driveからライブ同期でミラーされたファイル（個人のDrive内容そのもののため除外。
 # google_drive_sync.pyが実行のたびに自動生成・自動削除するローカルキャッシュ）
 data/google_drive/

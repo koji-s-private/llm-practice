@@ -10,6 +10,7 @@
 | `ingest.py` | `data/` とベクトルDB(Chroma)の差分同期（CLIとしても、app.pyからの呼び出しとしても使用） |
 | `rag_chain.py` | 検索ツール付きRAGエージェント（`create_agent`）の定義 |
 | `memory.py` | 質問・回答を `data/conversations/<会話ID>/` に自動保存する会話ナレッジ化機能 |
+| `feedback.py` | 回答への👍/👎評価を `data/feedback.jsonl` に記録するフィードバック機能 |
 | `app.py` | Streamlitのチャット画面（ファイルアップロードUI・新しい会話ボタンを含む） |
 | `.streamlit/config.toml` | Streamlitのカスタムテーマ設定（配色・フォント） |
 | `api/main.py` | FastAPI製バックエンドAPI（`ingest.py`/`rag_chain.py`/`memory.py`をラップ。フロントエンド移行Step1） |
@@ -43,9 +44,11 @@ llm-practice/
 ├── ingest.py                # data/ とベクトルDBの差分同期
 ├── rag_chain.py              # RAGエージェントの定義
 ├── memory.py                 # 会話ログの自動保存
+├── feedback.py                # 回答への👍/👎フィードバック記録
 ├── setup.py                  # モデルの初期化・フォールバック
 ├── data/                    # 質問対象ファイル・会話ログ（詳細: data/README.md）
-│   └── conversations/<会話ID>/
+│   ├── conversations/<会話ID>/
+│   └── feedback.jsonl
 ├── tests/                   # 自動テスト（詳細: tests/README.md）
 ├── scripts/                 # 検索精度の評価スクリプトなど
 ├── .claude/agents/           # AIチームの役割定義（詳細: .claude/agents/README.md）
@@ -169,6 +172,14 @@ Streamlit版（`app.py`）と本APIは同じ `data/` / `chroma_db/` を参照す
 新しい会話の回答に混ざり込むことはありません。ボタンを押さずに同じ会話を続ければ、
 その会話内での文脈（過去の質問・回答）を踏まえた回答が可能です。
 過去の会話に戻りたい場合の「会話の再開」機能は今のところありません（今後の発展案）。
+
+### 回答へのフィードバック
+
+各回答の下に表示される👍/👎ボタンを押すと、その質問・回答・評価・スレッドIDが
+`data/feedback.jsonl`（1行1レコードのJSON Lines形式）にローカル保存されます。
+一度押すとボタンはお礼のメッセージに置き換わり、同じ回答への重複記録は行われません。
+このファイルはベクトルDBの検索対象には含まれず、外部への送信もありません
+（詳細は [data/README.md](data/README.md) を参照）。
 
 **セキュリティについて**: アップロードされたファイルも会話ログも、保存先はこのプロジェクト内の
 `data/` フォルダとローカルの`chroma_db/`のみです。埋め込みもローカルのHuggingFaceモデルで行うため、

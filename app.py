@@ -40,6 +40,7 @@ import setup
 # （source_formatting.py）は app.py と api/main.py の両方から使う共通ロジックのため
 # 切り出している。テストが従来通り app._windowed_history 等の名前で参照できるよう、
 # "as 同名" で明示的に再エクスポートする（ruffのunused-import誤検知を防ぐ）。
+from feedback import RATING_DOWN, RATING_UP, record_feedback
 from history_utils import _API_PROVIDER_HISTORY_TOKENS as _API_PROVIDER_HISTORY_TOKENS
 from history_utils import _FALLBACK_HISTORY_TOKENS as _FALLBACK_HISTORY_TOKENS
 from history_utils import _OLLAMA_CONTEXT_MARGIN_TOKENS as _OLLAMA_CONTEXT_MARGIN_TOKENS
@@ -505,6 +506,40 @@ def _render_copy_button(text: str) -> None:
     st_components.html(_copy_button_html(text), height=40)
 
 
+def _feedback_widget_key(index: int, suffix: str) -> str:
+    """フィードバックボタン群のwidget key・記録済みフラグ用のkeyを組み立てる。
+
+    メッセージ自体に一意なIDが無いため、st.session_state.messages内での位置（index）を
+    識別子として使う。タイムスタンプ（秒精度）は同一スレッド内で複数ターンが同じ秒に
+    保存されると衝突しうるため使わない。
+    """
+    return f"feedback_{st.session_state.thread_id}_{index}_{suffix}"
+
+
+def _render_feedback_buttons(question: str, answer: str, index: int) -> None:
+    """回答の下に👍/👎ボタンを表示し、押下したら data/feedback.jsonl に記録する。
+
+    同じ回答への重複記録・連打を防ぐため、記録済みかどうかをsession_stateで管理し、
+    記録後はボタンの代わりにお礼の一言を表示する。
+    """
+    state_key = _feedback_widget_key(index, "recorded")
+    recorded = st.session_state.get(state_key)
+    if recorded:
+        icon = "👍" if recorded == RATING_UP else "👎"
+        st.caption(f"フィードバックを記録しました（{icon}）。ありがとうございます！")
+        return
+
+    col_up, col_down, _ = st.columns([1, 1, 8])
+    if col_up.button("👍", key=_feedback_widget_key(index, "up"), help="この回答は役に立った"):
+        record_feedback(question, answer, RATING_UP, st.session_state.thread_id)
+        st.session_state[state_key] = RATING_UP
+        st.rerun()
+    if col_down.button("👎", key=_feedback_widget_key(index, "down"), help="この回答は役に立たなかった"):
+        record_feedback(question, answer, RATING_DOWN, st.session_state.thread_id)
+        st.session_state[state_key] = RATING_DOWN
+        st.rerun()
+
+
 def _switch_thread(thread_id: str) -> None:
     """選択された過去スレッドに切り替え、そのスレッドの会話履歴をチャット画面に復元する。"""
     st.session_state.thread_id = thread_id
@@ -718,7 +753,8 @@ with st.sidebar:
             )
         _sync_and_report("アップロードされたファイルを取り込み中...", failed_sync_warning_slot)
 
-for message in st.session_state.messages:
+_last_question = ""
+for index, message in enumerate(st.session_state.messages):
     role = "user" if isinstance(message, HumanMessage) else "assistant"
     with st.chat_message(role):
         timestamp_label = _format_message_timestamp(message.additional_kwargs.get("timestamp"))
@@ -730,6 +766,9 @@ for message in st.session_state.messages:
             # 積んでおいても後続のagent.stream()への影響なくセッション内で保持できる。
             _render_answer_provenance(message.additional_kwargs.get("sources") or [])
             _render_copy_button(message.content)
+            _render_feedback_buttons(_last_question, message.content, index)
+    if isinstance(message, HumanMessage):
+        _last_question = message.content
 
 _render_empty_state_guidance()
 
@@ -824,6 +863,9 @@ if user_input:
 
             _render_answer_provenance(sources)
             _render_copy_button(answer)
+            # この時点ではまだmessagesに追加していないため、追加後にこのAIMessageが
+            # 収まるインデックス（履歴再描画ループと同じ体系）を先読みして計算する。
+            _render_feedback_buttons(user_input, answer, len(st.session_state.messages) + 1)
         except Exception as e:
             status_placeholder.empty()
             cancel_placeholder.empty()
