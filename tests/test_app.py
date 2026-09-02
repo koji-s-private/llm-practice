@@ -44,6 +44,7 @@ from langchain_core.messages import AIMessage, AIMessageChunk, HumanMessage, Too
 from streamlit.delta_generator import DeltaGenerator
 from streamlit.testing.v1 import AppTest
 
+import feedback
 import google_drive_sync
 import ingest
 import memory
@@ -159,6 +160,7 @@ def _patch_light_dependencies(monkeypatch):
     monkeypatch.setattr(memory, "load_conversation", lambda thread_id: [])
     monkeypatch.setattr(memory, "load_thread_title", lambda thread_id: None)
     monkeypatch.setattr(memory, "save_thread_title", lambda thread_id, title: None)
+    monkeypatch.setattr(feedback, "record_feedback", lambda *a, **k: None)
 
 
 def _run_app() -> AppTest:

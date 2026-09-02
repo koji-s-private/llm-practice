@@ -37,9 +37,11 @@ pytest
 | `test_google_drive_sync.py` | `google_drive_sync.py` | Google Driveの指定フォルダを `data/google_drive/` にミラーする処理（Google Docs/Sheets/Slidesのexport、通常ファイルのダウンロード、未対応拡張子のスキップ、削除検知、`GOOGLE_DRIVE_FOLDER_ID`未設定時のスキップ、認証情報ファイル不在時のエラー）のテスト（実際のGoogle API呼び出し・OAuth認証は行わずフェイクに差し替える） |
 | `test_rag_chain.py` | `rag_chain.py` | 検索結果の関連度採点（`_grade_relevance`）と、「見つからない場合」のフォールバック応答のテスト |
 | `test_memory.py` | `memory.py` | 会話ログの保存（Markdownファイル書き込み）・件数カウントのテスト |
+| `test_feedback.py` | `feedback.py` | 回答フィードバック（👍/👎）の記録処理（`record_feedback`、JSON Linesへの追記・不正なratingの拒否）のテスト |
 | `test_app.py` | `app.py` | Streamlitのチャット画面のエラーハンドリングのテスト（`streamlit.testing.v1.AppTest` を使いスクリプト実行エンジン上で検証） |
 | `test_app_source_display.py` | `app.py` | 参照元スニペットの整形（`_format_snippet`）、参照元ラベル（`_format_source_label`）、過去スレッドラベル（`_format_thread_label`）の純粋関数のテスト |
 | `test_app_copy_button.py` | `app.py` | AI回答のコピー用HTML/JS組み立て（`_copy_button_html`）の純粋関数のテスト（特殊文字のエスケープ・XSS観点の検証を含む） |
+| `test_app_feedback_buttons.py` | `app.py` | 回答フィードバックボタン（👍/👎）の表示・記録・重複押下防止・生成失敗時の非表示のテスト（`streamlit.testing.v1.AppTest` を使用） |
 | `test_source_formatting.py` | `source_formatting.py` | 参照元表示整形の共通ロジック（`format_snippet` / `format_source_label`）のユニットテストと、`app.py` / `api/main.py` の再エクスポートが同一実装を指していることの確認 |
 | `test_api.py` | `api/main.py` | FastAPIバックエンドの各エンドポイント（チャットのSSEストリーミング、同期、会話ログの作成・件数取得・保存、thread_idのパストラバーサル対策）のテスト |
 | `test_setup.py` | `setup.py` | LLMプロバイダの自動選択（`_build_model`）における非対話環境でのgetpass()ブロック回避、OllamaモデルのpullチェックのAPIやフォールバック挙動のテスト |
