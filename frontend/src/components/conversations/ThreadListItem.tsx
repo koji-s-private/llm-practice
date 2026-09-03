@@ -11,6 +11,7 @@ interface ThreadListItemProps {
   isDeleting: boolean
   onSaveTitle: (title: string) => void
   isSavingTitle: boolean
+  disabled: boolean
 }
 
 function truncate(text: string, limit: number): string {
@@ -43,6 +44,7 @@ export function ThreadListItem({
   isDeleting,
   onSaveTitle,
   isSavingTitle,
+  disabled,
 }: ThreadListItemProps) {
   const [confirmingDelete, setConfirmingDelete] = useState(false)
   const [editingTitle, setEditingTitle] = useState(false)
@@ -64,8 +66,8 @@ export function ThreadListItem({
       <button
         type="button"
         onClick={onSelect}
-        disabled={isActive}
-        className="w-full text-left break-words disabled:cursor-default"
+        disabled={isActive || disabled}
+        className="w-full text-left break-words disabled:cursor-default disabled:opacity-50"
       >
         {formatThreadLabel(thread)}
       </button>
@@ -79,6 +81,7 @@ export function ThreadListItem({
               setTitleInput(thread.title ?? '')
               setEditingTitle(true)
             }}
+            disabled={disabled}
           >
             ✏️ タイトル編集
           </Button>
@@ -87,6 +90,7 @@ export function ThreadListItem({
             size="sm"
             onClick={() => setConfirmingDelete(true)}
             aria-label={`${thread.thread_id} を削除`}
+            disabled={disabled}
           >
             🗑️ 削除
           </Button>
@@ -100,9 +104,9 @@ export function ThreadListItem({
             onChange={(event) => setTitleInput(event.target.value)}
             placeholder="例: 経費精算の質問"
             className="border-border flex-1 rounded-md border px-2 py-1 text-xs"
-            disabled={isSavingTitle}
+            disabled={isSavingTitle || disabled}
           />
-          <Button type="submit" size="sm" disabled={isSavingTitle}>
+          <Button type="submit" size="sm" disabled={isSavingTitle || disabled}>
             {isSavingTitle ? '保存中...' : '💾 保存'}
           </Button>
           <Button
@@ -122,7 +126,12 @@ export function ThreadListItem({
           <p className="text-muted-foreground flex-1 text-xs">
             このスレッドの会話ログをすべて削除します。この操作は取り消せません。
           </p>
-          <Button variant="destructive" size="sm" onClick={onDelete} disabled={isDeleting}>
+          <Button
+            variant="destructive"
+            size="sm"
+            onClick={onDelete}
+            disabled={isDeleting || disabled}
+          >
             {isDeleting ? '削除中...' : '削除する'}
           </Button>
           <Button

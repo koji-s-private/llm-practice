@@ -120,6 +120,7 @@ export function ThreadPanel({
               isSavingTitle={
                 titleMutation.isPending && titleMutation.variables?.threadId === thread.thread_id
               }
+              disabled={disabled}
             />
           ))}
         </ul>

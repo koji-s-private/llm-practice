@@ -22,6 +22,7 @@ function renderItem(overrides: Partial<Parameters<typeof ThreadListItem>[0]> = {
       isDeleting={false}
       onSaveTitle={vi.fn()}
       isSavingTitle={false}
+      disabled={false}
       {...overrides}
     />,
   )
@@ -122,5 +123,23 @@ describe('ThreadListItem', () => {
     await user.click(screen.getByRole('button', { name: 'thread-a を削除' }))
 
     expect(screen.getByRole('button', { name: '削除中...' })).toBeDisabled()
+  })
+
+  it('disabled=trueのとき選択ボタン・タイトル編集ボタン・削除ボタンが無効化される', () => {
+    renderItem({ disabled: true })
+
+    expect(screen.getByRole('button', { name: /経費精算について教えてください/ })).toBeDisabled()
+    expect(screen.getByRole('button', { name: '✏️ タイトル編集' })).toBeDisabled()
+    expect(screen.getByRole('button', { name: 'thread-a を削除' })).toBeDisabled()
+  })
+
+  it('disabled=trueかつ選択ボタンをクリックしてもonSelectが呼ばれない', async () => {
+    const user = userEvent.setup()
+    const onSelect = vi.fn()
+    renderItem({ disabled: true, onSelect })
+
+    await user.click(screen.getByRole('button', { name: /経費精算について教えてください/ }))
+
+    expect(onSelect).not.toHaveBeenCalled()
   })
 })

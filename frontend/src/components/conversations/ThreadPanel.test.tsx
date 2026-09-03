@@ -174,4 +174,13 @@ describe('ThreadPanel', () => {
 
     expect(await screen.findByRole('button', { name: /経費精算について/ })).toBeDisabled()
   })
+
+  it('disabled=trueのとき各スレッドの選択・削除ボタンも無効化される', async () => {
+    vi.spyOn(conversationsApi, 'fetchThreads').mockResolvedValue([threadA])
+
+    renderPanel({ disabled: true })
+
+    expect(await screen.findByRole('button', { name: /経費精算について/ })).toBeDisabled()
+    expect(screen.getByRole('button', { name: 'thread-a を削除' })).toBeDisabled()
+  })
 })
