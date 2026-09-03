@@ -1148,3 +1148,60 @@ class TestSaveConversationAtomicWrite:
         assert conversations == [
             {"question": "質問A", "answer": "回答A", "created_at": memory._parse_created_at(saved_path), "sources": []}
         ]
+
+
+class TestDeleteThread:
+    def test_deletes_thread_directory_and_returns_true(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(memory, "CONVERSATIONS_DIR", tmp_path)
+        memory.save_conversation("Q", "A", thread_id="thread-a")
+
+        result = memory.delete_thread("thread-a")
+
+        assert result is True
+        assert not (tmp_path / "thread-a").exists()
+
+    def test_deletes_thread_with_multiple_conversation_files_and_title(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(memory, "CONVERSATIONS_DIR", tmp_path)
+        memory.save_conversation("Q1", "A1", thread_id="thread-a")
+        memory.save_conversation("Q2", "A2", thread_id="thread-a")
+        memory.save_thread_title("thread-a", "タイトル")
+
+        result = memory.delete_thread("thread-a")
+
+        assert result is True
+        assert not (tmp_path / "thread-a").exists()
+
+    def test_returns_false_when_thread_does_not_exist(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(memory, "CONVERSATIONS_DIR", tmp_path)
+
+        assert memory.delete_thread("no-such-thread") is False
+
+    def test_returns_false_when_conversations_dir_itself_missing(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(memory, "CONVERSATIONS_DIR", tmp_path / "not-created-yet")
+
+        assert memory.delete_thread("thread-a") is False
+
+    def test_does_not_affect_other_threads(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(memory, "CONVERSATIONS_DIR", tmp_path)
+        memory.save_conversation("Q1", "A1", thread_id="thread-a")
+        memory.save_conversation("Q2", "A2", thread_id="thread-b")
+
+        memory.delete_thread("thread-a")
+
+        assert not (tmp_path / "thread-a").exists()
+        assert (tmp_path / "thread-b").exists()
+        assert memory.conversation_count("thread-b") == 1
+
+    def test_rejects_invalid_thread_id(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(memory, "CONVERSATIONS_DIR", tmp_path)
+
+        with pytest.raises(ValueError):
+            memory.delete_thread("../../etc/passwd")
+
+    def test_rejects_thread_id_when_path_is_a_file_not_a_directory(self, tmp_path, monkeypatch):
+        """境界値: 同名のファイル（ディレクトリではない）が存在する場合は削除せずFalseを返す。"""
+        monkeypatch.setattr(memory, "CONVERSATIONS_DIR", tmp_path)
+        (tmp_path / "thread-a").write_text("dummy", encoding="utf-8")
+
+        assert memory.delete_thread("thread-a") is False
+        assert (tmp_path / "thread-a").exists()
