@@ -243,8 +243,11 @@ def build_agent(thread_id: str = GLOBAL_THREAD_ID):
         if not retrieved_docs:
             return "関連する情報はドキュメント内に見つかりませんでした。", []
 
+        # LLMに渡すcontentにはdistance_scoreを含めない（UI表示専用のためプロンプト内容を変えない）。
         serialized = "\n\n".join(
-            f"Source: {doc.metadata}\nContent: {doc.page_content[:MAX_DOC_CHARS]}" for doc in retrieved_docs
+            f"Source: { ({k: v for k, v in doc.metadata.items() if k != 'distance_score'}) }\n"
+            f"Content: {doc.page_content[:MAX_DOC_CHARS]}"
+            for doc in retrieved_docs
         )
         return serialized, retrieved_docs
 

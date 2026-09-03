@@ -556,6 +556,19 @@ def test_retrieve_context_empty_artifact_has_no_distance_score_side_effect(monke
     assert artifact == []
 
 
+def test_retrieve_context_content_does_not_leak_distance_score(monkeypatch):
+    """distance_scoreはUI表示専用のartifact向けメタデータであり、LLMに渡す
+    content（serialized）には混入しないこと。"""
+    doc = _FakeDocument("関連する内容", {"source": "a.txt"})
+    retrieve_context, _ = _build_agent_with_store(monkeypatch, results=[(doc, 0.3)])
+    monkeypatch.setattr(rag_chain, "_grade_relevance", lambda query, docs: [0])
+
+    content, artifact = retrieve_context.func("質問")
+
+    assert "distance_score" not in content
+    assert artifact[0].metadata["distance_score"] == 0.3
+
+
 # --- get_vectorstore のdocstring（CVE-2026-45829に関するセキュリティ注記） ---
 
 
