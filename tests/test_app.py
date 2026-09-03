@@ -4071,3 +4071,103 @@ def test_empty_state_guidance_not_retriggered_by_new_chat_when_other_threads_exi
     assert at.exception == []
     assert at.session_state["messages"] == []
     assert at.info == []
+
+
+# --- 17. 直近の回答の再生成（🔄 再生成ボタン） ---
+
+
+def test_regenerate_button_shown_only_for_last_ai_message():
+    """正常系: 🔄再生成ボタンは、複数ターンの会話履歴があっても最後のAI回答にのみ表示される。"""
+    at = _run_app()
+    at.session_state["messages"] = [
+        HumanMessage(content="質問1"),
+        AIMessage(content="回答1"),
+        HumanMessage(content="質問2"),
+        AIMessage(content="回答2"),
+    ]
+    at = at.run()
+
+    assert at.exception == []
+    regenerate_keys = [b.key for b in at.button if b.key and b.key.startswith("regenerate_")]
+    assert regenerate_keys == ["regenerate_thread-test_3"]
+
+
+def test_regenerate_click_replaces_answer_without_duplicating_history_and_skips_memory_save(monkeypatch):
+    """正常系: 🔄再生成ボタン押下で、質問はそのままに末尾のAI回答だけが新しい回答に
+    置き換わり、messagesの件数は変わらない。エージェントに渡す履歴にも質問が重複しない。
+    再生成時はナレッジ化（save_conversation）をスキップする。"""
+    fake_agent = _FakeAgent(answer="新しい回答")
+    monkeypatch.setattr(rag_chain, "build_agent", lambda thread_id=None: fake_agent)
+    save_calls = []
+    monkeypatch.setattr(memory, "save_conversation", lambda *a, **k: save_calls.append(a))
+
+    at = _run_app()
+    at.session_state["messages"] = [
+        HumanMessage(content="質問です"),
+        AIMessage(content="元の回答"),
+    ]
+    at = at.run()
+
+    regenerate_button = next(b for b in at.button if b.key == "regenerate_thread-test_1")
+    at = regenerate_button.click().run()
+
+    assert at.exception == []
+    messages = at.session_state["messages"]
+    assert len(messages) == 2
+    assert messages[0].content == "質問です"
+    assert messages[1].content == "新しい回答"
+    assert save_calls == []
+
+    assert len(fake_agent.stream_calls) == 1
+    sent_messages = fake_agent.stream_calls[0]["messages"]
+    assert sum(isinstance(m, HumanMessage) and m.content == "質問です" for m in sent_messages) == 1
+    assert "regenerating" not in at.session_state
+    assert "regenerate_original_message" not in at.session_state
+
+
+def test_regenerate_click_clears_previous_feedback_recorded_state(monkeypatch):
+    """正常系: 再生成すると、古い回答に対して記録済みだったフィードバック状態はクリアされ、
+    新しい回答に対して改めて👍/👎を押せるようになる。"""
+    fake_agent = _FakeAgent(answer="新しい回答")
+    monkeypatch.setattr(rag_chain, "build_agent", lambda thread_id=None: fake_agent)
+
+    at = _run_app()
+    at.session_state["messages"] = [
+        HumanMessage(content="質問です"),
+        AIMessage(content="元の回答"),
+    ]
+    at.session_state["feedback_thread-test_1_recorded"] = feedback.RATING_UP
+    at = at.run()
+
+    regenerate_button = next(b for b in at.button if b.key == "regenerate_thread-test_1")
+    at = regenerate_button.click().run()
+
+    assert at.exception == []
+    assert "feedback_thread-test_1_recorded" not in at.session_state
+
+
+def test_regenerate_failure_restores_original_answer(monkeypatch):
+    """異常系: 再生成中に例外が発生した場合、取り除いていた元の回答を復元し、
+    ユーザーが既存の回答ごと失わないようにする。"""
+    fake_agent = _FakeAgent(exc=RuntimeError("stream broken"))
+    monkeypatch.setattr(rag_chain, "build_agent", lambda thread_id=None: fake_agent)
+    save_calls = []
+    monkeypatch.setattr(memory, "save_conversation", lambda *a, **k: save_calls.append(a))
+
+    at = _run_app()
+    at.session_state["messages"] = [
+        HumanMessage(content="質問です"),
+        AIMessage(content="元の回答"),
+    ]
+    at = at.run()
+
+    regenerate_button = next(b for b in at.button if b.key == "regenerate_thread-test_1")
+    at = regenerate_button.click().run()
+
+    assert at.exception == []
+    assert len(at.error) == 1
+    messages = at.session_state["messages"]
+    assert len(messages) == 2
+    assert messages[1].content == "元の回答"
+    assert save_calls == []
+    assert "regenerate_original_message" not in at.session_state
