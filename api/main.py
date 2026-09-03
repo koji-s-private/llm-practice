@@ -25,6 +25,7 @@
 
 import json
 from collections.abc import Generator
+from datetime import datetime
 from pathlib import Path
 from typing import Literal
 
@@ -37,7 +38,18 @@ from pydantic import BaseModel
 
 from history_utils import _windowed_history
 from ingest import SUPPORTED_EXTENSIONS, delete_indexed_file, list_indexed_files, resolve_upload_dest, sync_data_dir
-from memory import CONVERSATIONS_DIR, THREAD_ID_PATTERN, conversation_count, new_thread_id, save_conversation
+from memory import (
+    CONVERSATIONS_DIR,
+    THREAD_ID_PATTERN,
+    conversation_count,
+    delete_thread,
+    list_threads,
+    load_conversation,
+    load_thread_title,
+    new_thread_id,
+    save_conversation,
+    save_thread_title,
+)
 from rag_chain import build_agent
 from source_formatting import format_snippet as _format_snippet
 from source_formatting import format_source_label as _format_source_label
@@ -357,3 +369,124 @@ def save_conversation_endpoint(request: SaveConversationRequest) -> dict:
     _validate_thread_id(request.thread_id)
     path = save_conversation(request.question, request.answer, request.thread_id, is_fallback=request.is_fallback)
     return {"path": str(path)}
+
+
+# --- 会話スレッド管理（一覧・切り替え・タイトル編集・削除） ---
+
+
+class ThreadSummary(BaseModel):
+    """GET /api/conversations のレスポンス1件分（app.pyのサイドバー「💬 過去の会話」相当）。"""
+
+    thread_id: str
+    created_at: datetime
+    first_question: str
+    count: int
+    title: str | None
+
+
+class ThreadsResponse(BaseModel):
+    """GET /api/conversations のレスポンスボディ。"""
+
+    threads: list[ThreadSummary]
+
+
+@app.get("/api/conversations", response_model=ThreadsResponse)
+def get_threads() -> dict:
+    """保存済みの会話スレッド一覧を、作成日時が新しい順に返す（memory.list_threads()のラッパー）。
+
+    titleはスレッドごとにmemory.load_thread_title()を呼んで補い、フロントエンドが
+    一覧表示のたびに個別リクエストしなくても済むようにする。
+    """
+    threads = list_threads()
+    return {"threads": [{**thread, "title": load_thread_title(thread["thread_id"])} for thread in threads]}
+
+
+class ConversationSource(BaseModel):
+    """会話ログ1件分の参照元（POST /api/chat のsourcesイベントと同じ形式）。"""
+
+    label: str
+    snippet: str
+
+
+class ConversationTurn(BaseModel):
+    """会話ログ1件分（1問1答）。"""
+
+    question: str
+    answer: str
+    created_at: datetime
+    sources: list[ConversationSource]
+
+
+class ConversationResponse(BaseModel):
+    """GET /api/conversations/{thread_id} のレスポンスボディ。"""
+
+    thread_id: str
+    turns: list[ConversationTurn]
+
+
+@app.get("/api/conversations/{thread_id}", response_model=ConversationResponse)
+def get_conversation(thread_id: str) -> dict:
+    """指定スレッドの会話ログを時系列順に返す（memory.load_conversation()のラッパー、スレッド切り替え時に使用）。
+
+    thread_idに対応する保存済み会話ログが無い場合もエラーにせず空のturnsを返す
+    （load_conversation()自体がその挙動のため、新規スレッドとの区別をしない）。
+    """
+    _validate_thread_id(thread_id)
+    turns = [
+        {
+            "question": turn["question"],
+            "answer": turn["answer"],
+            "created_at": turn["created_at"],
+            "sources": _serialize_sources(turn["sources"]),
+        }
+        for turn in load_conversation(thread_id)
+    ]
+    return {"thread_id": thread_id, "turns": turns}
+
+
+class ThreadTitleResponse(BaseModel):
+    """GET/PUT /api/conversations/{thread_id}/title のレスポンスボディ。"""
+
+    thread_id: str
+    title: str | None
+
+
+@app.get("/api/conversations/{thread_id}/title", response_model=ThreadTitleResponse)
+def get_thread_title(thread_id: str) -> dict:
+    """スレッドのタイトルを取得する（memory.load_thread_title()のラッパー）。未設定の場合はNoneを返す。"""
+    _validate_thread_id(thread_id)
+    return {"thread_id": thread_id, "title": load_thread_title(thread_id)}
+
+
+class UpdateThreadTitleRequest(BaseModel):
+    """PUT /api/conversations/{thread_id}/title のリクエストボディ。"""
+
+    title: str
+
+
+@app.put("/api/conversations/{thread_id}/title", response_model=ThreadTitleResponse)
+def update_thread_title(thread_id: str, request: UpdateThreadTitleRequest) -> dict:
+    """スレッドのタイトルを保存する（memory.save_thread_title()のラッパー）。
+
+    前後の空白のみのtitleは「未設定」として扱われ、既存のタイトルがあれば削除される
+    （memory.save_thread_title()の仕様どおり）。
+    """
+    _validate_thread_id(thread_id)
+    save_thread_title(thread_id, request.title)
+    return {"thread_id": thread_id, "title": load_thread_title(thread_id)}
+
+
+class DeleteThreadResponse(BaseModel):
+    """DELETE /api/conversations/{thread_id} のレスポンスボディ。"""
+
+    thread_id: str
+
+
+@app.delete("/api/conversations/{thread_id}", response_model=DeleteThreadResponse)
+def delete_thread_endpoint(thread_id: str) -> dict:
+    """スレッドの会話ログ一式を削除し、ベクトルDBに反映する（memory.delete_thread()のラッパー）。"""
+    _validate_thread_id(thread_id)
+    if not delete_thread(thread_id):
+        raise HTTPException(status_code=404, detail=f"スレッドが見つかりません: {thread_id}")
+    sync_data_dir(verbose=False)
+    return {"thread_id": thread_id}

@@ -16,6 +16,7 @@ import json
 import logging
 import os
 import re
+import shutil
 import uuid
 from datetime import datetime
 from pathlib import Path
@@ -315,6 +316,21 @@ def load_thread_title(thread_id: str) -> str | None:
     if content is None:
         return None
     return content.strip() or None
+
+
+def delete_thread(thread_id: str) -> bool:
+    """スレッドの会話ログ一式（data/conversations/<thread_id>/ 配下）を削除する。
+
+    タイトルファイルも含めてディレクトリごと削除する。削除後、ベクトルDBへの反映は
+    呼び出し側が ingest.sync_data_dir() を呼ぶことで行う（save_conversation()と同様、
+    このモジュール自体はChroma/ingestに依存しない）。
+    対象スレッドが存在しない場合はFalseを返す（api/main.py側で404判定に使う）。
+    """
+    thread_dir = CONVERSATIONS_DIR / _validate_thread_id(thread_id)
+    if not thread_dir.is_dir():
+        return False
+    shutil.rmtree(thread_dir)
+    return True
 
 
 def conversation_count(thread_id: str | None = None) -> int:

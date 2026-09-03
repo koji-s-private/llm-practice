@@ -446,6 +446,12 @@ _MALICIOUS_THREAD_IDS = [
     "",
 ]
 
+# 会話スレッド管理系エンドポイントはthread_idをURLパスの一部として受け取るため、空文字列を
+# 使うと"/api/conversations/"のようにtrailing slashだけの別URLになり、Starletteの
+# redirect_slashesによって別ルート（一覧取得など）にリダイレクトされてしまい、400/404という
+# 期待に一致しない（本来のパストラバーサル対策の検証にはならない）。そのため空文字列は除外する。
+_MALICIOUS_THREAD_IDS_IN_PATH = [tid for tid in _MALICIOUS_THREAD_IDS if tid != ""]
+
 
 @pytest.mark.parametrize("thread_id", _MALICIOUS_THREAD_IDS)
 def test_chat_rejects_path_traversal_thread_id(client, monkeypatch, thread_id):
@@ -1062,3 +1068,254 @@ class TestThreadIdPatternSharedWithMemory:
             f"thread_id={thread_id!r} でmemory.pyとapi/main.pyの受理/拒否結果が食い違っています "
             f"(memory={memory_accepted}, api.main={api_main_accepted})"
         )
+
+
+# --- GET /api/conversations ---
+
+
+def test_get_threads_returns_list_with_title(client, monkeypatch):
+    fake_threads = [
+        {
+            "thread_id": "thread-a",
+            "created_at": "2026-01-01T00:00:00",
+            "first_question": "経費精算について",
+            "count": 3,
+        }
+    ]
+    monkeypatch.setattr(api_main, "list_threads", lambda: fake_threads)
+    monkeypatch.setattr(api_main, "load_thread_title", lambda thread_id: "経費精算スレッド")
+
+    response = client.get("/api/conversations")
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "threads": [
+            {
+                "thread_id": "thread-a",
+                "created_at": "2026-01-01T00:00:00",
+                "first_question": "経費精算について",
+                "count": 3,
+                "title": "経費精算スレッド",
+            }
+        ]
+    }
+
+
+def test_get_threads_title_is_none_when_not_set(client, monkeypatch):
+    fake_threads = [
+        {"thread_id": "thread-a", "created_at": "2026-01-01T00:00:00", "first_question": "質問", "count": 1}
+    ]
+    monkeypatch.setattr(api_main, "list_threads", lambda: fake_threads)
+    monkeypatch.setattr(api_main, "load_thread_title", lambda thread_id: None)
+
+    response = client.get("/api/conversations")
+
+    assert response.status_code == 200
+    assert response.json()["threads"][0]["title"] is None
+
+
+def test_get_threads_returns_empty_list_when_no_threads(client, monkeypatch):
+    monkeypatch.setattr(api_main, "list_threads", lambda: [])
+
+    response = client.get("/api/conversations")
+
+    assert response.status_code == 200
+    assert response.json() == {"threads": []}
+
+
+# --- GET /api/conversations/{thread_id} ---
+
+
+def test_get_conversation_returns_turns_with_serialized_sources(client, monkeypatch):
+    doc = Document(page_content="ドキュメント本文", metadata={"source": "/data/manual.pdf", "page": 0})
+    fake_turns = [
+        {
+            "question": "質問1",
+            "answer": "回答1",
+            "created_at": "2026-01-01T00:00:00",
+            "sources": [doc],
+        }
+    ]
+    monkeypatch.setattr(api_main, "load_conversation", lambda thread_id: fake_turns)
+
+    response = client.get("/api/conversations/thread-a")
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "thread_id": "thread-a",
+        "turns": [
+            {
+                "question": "質問1",
+                "answer": "回答1",
+                "created_at": "2026-01-01T00:00:00",
+                "sources": [{"label": "manual.pdf（p.1）", "snippet": "ドキュメント本文"}],
+            }
+        ],
+    }
+
+
+def test_get_conversation_returns_empty_turns_when_thread_missing(client, monkeypatch):
+    """境界値: 保存済み会話ログが無いスレッドでも404にせず空のturnsを返す（load_conversation()の挙動どおり）。"""
+    monkeypatch.setattr(api_main, "load_conversation", lambda thread_id: [])
+
+    response = client.get("/api/conversations/no-such-thread")
+
+    assert response.status_code == 200
+    assert response.json() == {"thread_id": "no-such-thread", "turns": []}
+
+
+def test_get_conversation_turn_without_sources_returns_empty_list(client, monkeypatch):
+    fake_turns = [{"question": "質問", "answer": "回答", "created_at": "2026-01-01T00:00:00", "sources": []}]
+    monkeypatch.setattr(api_main, "load_conversation", lambda thread_id: fake_turns)
+
+    response = client.get("/api/conversations/thread-a")
+
+    assert response.status_code == 200
+    assert response.json()["turns"][0]["sources"] == []
+
+
+@pytest.mark.parametrize("thread_id", _MALICIOUS_THREAD_IDS_IN_PATH)
+def test_get_conversation_rejects_path_traversal_thread_id(client, monkeypatch, thread_id):
+    called = {"count": 0}
+
+    def _fake_load(thread_id):
+        called["count"] += 1
+        return []
+
+    monkeypatch.setattr(api_main, "load_conversation", _fake_load)
+
+    response = client.get(f"/api/conversations/{thread_id}")
+
+    assert response.status_code in (400, 404)
+    assert called["count"] == 0
+
+
+# --- GET /api/conversations/{thread_id}/title ---
+
+
+def test_get_thread_title_returns_saved_title(client, monkeypatch):
+    monkeypatch.setattr(api_main, "load_thread_title", lambda thread_id: "保存済みタイトル")
+
+    response = client.get("/api/conversations/thread-a/title")
+
+    assert response.status_code == 200
+    assert response.json() == {"thread_id": "thread-a", "title": "保存済みタイトル"}
+
+
+def test_get_thread_title_returns_none_when_not_set(client, monkeypatch):
+    monkeypatch.setattr(api_main, "load_thread_title", lambda thread_id: None)
+
+    response = client.get("/api/conversations/thread-a/title")
+
+    assert response.status_code == 200
+    assert response.json() == {"thread_id": "thread-a", "title": None}
+
+
+@pytest.mark.parametrize("thread_id", _MALICIOUS_THREAD_IDS_IN_PATH)
+def test_get_thread_title_rejects_path_traversal_thread_id(client, monkeypatch, thread_id):
+    called = {"count": 0}
+
+    def _fake_load(thread_id):
+        called["count"] += 1
+        return None
+
+    monkeypatch.setattr(api_main, "load_thread_title", _fake_load)
+
+    response = client.get(f"/api/conversations/{thread_id}/title")
+
+    assert response.status_code in (400, 404)
+    assert called["count"] == 0
+
+
+# --- PUT /api/conversations/{thread_id}/title ---
+
+
+def test_update_thread_title_saves_and_returns_new_title(client, monkeypatch):
+    saved = {}
+
+    def _fake_save(thread_id, title):
+        saved["thread_id"] = thread_id
+        saved["title"] = title
+
+    monkeypatch.setattr(api_main, "save_thread_title", _fake_save)
+    monkeypatch.setattr(api_main, "load_thread_title", lambda thread_id: "新しいタイトル")
+
+    response = client.put("/api/conversations/thread-a/title", json={"title": "新しいタイトル"})
+
+    assert response.status_code == 200
+    assert response.json() == {"thread_id": "thread-a", "title": "新しいタイトル"}
+    assert saved == {"thread_id": "thread-a", "title": "新しいタイトル"}
+
+
+def test_update_thread_title_with_blank_title_clears_it(client, monkeypatch):
+    """境界値: 空白のみのtitleはmemory.save_thread_title()の仕様どおり未設定として扱われる。"""
+    monkeypatch.setattr(api_main, "save_thread_title", lambda thread_id, title: None)
+    monkeypatch.setattr(api_main, "load_thread_title", lambda thread_id: None)
+
+    response = client.put("/api/conversations/thread-a/title", json={"title": "   "})
+
+    assert response.status_code == 200
+    assert response.json() == {"thread_id": "thread-a", "title": None}
+
+
+def test_update_thread_title_missing_field_returns_422(client):
+    response = client.put("/api/conversations/thread-a/title", json={})
+
+    assert response.status_code == 422
+
+
+@pytest.mark.parametrize("thread_id", _MALICIOUS_THREAD_IDS_IN_PATH)
+def test_update_thread_title_rejects_path_traversal_thread_id(client, monkeypatch, thread_id):
+    called = {"count": 0}
+
+    def _fake_save(thread_id, title):
+        called["count"] += 1
+
+    monkeypatch.setattr(api_main, "save_thread_title", _fake_save)
+
+    response = client.put(f"/api/conversations/{thread_id}/title", json={"title": "タイトル"})
+
+    assert response.status_code in (400, 404)
+    assert called["count"] == 0
+
+
+# --- DELETE /api/conversations/{thread_id} ---
+
+
+def test_delete_thread_removes_and_triggers_sync(client, monkeypatch):
+    sync_calls = []
+    monkeypatch.setattr(api_main, "delete_thread", lambda thread_id: True)
+    monkeypatch.setattr(api_main, "sync_data_dir", lambda verbose=False: sync_calls.append(verbose) or {})
+
+    response = client.delete("/api/conversations/thread-a")
+
+    assert response.status_code == 200
+    assert response.json() == {"thread_id": "thread-a"}
+    assert sync_calls == [False]
+
+
+def test_delete_thread_returns_404_when_not_found(client, monkeypatch):
+    sync_calls = []
+    monkeypatch.setattr(api_main, "delete_thread", lambda thread_id: False)
+    monkeypatch.setattr(api_main, "sync_data_dir", lambda verbose=False: sync_calls.append(verbose) or {})
+
+    response = client.delete("/api/conversations/no-such-thread")
+
+    assert response.status_code == 404
+    assert sync_calls == []
+
+
+@pytest.mark.parametrize("thread_id", _MALICIOUS_THREAD_IDS_IN_PATH)
+def test_delete_thread_rejects_path_traversal_thread_id(client, monkeypatch, thread_id):
+    called = {"count": 0}
+
+    def _fake_delete(thread_id):
+        called["count"] += 1
+        return False
+
+    monkeypatch.setattr(api_main, "delete_thread", _fake_delete)
+
+    response = client.delete(f"/api/conversations/{thread_id}")
+
+    assert response.status_code in (400, 404)
+    assert called["count"] == 0
