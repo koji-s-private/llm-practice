@@ -606,6 +606,13 @@ if "processed_upload_ids" not in st.session_state:
     # ここに記録し、再実行のたびに重複保存・再インデックスされないようにする。
     st.session_state.processed_upload_ids = set()
 
+# 再生成中にキャンセル操作でスクリプトが打ち切られると、対象の回答が
+# regenerate_original_messageへ退避されたままmessagesから失われた状態で残ることがある。
+# 今回の実行が実際に再生成を行う場合（regenerating=True）以外はここで復元し、孤立させない。
+# サイドバーの会話エクスポート等がmessagesの件数を参照するため、その描画より前に行う。
+if "regenerate_original_message" in st.session_state and not st.session_state.get("regenerating"):
+    st.session_state.messages.append(st.session_state.pop("regenerate_original_message"))
+
 with st.sidebar:
     if "_thread_title_saved_message" in st.session_state:
         st.toast(st.session_state.pop("_thread_title_saved_message"), icon="✅")
@@ -899,6 +906,7 @@ if question:
             # 再生成時はHumanMessageを追加し直さないため+1しない。
             next_index = len(st.session_state.messages) if regenerating else len(st.session_state.messages) + 1
             _render_feedback_buttons(question, answer, next_index)
+            _render_regenerate_button(next_index)
         except Exception as e:
             status_placeholder.empty()
             cancel_placeholder.empty()

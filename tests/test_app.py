@@ -4172,6 +4172,61 @@ def test_regenerate_click_clears_previous_feedback_recorded_state(monkeypatch):
     assert "feedback_thread-test_1_recorded" not in at.session_state
 
 
+def test_regenerate_button_shown_immediately_after_answer_generated(monkeypatch):
+    """正常系: 質問直後にストリーミング表示された最新回答にも、次のrerunを待たず
+    その場で🔄再生成ボタンが表示される。"""
+    fake_agent = _FakeAgent(answer="最初の回答")
+    monkeypatch.setattr(rag_chain, "build_agent", lambda thread_id=None: fake_agent)
+
+    at = _run_app()
+    at = at.chat_input[0].set_value("質問です").run()
+
+    assert at.exception == []
+    regenerate_keys = [b.key for b in at.button if b.key and b.key.startswith("regenerate_")]
+    assert regenerate_keys == ["regenerate_thread-test_1"]
+
+
+def test_regenerate_button_shown_immediately_after_regenerate_click(monkeypatch):
+    """正常系: 🔄再生成ボタン押下による再生成直後にも、次のrerunを待たず
+    その場で新しい回答に対する🔄再生成ボタンが表示される。"""
+    fake_agent = _FakeAgent(answer="新しい回答")
+    monkeypatch.setattr(rag_chain, "build_agent", lambda thread_id=None: fake_agent)
+
+    at = _run_app()
+    at.session_state["messages"] = [
+        HumanMessage(content="質問です"),
+        AIMessage(content="元の回答"),
+    ]
+    at = at.run()
+
+    regenerate_button = next(b for b in at.button if b.key == "regenerate_thread-test_1")
+    at = regenerate_button.click().run()
+
+    assert at.exception == []
+    regenerate_keys = [b.key for b in at.button if b.key and b.key.startswith("regenerate_")]
+    assert regenerate_keys == ["regenerate_thread-test_1"]
+
+
+def test_regenerate_cancelled_mid_generation_restores_original_answer_on_next_run():
+    """異常系: 再生成中にキャンセル操作等でスクリプトが打ち切られると、
+    'regenerating'フラグは既にpop済みで消える一方、退避しておいた元の回答
+    （regenerate_original_message）だけがセッションに孤立して残る。
+    次回のスクリプト実行でこの孤立データが自動的にmessagesへ復元されることを確認する。"""
+    at = _run_app()
+    original_answer = AIMessage(content="元の回答")
+    at.session_state["messages"] = [HumanMessage(content="質問です")]
+    at.session_state["regenerate_original_message"] = original_answer
+    # "regenerating"はキャンセル時点で既にpop済みのため、あえてセットしない。
+
+    at = at.run()
+
+    assert at.exception == []
+    messages = at.session_state["messages"]
+    assert len(messages) == 2
+    assert messages[1].content == "元の回答"
+    assert "regenerate_original_message" not in at.session_state
+
+
 def test_regenerate_failure_restores_original_answer(monkeypatch):
     """異常系: 再生成中に例外が発生した場合、取り除いていた元の回答を復元し、
     ユーザーが既存の回答ごと失わないようにする。"""
