@@ -4092,6 +4092,32 @@ def test_regenerate_button_shown_only_for_last_ai_message():
     assert regenerate_keys == ["regenerate_thread-test_3"]
 
 
+def test_regenerate_button_not_shown_when_no_messages():
+    """境界値: 会話履歴が1件も無い状態では🔄再生成ボタンは表示されない。"""
+    at = _run_app()
+
+    assert at.exception == []
+    assert at.session_state["messages"] == []
+    regenerate_keys = [b.key for b in at.button if b.key and b.key.startswith("regenerate_")]
+    assert regenerate_keys == []
+
+
+def test_regenerate_button_not_shown_when_last_message_is_human():
+    """境界値: 末尾がAIMessageでなくHumanMessage（例: 回答生成前の状態）の場合、
+    🔄再生成ボタンは表示されない。"""
+    at = _run_app()
+    at.session_state["messages"] = [
+        HumanMessage(content="質問1"),
+        AIMessage(content="回答1"),
+        HumanMessage(content="質問2"),
+    ]
+    at = at.run()
+
+    assert at.exception == []
+    regenerate_keys = [b.key for b in at.button if b.key and b.key.startswith("regenerate_")]
+    assert regenerate_keys == []
+
+
 def test_regenerate_click_replaces_answer_without_duplicating_history_and_skips_memory_save(monkeypatch):
     """正常系: 🔄再生成ボタン押下で、質問はそのままに末尾のAI回答だけが新しい回答に
     置き換わり、messagesの件数は変わらない。エージェントに渡す履歴にも質問が重複しない。
