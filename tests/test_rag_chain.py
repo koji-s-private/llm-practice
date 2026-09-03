@@ -492,6 +492,70 @@ def test_retrieve_context_includes_docs_without_is_fallback_key(monkeypatch):
     assert doc_fallback_true not in artifact
 
 
+# --- retrieve_context: artifactのmetadataへのdistance_score付与 ---
+
+
+def test_retrieve_context_sets_distance_score_on_returned_doc_metadata(monkeypatch):
+    """正常系: ヒットした1件について、Chromaが返したL2距離スコアが
+    artifactのDocument.metadata["distance_score"]にそのまま設定されること。"""
+    doc = _FakeDocument("関連する内容", {"source": "a.txt"})
+    retrieve_context, _ = _build_agent_with_store(monkeypatch, results=[(doc, 0.3)])
+    monkeypatch.setattr(rag_chain, "_grade_relevance", lambda query, docs: [0])
+
+    _, artifact = retrieve_context.func("質問")
+
+    assert artifact[0].metadata["distance_score"] == 0.3
+
+
+def test_retrieve_context_sets_distinct_distance_score_per_doc(monkeypatch):
+    """正常系: 複数件ヒットした場合、各Documentにはそれぞれ自身のスコアが
+    設定され、他のドキュメントのスコアと取り違えないこと。"""
+    doc1 = _FakeDocument("1件目", {"source": "a.txt"})
+    doc2 = _FakeDocument("2件目", {"source": "b.txt"})
+    retrieve_context, _ = _build_agent_with_store(monkeypatch, results=[(doc1, 0.1), (doc2, 0.9)])
+    monkeypatch.setattr(rag_chain, "_grade_relevance", lambda query, docs: [0, 1])
+
+    _, artifact = retrieve_context.func("質問")
+
+    scores = {doc.metadata["source"]: doc.metadata["distance_score"] for doc in artifact}
+    assert scores == {"a.txt": 0.1, "b.txt": 0.9}
+
+
+def test_retrieve_context_sets_distance_score_of_zero_for_exact_match(monkeypatch):
+    """境界値: スコアが0.0（完全一致相当）の場合でも、falsyな値として
+    取りこぼされず正しく設定されること。"""
+    doc = _FakeDocument("完全一致の内容", {"source": "exact.txt"})
+    retrieve_context, _ = _build_agent_with_store(monkeypatch, results=[(doc, 0.0)])
+    monkeypatch.setattr(rag_chain, "_grade_relevance", lambda query, docs: [0])
+
+    _, artifact = retrieve_context.func("質問")
+
+    assert artifact[0].metadata["distance_score"] == 0.0
+
+
+def test_retrieve_context_sets_distance_score_just_below_recall_threshold(monkeypatch):
+    """境界値: RECALL_DISTANCE_THRESHOLD直下（絞り込み後に残る最も遠いスコア）
+    でも、そのままdistance_scoreに反映されること。"""
+    doc = _FakeDocument("しきい値付近の内容", {"source": "edge.txt"})
+    score = rag_chain.RECALL_DISTANCE_THRESHOLD - 0.01
+    retrieve_context, _ = _build_agent_with_store(monkeypatch, results=[(doc, score)])
+    monkeypatch.setattr(rag_chain, "_grade_relevance", lambda query, docs: [0])
+
+    _, artifact = retrieve_context.func("質問")
+
+    assert artifact[0].metadata["distance_score"] == score
+
+
+def test_retrieve_context_empty_artifact_has_no_distance_score_side_effect(monkeypatch):
+    """異常系境界値: ヒット0件の場合はartifactが空リストのままであり、
+    distance_score付与処理で例外が発生しないこと。"""
+    retrieve_context, _ = _build_agent_with_store(monkeypatch, results=[])
+
+    _, artifact = retrieve_context.func("質問")
+
+    assert artifact == []
+
+
 # --- get_vectorstore のdocstring（CVE-2026-45829に関するセキュリティ注記） ---
 
 

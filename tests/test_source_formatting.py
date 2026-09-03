@@ -86,6 +86,58 @@ def test_format_source_label_unknown_source_when_missing():
     assert source_formatting.format_source_label({}) == "unknown"
 
 
+# --- format_relevance_tier ---
+
+
+def test_format_relevance_tier_returns_none_when_distance_score_missing():
+    """異常系境界値: metadataにdistance_scoreキーが無い場合（過去の会話ログ復元時など）
+    はNoneを返し、呼び出し側で表示自体をスキップできるようにする。"""
+    assert source_formatting.format_relevance_tier({}) is None
+    assert source_formatting.format_relevance_tier({"source": "a.txt"}) is None
+
+
+def test_format_relevance_tier_high_for_low_distance_score():
+    """正常系: distance_scoreが小さい（類似度が高い）場合は「高」ラベルになる。"""
+    assert source_formatting.format_relevance_tier({"distance_score": 0.0}) == "🟢 関連度: 高"
+    assert source_formatting.format_relevance_tier({"distance_score": 0.2}) == "🟢 関連度: 高"
+
+
+def test_format_relevance_tier_high_boundary_at_exactly_0_5():
+    """境界値: しきい値ちょうど0.5は「高」（<=0.5）に含まれる。"""
+    assert source_formatting.format_relevance_tier({"distance_score": 0.5}) == "🟢 関連度: 高"
+
+
+def test_format_relevance_tier_mid_just_above_0_5():
+    """境界値: 0.5をわずかに超えると「中」に切り替わる。"""
+    assert source_formatting.format_relevance_tier({"distance_score": 0.51}) == "🟡 関連度: 中"
+
+
+def test_format_relevance_tier_mid_boundary_at_exactly_0_9():
+    """境界値: しきい値ちょうど0.9は「中」（<=0.9）に含まれる。"""
+    assert source_formatting.format_relevance_tier({"distance_score": 0.9}) == "🟡 関連度: 中"
+
+
+def test_format_relevance_tier_low_just_above_0_9():
+    """境界値: 0.9をわずかに超えると「低」に切り替わる。"""
+    assert source_formatting.format_relevance_tier({"distance_score": 0.91}) == "🔴 関連度: 低"
+
+
+def test_format_relevance_tier_low_for_high_distance_score():
+    """正常系: distance_scoreが大きい（類似度が低い）場合は「低」ラベルになる。
+    RECALL_DISTANCE_THRESHOLD付近の実際に取りうる最大値でも確認する。"""
+    assert source_formatting.format_relevance_tier({"distance_score": 1.29}) == "🔴 関連度: 低"
+    assert (
+        source_formatting.format_relevance_tier({"distance_score": rag_chain.RECALL_DISTANCE_THRESHOLD})
+        == "🔴 関連度: 低"
+    )
+
+
+def test_format_relevance_tier_treats_none_value_same_as_missing_key():
+    """異常系境界値: distance_scoreキー自体はあるが値がNoneの場合も、
+    キー欠如時と同様にNoneを返す（.get()のデフォルト値ではなく実際の値がNoneのケース）。"""
+    assert source_formatting.format_relevance_tier({"distance_score": None}) is None
+
+
 # --- app.py / api/main.py からの再エクスポートが同一実装を指していることの確認 ---
 # （個々の境界値の網羅は test_app_source_display.py / test_api.py 側に委ねる）
 
