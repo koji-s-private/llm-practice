@@ -540,6 +540,21 @@ def _render_feedback_buttons(question: str, answer: str, index: int) -> None:
         st.rerun()
 
 
+def _render_regenerate_button(index: int) -> None:
+    """直近のAI回答の下に🔄再生成ボタンを表示する（対象は最新の1件のみ、呼び出し側で判定済み）。
+
+    押下時は対象のAIMessageをmessagesから取り除いた上でrerunし、以降の回答生成ブロックに
+    「直前のユーザー入力に対する再生成」として処理させる。取り除いた回答は退避しておき、
+    生成に失敗した場合に復元できるようにする。同じindexに対する既存のフィードバック記録は
+    古い回答のものなので、新しい回答に引き継がれないようここで消しておく。
+    """
+    if st.button("🔄 再生成", key=f"regenerate_{st.session_state.thread_id}_{index}", help="この回答を作り直す"):
+        st.session_state.regenerate_original_message = st.session_state.messages.pop()
+        st.session_state.pop(_feedback_widget_key(index, "recorded"), None)
+        st.session_state.regenerating = True
+        st.rerun()
+
+
 def _switch_thread(thread_id: str) -> None:
     """選択された過去スレッドに切り替え、そのスレッドの会話履歴をチャット画面に復元する。"""
     st.session_state.thread_id = thread_id
@@ -590,6 +605,13 @@ if "processed_upload_ids" not in st.session_state:
     # 無関係な操作での再実行でも同じファイルが含まれ続ける。保存・DB反映済みのfile_idを
     # ここに記録し、再実行のたびに重複保存・再インデックスされないようにする。
     st.session_state.processed_upload_ids = set()
+
+# 再生成中にキャンセル操作でスクリプトが打ち切られると、対象の回答が
+# regenerate_original_messageへ退避されたままmessagesから失われた状態で残ることがある。
+# 今回の実行が実際に再生成を行う場合（regenerating=True）以外はここで復元し、孤立させない。
+# サイドバーの会話エクスポート等がmessagesの件数を参照するため、その描画より前に行う。
+if "regenerate_original_message" in st.session_state and not st.session_state.get("regenerating"):
+    st.session_state.messages.append(st.session_state.pop("regenerate_original_message"))
 
 with st.sidebar:
     if "_thread_title_saved_message" in st.session_state:
@@ -767,6 +789,8 @@ for index, message in enumerate(st.session_state.messages):
             _render_answer_provenance(message.additional_kwargs.get("sources") or [])
             _render_copy_button(message.content)
             _render_feedback_buttons(_last_question, message.content, index)
+            if index == len(st.session_state.messages) - 1:
+                _render_regenerate_button(index)
     if isinstance(message, HumanMessage):
         _last_question = message.content
 
@@ -774,11 +798,20 @@ _render_empty_state_guidance()
 
 user_input = st.chat_input("資料について気になることを聞いてみましょう")
 
-if user_input:
+# 再生成ボタン押下時にセットされるフラグ。popで読み取りと同時に消しておくことで、
+# ストリーミング中にキャンセルボタンが押されて実行が中断された場合でも（Streamlitは
+# ウィジェット操作を検知すると実行中のスクリプトをその場で打ち切って再実行するため、
+# 下記のstate更新コードまで到達しない）、次の再実行で同じ再生成が自動的に繰り返されない
+# ようにする。
+regenerating = st.session_state.pop("regenerating", False) and bool(st.session_state.messages)
+question = st.session_state.messages[-1].content if regenerating else user_input
+
+if question:
     turn_timestamp = datetime.now()
-    with st.chat_message("user"):
-        st.caption(_format_message_timestamp(turn_timestamp))
-        st.markdown(user_input)
+    if not regenerating:
+        with st.chat_message("user"):
+            st.caption(_format_message_timestamp(turn_timestamp))
+            st.markdown(user_input)
 
     answer = None
     sources: list = []
@@ -793,7 +826,7 @@ if user_input:
             # 検索中であることを示すプレースホルダー。最初の回答トークンが届いた時点で消す
             # （ツール呼び出し中は回答本文のトークンが生成されないため、その間の待機を可視化する）。
             status_placeholder = st.empty()
-            status_placeholder.markdown("🔍 検索して回答を考え中...")
+            status_placeholder.markdown("🔄 回答を再生成中..." if regenerating else "🔍 検索して回答を考え中...")
             # ストリーミング中に押せるキャンセルボタン。Streamlitは、ウィジェット操作を
             # 検知すると実行中のスクリプトを次のst.*呼び出し（＝このあとのループ内の
             # answer_placeholder.markdown()等）のタイミングで自動的に中断・再実行する
@@ -808,6 +841,11 @@ if user_input:
             # 明示的にクリアできるようにする。
             answer_placeholder = st.empty()
 
+            # 再生成時、st.session_state.messagesは既に対象の質問（HumanMessage）を末尾に
+            # 含んでいる（回答だけがボタン押下時に取り除かれている）ため、二重に渡さないよう
+            # 履歴側から1件除いた上でquestionを付け直す。
+            history_for_agent = st.session_state.messages[:-1] if regenerating else st.session_state.messages
+
             def _stream_answer():
                 """agentのストリーミング出力を逐次yieldしつつ、参照元ドキュメントをsourcesへ蓄積する。
 
@@ -819,7 +857,7 @@ if user_input:
                 first_token = True
                 seen_source_keys: set = set()
                 for chunk, _metadata in st.session_state.agent.stream(
-                    {"messages": _windowed_history(st.session_state.messages) + [HumanMessage(content=user_input)]},
+                    {"messages": _windowed_history(history_for_agent) + [HumanMessage(content=question)]},
                     stream_mode="messages",
                 ):
                     if isinstance(chunk, ToolMessage):
@@ -865,7 +903,10 @@ if user_input:
             _render_copy_button(answer)
             # この時点ではまだmessagesに追加していないため、追加後にこのAIMessageが
             # 収まるインデックス（履歴再描画ループと同じ体系）を先読みして計算する。
-            _render_feedback_buttons(user_input, answer, len(st.session_state.messages) + 1)
+            # 再生成時はHumanMessageを追加し直さないため+1しない。
+            next_index = len(st.session_state.messages) if regenerating else len(st.session_state.messages) + 1
+            _render_feedback_buttons(question, answer, next_index)
+            _render_regenerate_button(next_index)
         except Exception as e:
             status_placeholder.empty()
             cancel_placeholder.empty()
@@ -876,20 +917,33 @@ if user_input:
             st.error(_format_invoke_error_message(e))
 
     if answer is not None:
-        st.session_state.messages.append(
-            HumanMessage(content=user_input, additional_kwargs={"timestamp": turn_timestamp})
-        )
+        if not regenerating:
+            st.session_state.messages.append(
+                HumanMessage(content=user_input, additional_kwargs={"timestamp": turn_timestamp})
+            )
         # 参照元・タイムスタンプは再描画ループでも表示できるよう、additional_kwargsに載せて
         # メッセージ本体と一緒に保持する。
         st.session_state.messages.append(
             AIMessage(content=answer, additional_kwargs={"sources": sources, "timestamp": turn_timestamp})
         )
+        st.session_state.pop("regenerate_original_message", None)
 
         # 会話を自動でナレッジ化（このスレッド専用でローカル保存し、全件走査するsync_data_dir()
         # ではなく保存した1ファイルだけをその場でDB反映）。sourcesが空＝根拠なしの一般知識回答
         # なのでis_fallbackとして記録し、以降の検索対象から除外できるようにする。
-        if st.session_state.auto_save_memory:
+        # 再生成時はナレッジ化をスキップする（同じ質問への回答が重複保存され続けるのを防ぐため。
+        # 置き換え後の最終的な回答はセッション内の会話履歴・エクスポートには反映される）。
+        if st.session_state.auto_save_memory and not regenerating:
             saved_path = save_conversation(
-                user_input, answer, st.session_state.thread_id, is_fallback=not sources, sources=sources
+                question, answer, st.session_state.thread_id, is_fallback=not sources, sources=sources
             )
             _sync_saved_conversation(saved_path, failed_sync_warning_slot)
+    elif regenerating:
+        # 生成に失敗した場合、ボタン押下時に取り除いておいた元の回答を復元し、
+        # ユーザーが既存の回答ごと失わないようにする。
+        original_message = st.session_state.pop("regenerate_original_message", None)
+        if original_message is not None:
+            st.session_state.messages.append(original_message)
+            # rerunしないと、この回の実行では直前のst.error()しか描画されず、
+            # 復元済みの回答が画面上「消えたまま」に見えてしまう。
+            st.rerun()
