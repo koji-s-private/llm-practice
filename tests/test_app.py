@@ -4229,7 +4229,10 @@ def test_regenerate_cancelled_mid_generation_restores_original_answer_on_next_ru
 
 def test_regenerate_failure_restores_original_answer(monkeypatch):
     """異常系: 再生成中に例外が発生した場合、取り除いていた元の回答を復元し、
-    ユーザーが既存の回答ごと失わないようにする。"""
+    ユーザーが既存の回答ごと失わないようにする。復元後にst.rerun()するため、
+    AppTest.run()が内部の再実行まで追従した最終状態では、エラー表示は残らず
+    復元済みの元の回答がその場で表示される（rerunしないとエラー表示のまま残り、
+    無関係な次の操作まで元の回答が画面に出てこない）。"""
     fake_agent = _FakeAgent(exc=RuntimeError("stream broken"))
     monkeypatch.setattr(rag_chain, "build_agent", lambda thread_id=None: fake_agent)
     save_calls = []
@@ -4246,9 +4249,38 @@ def test_regenerate_failure_restores_original_answer(monkeypatch):
     at = regenerate_button.click().run()
 
     assert at.exception == []
-    assert len(at.error) == 1
+    assert at.error == []
+    assert any(m.value == "元の回答" for m in at.markdown)
     messages = at.session_state["messages"]
     assert len(messages) == 2
     assert messages[1].content == "元の回答"
     assert save_calls == []
     assert "regenerate_original_message" not in at.session_state
+
+
+def test_regenerate_failure_shows_error_and_calls_rerun_once(monkeypatch):
+    """異常系: 再生成中の生成失敗そのものではエラーが表示され（挙動は変わらない）、
+    復元済みの回答を再描画するためst.rerun()が1回呼ばれることを確認する。
+    再生成ボタン押下（それ自体もst.rerun()する）を経由すると押下時と失敗時の
+    呼び出しが混ざってしまうため、失敗直前の状態（regenerating=True）を
+    直接セットして生成失敗の回だけを単独で検証する。"""
+    import streamlit as st
+
+    fake_agent = _FakeAgent(exc=RuntimeError("stream broken"))
+    monkeypatch.setattr(rag_chain, "build_agent", lambda thread_id=None: fake_agent)
+    rerun_calls = []
+    monkeypatch.setattr(st, "rerun", lambda *a, **k: rerun_calls.append(True))
+
+    at = _run_app()
+    at.session_state["messages"] = [HumanMessage(content="質問です")]
+    at.session_state["regenerate_original_message"] = AIMessage(content="元の回答")
+    at.session_state["regenerating"] = True
+
+    at = at.run()
+
+    assert at.exception == []
+    assert len(at.error) == 1
+    assert rerun_calls == [True]
+    messages = at.session_state["messages"]
+    assert len(messages) == 2
+    assert messages[1].content == "元の回答"

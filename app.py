@@ -944,3 +944,6 @@ if question:
         original_message = st.session_state.pop("regenerate_original_message", None)
         if original_message is not None:
             st.session_state.messages.append(original_message)
+            # rerunしないと、この回の実行では直前のst.error()しか描画されず、
+            # 復元済みの回答が画面上「消えたまま」に見えてしまう。
+            st.rerun()
