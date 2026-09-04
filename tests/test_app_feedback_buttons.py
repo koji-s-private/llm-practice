@@ -31,7 +31,7 @@ class _FakeAgent:
         yield AIMessageChunk(content=self.answer), {}
 
 
-def _ok_sync(verbose=False):
+def _ok_sync(verbose=False, on_progress=None):
     return {"added": [], "updated": [], "removed": [], "failed": []}
 
 

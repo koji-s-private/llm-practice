@@ -92,14 +92,25 @@ def _sync_and_report(spinner_text: str, warning_slot: DeltaGenerator | None = No
     warning_slot（トップレベルで確保済みのst.empty()）を渡すと、次のスクリプト再実行を
     待たずに同じターン内で警告バナーへ即時反映できる（起動時の呼び出しではスロット確保前
     のため渡さない）。
+
+    同期中は進捗バーで「何件中何件目のどのファイルを処理中か」を逐次表示する
+    （Doclingによるスキャン/図解PDFのOCR解析は1ファイルで数十秒以上かかることがあり、
+    固定文言のスピナーだけではフリーズと区別できないため）。
     """
+    progress_slot = st.empty()
+
+    def on_progress(current: int, total: int, filename: str) -> None:
+        progress_slot.progress(current / total, text=f"({current}/{total}) {filename} を処理中...")
+
     try:
         with st.spinner(spinner_text):
-            result = sync_data_dir(verbose=False)
+            result = sync_data_dir(verbose=False, on_progress=on_progress)
     except Exception as e:
+        progress_slot.empty()
         st.error(f"ドキュメントの同期に失敗しました。時間をおいて再度お試しください。（詳細: {e}）")
         # 失敗時はシグネチャを更新しない。次回もトップレベルの軽量チェックが再同期を試みる。
         return
+    progress_slot.empty()
     if any(result.values()):
         st.toast(
             f"DBを更新しました（追加{len(result['added'])} / "

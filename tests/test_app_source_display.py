@@ -33,7 +33,7 @@ class _FakeAgent:
         return {"messages": payload["messages"] + [AIMessage(content="ok")]}
 
 
-def _ok_sync(verbose=False):
+def _ok_sync(verbose=False, on_progress=None):
     return {"added": [], "updated": [], "removed": [], "failed": []}
 
 

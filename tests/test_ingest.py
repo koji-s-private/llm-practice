@@ -144,6 +144,54 @@ def test_thread_title_file_does_not_affect_signature(fake_env):
     assert ingest.data_dir_signature() == signature_before
 
 
+def test_sync_data_dir_calls_on_progress_for_each_file(fake_env):
+    """on_progressに (現在の番号, 総ファイル数, ファイル名) が対象ファイルごとに通知される。"""
+    data_dir, _store = fake_env
+    _write(data_dir, "a.txt", "十分な長さのテキストです。" * 5)
+    _write(data_dir, "b.txt", "こちらも十分な長さのテキストです。" * 5)
+
+    calls = []
+    ingest.sync_data_dir(verbose=False, on_progress=lambda current, total, name: calls.append((current, total, name)))
+
+    assert len(calls) == 2
+    assert {name for _current, _total, name in calls} == {"a.txt", "b.txt"}
+    assert all(total == 2 for _current, total, _name in calls)
+    assert sorted(current for current, _total, _name in calls) == [1, 2]
+
+
+def test_sync_data_dir_without_on_progress_still_works(fake_env):
+    """on_progress省略時（None）でも従来通り例外なく同期できる。"""
+    data_dir, _store = fake_env
+    _write(data_dir, "a.txt", "十分な長さのテキストです。" * 5)
+
+    result = ingest.sync_data_dir(verbose=False)
+
+    assert result == {"added": ["a.txt"], "updated": [], "removed": [], "failed": []}
+
+
+def test_sync_data_dir_on_progress_not_called_when_no_files(fake_env):
+    """境界値: 同期対象ファイルが0件の場合、on_progressは一度も呼ばれない
+    （app.py側の`current / total`によるゼロ除算を避けられていることの確認）。"""
+    _data_dir, _store = fake_env
+
+    calls = []
+    result = ingest.sync_data_dir(verbose=False, on_progress=lambda *args: calls.append(args))
+
+    assert result == {"added": [], "updated": [], "removed": [], "failed": []}
+    assert calls == []
+
+
+def test_sync_data_dir_on_progress_called_once_for_single_file(fake_env):
+    """境界値: 対象ファイルが1件のみの場合、on_progressは(1, 1, ファイル名)で1回だけ呼ばれる。"""
+    data_dir, _store = fake_env
+    _write(data_dir, "only.txt", "唯一のファイルの十分な長さのテキストです。" * 5)
+
+    calls = []
+    ingest.sync_data_dir(verbose=False, on_progress=lambda current, total, name: calls.append((current, total, name)))
+
+    assert calls == [(1, 1, "only.txt")]
+
+
 class _FailingLoader:
     """load() で必ず例外を送出するダミーローダー（LOADERSの差し替え用）。
 
@@ -184,6 +232,33 @@ def test_one_file_load_failure_does_not_block_other_files(fake_env, monkeypatch)
     # 正常なファイルのチャンクはベクトルストアに登録されている
     sources = {doc.metadata.get("source") for doc in store.docs_by_id.values()}
     assert any("good.txt" in (s or "") for s in sources)
+
+
+def test_on_progress_is_called_for_files_that_ultimately_fail(fake_env, monkeypatch):
+    """異常系: 読み込みに失敗するファイルでも、on_progressは失敗が判明する前
+    （処理着手時点）に通知される（進捗バーが失敗ファイルの分だけ止まって
+    見えることのないように、成功/失敗に関わらず全対象ファイルを通知する）。"""
+    data_dir, _store = fake_env
+    _write(data_dir, "good.txt", "正常に読み込めるテキストです。" * 5)
+    _write(data_dir, "bad.txt", "壊れていることにするテキストです。" * 5)
+
+    real_text_loader = ingest.LOADERS[".txt"]
+
+    def flaky_loader(path):
+        if "bad.txt" in path:
+            return _FailingLoader(path)
+        return real_text_loader(path)
+
+    monkeypatch.setattr(ingest, "LOADERS", {**ingest.LOADERS, ".txt": flaky_loader})
+
+    calls = []
+    result = ingest.sync_data_dir(
+        verbose=False, on_progress=lambda current, total, name: calls.append((current, total, name))
+    )
+
+    assert result["failed"] == ["bad.txt"]
+    assert {name for _current, _total, name in calls} == {"good.txt", "bad.txt"}
+    assert all(total == 2 for _current, total, _name in calls)
 
 
 def test_pdf_load_failure_is_recorded_as_failed(fake_env, monkeypatch):
@@ -2064,7 +2139,7 @@ def test_sync_data_dir_releases_lock_when_processing_raises(fake_env, monkeypatc
     data_dir, _store = fake_env
     _write(data_dir, "a.txt", "十分な長さのテキストです。" * 5)
 
-    def boom(verbose):
+    def boom(verbose, on_progress=None):
         raise RuntimeError("同期処理中の想定外エラー")
 
     monkeypatch.setattr(ingest, "_sync_data_dir_locked", boom)
@@ -2091,14 +2166,14 @@ def test_sync_data_dir_serializes_concurrent_thread_calls(fake_env, monkeypatch)
     active_count = 0
     max_active = 0
 
-    def slow_locked(verbose):
+    def slow_locked(verbose, on_progress=None):
         nonlocal active_count, max_active
         with counter_lock:
             active_count += 1
             max_active = max(max_active, active_count)
         try:
             time.sleep(0.05)
-            return original_locked(verbose=verbose)
+            return original_locked(verbose=verbose, on_progress=on_progress)
         finally:
             with counter_lock:
                 active_count -= 1

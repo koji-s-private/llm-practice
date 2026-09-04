@@ -142,7 +142,7 @@ def test_format_relevance_tier_treats_none_value_same_as_missing_key():
 # （個々の境界値の網羅は test_app_source_display.py / test_api.py 側に委ねる）
 
 
-def _ok_sync(verbose=False):
+def _ok_sync(verbose=False, on_progress=None):
     return {"added": [], "updated": [], "removed": [], "failed": []}
 
 
