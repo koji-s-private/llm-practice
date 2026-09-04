@@ -267,6 +267,36 @@ def test_grade_relevance_falls_back_to_empty_when_first_line_is_not_answer_prefi
     assert rag_chain._grade_relevance("質問", docs) == []
 
 
+def test_grade_relevance_returns_empty_when_first_line_answer_value_is_empty(monkeypatch):
+    """境界値テスト。
+
+    最初の非空行が「回答:」プレフィックス自体は満たしているが、コロンの後に
+    番号が一つも書かれていない（例: "回答:"だけ）場合、後続行に番号が書かれて
+    いても無視され、空リストになることを確認する（「なし」明示時と同じ結果になる
+    別経路のケース）。
+    """
+    docs = [_FakeDocument("a"), _FakeDocument("b")]
+    content = "回答:\n回答:1,2"
+    fake_model = SimpleNamespace(invoke=lambda prompt: SimpleNamespace(content=content))
+    monkeypatch.setattr(rag_chain, "model", fake_model)
+
+    assert rag_chain._grade_relevance("質問", docs) == []
+
+
+def test_grade_relevance_falls_back_to_empty_when_response_is_blank(monkeypatch):
+    """境界値テスト。
+
+    LLMの応答が空白文字のみ（実質的に空）の場合、非空行が1つも無いため
+    安全側（空リスト）にフォールバックすることを確認する。
+    """
+    docs = [_FakeDocument("a"), _FakeDocument("b")]
+    content = "   \n\t\n   "
+    fake_model = SimpleNamespace(invoke=lambda prompt: SimpleNamespace(content=content))
+    monkeypatch.setattr(rag_chain, "model", fake_model)
+
+    assert rag_chain._grade_relevance("質問", docs) == []
+
+
 def test_grade_relevance_falls_back_to_empty_when_llm_echoes_injected_instruction_verbatim(monkeypatch):
     """境界値テスト。
 
