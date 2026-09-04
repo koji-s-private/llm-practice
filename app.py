@@ -52,6 +52,7 @@ from ingest import (
     add_single_conversation_file,
     data_dir_signature,
     delete_indexed_file,
+    delete_indexed_files,
     list_indexed_files,
     resolve_upload_dest,
     safe_relative_dest,
@@ -369,6 +370,8 @@ def _render_indexed_file_list() -> None:
     ダウンロードも同様に2段階（ボタン→実際のdownload_button表示）にし、
     ボタンを押したファイルのみを都度読み込むことで、一覧表示のたびに
     全ファイルをメモリへ展開してしまうのを避ける。
+    各行のチェックボックスで複数選択し、一覧下部の「選択したファイルを削除」からまとめて
+    削除することもできる（個別の削除ボタンとは独立した経路で、同じ確認ステップを踏む）。
     """
     indexed_files = list_indexed_files()
     if not indexed_files:
@@ -380,9 +383,11 @@ def _render_indexed_file_list() -> None:
         name = file_info["name"]
         pending_key = f"pending_delete_{name}"
         download_key = f"pending_download_{name}"
+        select_key = f"selected_delete_{name}"
         # ボタン列を1カラムにまとめて内部で2分割することで、列数が増えても
-        # ラベル列の比率（5:1）を維持し、チャンク数バッジが折り返さないようにする。
-        col_label, col_actions = st.columns([5, 1])
+        # ラベル列の比率（0.6:4.4:1）を維持し、チャンク数バッジが折り返さないようにする。
+        col_select, col_label, col_actions = st.columns([0.6, 4.4, 1])
+        col_select.checkbox("選択", key=select_key, label_visibility="collapsed", help=f"{name} を一括削除の対象に選択")
         col_label.markdown(f"📄 {name}　`{file_info['chunk_count']}チャンク`")
         col_download, col_delete = col_actions.columns(2)
         if col_download.button("⬇️", key=f"download_button_{name}", help=f"{name} をダウンロード"):
@@ -429,6 +434,58 @@ def _render_indexed_file_list() -> None:
             if col_cancel.button("キャンセル", key=f"cancel_delete_{name}"):
                 st.session_state.pop(pending_key, None)
                 st.rerun()
+
+    _render_bulk_delete_controls(indexed_files)
+
+
+def _render_bulk_delete_controls(indexed_files: list[dict]) -> None:
+    """チェックボックスで選択されたファイルをまとめて削除するボタン・確認ステップを表示する。
+
+    確認待ちの対象ファイル名は押下時点でセッションに固定して保持する。確認表示中に
+    チェックボックスの選択状態が変わっても、確認メッセージと実際の削除対象がずれないようにするため。
+    """
+    pending_key = "pending_bulk_delete"
+    selected_names = [f["name"] for f in indexed_files if st.session_state.get(f"selected_delete_{f['name']}")]
+
+    if selected_names:
+        help_text = "チェックボックスで選択したファイルをまとめて削除します"
+    else:
+        help_text = "先にファイルを選択してください"
+    if st.button(
+        "選択したファイルを削除",
+        key="bulk_delete_button",
+        disabled=not selected_names,
+        help=help_text,
+    ):
+        st.session_state[pending_key] = selected_names
+
+    pending_names = st.session_state.get(pending_key)
+    if not pending_names:
+        return
+
+    st.warning(
+        f"次の{len(pending_names)}件のファイルを削除します。この操作は取り消せません。よろしいですか？\n\n"
+        + "\n".join(f"- {name}" for name in pending_names)
+    )
+    col_confirm, col_cancel = st.columns(2)
+    if col_confirm.button("削除する", key="confirm_bulk_delete", type="primary"):
+        deleted_names = delete_indexed_files(pending_names)
+        failed_names = [name for name in pending_names if name not in deleted_names]
+        for name in deleted_names:
+            st.session_state.pop(f"selected_delete_{name}", None)
+        st.session_state.pop(pending_key, None)
+        if deleted_names:
+            _sync_and_report(f"選択した{len(deleted_names)}件のファイルを削除中...")
+        if failed_names:
+            # 個別削除の失敗時と同様、rerunせずこのスクリプト実行内でst.errorを表示し続ける。
+            st.error(
+                "次のファイルの削除に失敗しました（既に削除されている可能性があります）: " + "、".join(failed_names)
+            )
+        else:
+            st.rerun()
+    if col_cancel.button("キャンセル", key="cancel_bulk_delete"):
+        st.session_state.pop(pending_key, None)
+        st.rerun()
 
 
 def _render_empty_state_guidance() -> None:
