@@ -4782,4 +4782,3 @@ def test_regenerate_failure_shows_error_and_calls_rerun_once(monkeypatch):
     messages = at.session_state["messages"]
     assert len(messages) == 2
     assert messages[1].content == "元の回答"
-
