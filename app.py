@@ -67,6 +67,7 @@ from memory import (
     save_thread_title,
 )
 from rag_chain import build_agent
+from source_formatting import format_relevance_tier as _format_relevance_tier
 from source_formatting import format_snippet as _format_snippet
 from source_formatting import format_source_label as _format_source_label
 
@@ -456,8 +457,11 @@ def _render_answer_provenance(sources: list) -> None:
     with st.expander(f"参照した箇所を見る（{len(sources)}件）"):
         for i, doc in enumerate(sources, start=1):
             label = _format_source_label(doc.metadata)
+            relevance = _format_relevance_tier(doc.metadata)
             with st.container(border=True):
                 st.markdown(f"**[{i}] {label}**")
+                if relevance:
+                    st.caption(relevance)
                 st.text(_format_snippet(doc.page_content))
 
 

@@ -6,7 +6,14 @@ Streamlit版（app.py）とAPI版（api/main.py）の両方が、retrieve_contex
 
 from pathlib import Path
 
-from rag_chain import GLOBAL_THREAD_ID
+from rag_chain import GLOBAL_THREAD_ID, RECALL_DISTANCE_THRESHOLD
+
+# distance_score（Chroma L2距離、値が小さいほど類似）を関連度の高/中/低に振り分ける閾値。
+# retrieve_context側でRECALL_DISTANCE_THRESHOLD未満に絞り込み済みのため、
+# 実際に渡ってくるスコアはその範囲内（0〜RECALL_DISTANCE_THRESHOLD）に収まる想定。
+assert 0.5 < RECALL_DISTANCE_THRESHOLD, "RECALL_DISTANCE_THRESHOLDが変更された場合は閾値も見直すこと"
+_RELEVANCE_TIER_HIGH_MAX = 0.5
+_RELEVANCE_TIER_MID_MAX = 0.9
 
 
 def format_snippet(text: str, limit: int = 300) -> str:
@@ -51,3 +58,19 @@ def format_source_label(metadata: dict) -> str:
     if page is not None:
         label += f"（p.{page + 1}）"
     return label
+
+
+def format_relevance_tier(metadata: dict) -> str | None:
+    """参照元ドキュメントのdistance_scoreから、関連度を表す「高/中/低」ラベルを返す。
+
+    過去の会話ログから復元した参照元にはdistance_scoreが記録されていないため、
+    metadataに無い場合はNoneを返す（呼び出し側は表示自体をスキップする）。
+    """
+    score = metadata.get("distance_score")
+    if score is None:
+        return None
+    if score <= _RELEVANCE_TIER_HIGH_MAX:
+        return "🟢 関連度: 高"
+    if score <= _RELEVANCE_TIER_MID_MAX:
+        return "🟡 関連度: 中"
+    return "🔴 関連度: 低"

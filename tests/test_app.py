@@ -1064,6 +1064,57 @@ def test_chat_streaming_source_items_rendered_in_bordered_containers(monkeypatch
         assert len(container.text) == 1
 
 
+def test_chat_streaming_source_item_shows_relevance_caption(monkeypatch):
+    """正常系: distance_scoreを持つ参照元は、ラベル直下に関連度キャプション
+    （例: "🟢 関連度: 高"）が表示される。"""
+    doc_a = _FakeSourceDoc(page_content="Aの内容", metadata={"source": "a.txt", "distance_score": 0.1})
+    fake_agent = _FakeAgentWithSources(answer="関連度付きの回答", artifact=[doc_a])
+    monkeypatch.setattr(rag_chain, "build_agent", lambda thread_id=None: fake_agent)
+
+    at = _run_app()
+    at.chat_input[0].set_value("質問です").run()
+
+    assert at.exception == []
+    expander = [e for e in at.expander if "参照した箇所を見る" in e.label][0]
+    item_container = list(expander.children.values())[0]
+    assert len(item_container.caption) == 1
+    assert item_container.caption[0].value == "🟢 関連度: 高"
+
+
+def test_chat_streaming_source_item_hides_relevance_caption_when_score_missing(monkeypatch):
+    """境界値: distance_scoreを持たない参照元（例: 過去の会話ログから復元されたケース）
+    では関連度キャプション自体が表示されない。"""
+    doc_a = _FakeSourceDoc(page_content="Aの内容", metadata={"source": "a.txt"})
+    fake_agent = _FakeAgentWithSources(answer="関連度なしの回答", artifact=[doc_a])
+    monkeypatch.setattr(rag_chain, "build_agent", lambda thread_id=None: fake_agent)
+
+    at = _run_app()
+    at.chat_input[0].set_value("質問です").run()
+
+    assert at.exception == []
+    expander = [e for e in at.expander if "参照した箇所を見る" in e.label][0]
+    item_container = list(expander.children.values())[0]
+    assert len(item_container.caption) == 0
+
+
+def test_chat_streaming_multiple_source_items_show_distinct_relevance_tiers(monkeypatch):
+    """正常系: 複数の参照元それぞれについて、自身のdistance_scoreに対応した
+    異なる関連度ラベルが個別に表示される（他の項目の値と混同しない）。"""
+    doc_high = _FakeSourceDoc(page_content="高関連度の内容", metadata={"source": "high.txt", "distance_score": 0.2})
+    doc_low = _FakeSourceDoc(page_content="低関連度の内容", metadata={"source": "low.txt", "distance_score": 1.2})
+    fake_agent = _FakeAgentWithSources(answer="複数件の回答", artifact=[doc_high, doc_low])
+    monkeypatch.setattr(rag_chain, "build_agent", lambda thread_id=None: fake_agent)
+
+    at = _run_app()
+    at.chat_input[0].set_value("質問です").run()
+
+    assert at.exception == []
+    expander = [e for e in at.expander if "参照した箇所を見る" in e.label][0]
+    item_containers = list(expander.children.values())
+    captions = [c.caption[0].value for c in item_containers]
+    assert captions == ["🟢 関連度: 高", "🔴 関連度: 低"]
+
+
 def test_chat_streaming_dedupes_sources_across_multiple_tool_calls(monkeypatch):
     """正常系: retrieve_contextが1ターン中に複数回呼ばれ、それぞれのartifactに
     (source, page, thread_id, page_content)が同じドキュメント（＝全く同じチャンク）が

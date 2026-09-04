@@ -228,17 +228,26 @@ def build_agent(thread_id: str = GLOBAL_THREAD_ID):
                 ]
             },
         )
-        narrowed = [doc for doc, score in candidates if score < RECALL_DISTANCE_THRESHOLD]
+        narrowed = [(doc, score) for doc, score in candidates if score < RECALL_DISTANCE_THRESHOLD]
 
-        relevant_idx = _grade_relevance(query, narrowed)
+        relevant_idx = _grade_relevance(query, [doc for doc, _ in narrowed])
         # relevant_idxは類似度スコア順を保ったインデックスのため、先頭N件で上位N件になる。
-        retrieved_docs = [narrowed[i] for i in relevant_idx][:MAX_RETRIEVED_DOCS]
+        # distance_scoreは画面側（source_formatting.format_relevance_tier）で関連度の
+        # 高/中/低表示に使うため、metadataに追加してartifactへ引き継ぐ。
+        retrieved_docs = []
+        for i in relevant_idx[:MAX_RETRIEVED_DOCS]:
+            doc, score = narrowed[i]
+            doc.metadata["distance_score"] = score
+            retrieved_docs.append(doc)
 
         if not retrieved_docs:
             return "関連する情報はドキュメント内に見つかりませんでした。", []
 
+        # LLMに渡すcontentにはdistance_scoreを含めない（UI表示専用のためプロンプト内容を変えない）。
         serialized = "\n\n".join(
-            f"Source: {doc.metadata}\nContent: {doc.page_content[:MAX_DOC_CHARS]}" for doc in retrieved_docs
+            f"Source: { ({k: v for k, v in doc.metadata.items() if k != 'distance_score'}) }\n"
+            f"Content: {doc.page_content[:MAX_DOC_CHARS]}"
+            for doc in retrieved_docs
         )
         return serialized, retrieved_docs
 
