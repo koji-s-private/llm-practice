@@ -304,6 +304,10 @@ def _format_thread_label(thread: dict) -> str:
 
 _THREAD_TITLE_DISPLAY_LIMIT = 20
 
+# 個別削除・一括削除の確認ダイアログが同時に表示されるのを防ぐため、
+# 両方の確認フローから共通で参照するセッションキー名。
+_PENDING_BULK_DELETE_KEY = "pending_bulk_delete"
+
 
 def _thread_display_label(thread: dict) -> str:
     """過去スレッド選択UIに表示するラベルを作る。
@@ -384,18 +388,21 @@ def _render_indexed_file_list() -> None:
         pending_key = f"pending_delete_{name}"
         download_key = f"pending_download_{name}"
         select_key = f"selected_delete_{name}"
-        # ボタン列を1カラムにまとめて内部で2分割することで、列数が増えても
-        # ラベル列の比率（0.6:4.4:1）を維持し、チャンク数バッジが折り返さないようにする。
-        col_select, col_label, col_actions = st.columns([0.6, 4.4, 1])
-        col_select.checkbox("選択", key=select_key, label_visibility="collapsed", help=f"{name} を一括削除の対象に選択")
+        # チェックボックスをボタン列側に寄せることで、ラベル列とボタン列の比率を
+        # 変更前（[5, 1]）と同じ5:1に保ち、チャンク数バッジの折り返しを増やさないようにする。
+        col_label, col_actions = st.columns([5, 1])
         col_label.markdown(f"📄 {name}　`{file_info['chunk_count']}チャンク`")
-        col_download, col_delete = col_actions.columns(2)
+        col_select, col_download, col_delete = col_actions.columns(3)
+        col_select.checkbox("選択", key=select_key, label_visibility="collapsed", help=f"{name} を一括削除の対象に選択")
         if col_download.button("⬇️", key=f"download_button_{name}", help=f"{name} をダウンロード"):
             st.session_state[download_key] = True
             st.session_state.pop(pending_key, None)
         if col_delete.button("🗑️", key=f"delete_button_{name}", help=f"{name} を削除"):
+            # 一括削除の確認を表示中に個別削除の確認を開いた場合、両方の
+            # 確認ダイアログが同時に出てしまうため、一括側は閉じる。
             st.session_state[pending_key] = True
             st.session_state.pop(download_key, None)
+            st.session_state.pop(_PENDING_BULK_DELETE_KEY, None)
 
         if st.session_state.get(download_key):
             file_path = safe_relative_dest(name)
@@ -443,8 +450,9 @@ def _render_bulk_delete_controls(indexed_files: list[dict]) -> None:
 
     確認待ちの対象ファイル名は押下時点でセッションに固定して保持する。確認表示中に
     チェックボックスの選択状態が変わっても、確認メッセージと実際の削除対象がずれないようにするため。
+    個別削除の確認ダイアログと同時に表示されないよう、押下時に個別側の確認状態は解除する。
     """
-    pending_key = "pending_bulk_delete"
+    pending_key = _PENDING_BULK_DELETE_KEY
     selected_names = [f["name"] for f in indexed_files if st.session_state.get(f"selected_delete_{f['name']}")]
 
     if selected_names:
@@ -458,6 +466,12 @@ def _render_bulk_delete_controls(indexed_files: list[dict]) -> None:
         help=help_text,
     ):
         st.session_state[pending_key] = selected_names
+        # 個別削除の確認と同時表示にならないよう、他のファイルの個別確認も含めて閉じておく。
+        # 一覧のループは本関数より先に実行済みのため、この場でクリアするだけでは古い状態の
+        # 個別確認が既に描画された後になってしまう。反映させるためrerunし直す。
+        for f in indexed_files:
+            st.session_state.pop(f"pending_delete_{f['name']}", None)
+        st.rerun()
 
     pending_names = st.session_state.get(pending_key)
     if not pending_names:

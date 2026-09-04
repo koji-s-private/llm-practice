@@ -3397,6 +3397,50 @@ def test_confirm_bulk_delete_uses_selection_captured_at_button_press_time(monkey
     assert delete_calls == [["a.pdf"]]
 
 
+def test_opening_bulk_delete_confirm_closes_individual_delete_confirm(monkeypatch):
+    """回帰防止: 個別削除の確認表示中に一括削除ボタンを押すと、個別側の確認は閉じられ、
+    確認ダイアログが2つ同時に表示されないようにする。"""
+    monkeypatch.setattr(
+        ingest,
+        "list_indexed_files",
+        lambda: [{"name": "a.pdf", "chunk_count": 3}, {"name": "b.txt", "chunk_count": 1}],
+    )
+
+    at = _run_app()
+    delete_button = next(b for b in at.sidebar.button if b.key == "delete_button_a.pdf")
+    at = delete_button.click().run()
+    assert "pending_delete_a.pdf" in at.session_state
+
+    at = _checkbox(at, "b.txt").check().run()
+    at = _bulk_delete_button(at).click().run()
+
+    assert "pending_delete_a.pdf" not in at.session_state
+    assert "pending_bulk_delete" in at.session_state
+    assert len(at.sidebar.warning) == 1
+
+
+def test_opening_individual_delete_confirm_closes_bulk_delete_confirm(monkeypatch):
+    """回帰防止: 一括削除の確認表示中に個別削除ボタンを押すと、一括側の確認は閉じられ、
+    確認ダイアログが2つ同時に表示されないようにする。"""
+    monkeypatch.setattr(
+        ingest,
+        "list_indexed_files",
+        lambda: [{"name": "a.pdf", "chunk_count": 3}, {"name": "b.txt", "chunk_count": 1}],
+    )
+
+    at = _run_app()
+    at = _checkbox(at, "a.pdf").check().run()
+    at = _bulk_delete_button(at).click().run()
+    assert "pending_bulk_delete" in at.session_state
+
+    delete_button = next(b for b in at.sidebar.button if b.key == "delete_button_b.txt")
+    at = delete_button.click().run()
+
+    assert "pending_bulk_delete" not in at.session_state
+    assert "pending_delete_b.txt" in at.session_state
+    assert len(at.sidebar.warning) == 1
+
+
 # --- 10b. サイドバーのインデックス済みファイル一覧・ダウンロード機能（Issue #209） ---
 
 
