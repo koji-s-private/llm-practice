@@ -169,6 +169,29 @@ def test_sync_data_dir_without_on_progress_still_works(fake_env):
     assert result == {"added": ["a.txt"], "updated": [], "removed": [], "failed": []}
 
 
+def test_sync_data_dir_on_progress_not_called_when_no_files(fake_env):
+    """境界値: 同期対象ファイルが0件の場合、on_progressは一度も呼ばれない
+    （app.py側の`current / total`によるゼロ除算を避けられていることの確認）。"""
+    _data_dir, _store = fake_env
+
+    calls = []
+    result = ingest.sync_data_dir(verbose=False, on_progress=lambda *args: calls.append(args))
+
+    assert result == {"added": [], "updated": [], "removed": [], "failed": []}
+    assert calls == []
+
+
+def test_sync_data_dir_on_progress_called_once_for_single_file(fake_env):
+    """境界値: 対象ファイルが1件のみの場合、on_progressは(1, 1, ファイル名)で1回だけ呼ばれる。"""
+    data_dir, _store = fake_env
+    _write(data_dir, "only.txt", "唯一のファイルの十分な長さのテキストです。" * 5)
+
+    calls = []
+    ingest.sync_data_dir(verbose=False, on_progress=lambda current, total, name: calls.append((current, total, name)))
+
+    assert calls == [(1, 1, "only.txt")]
+
+
 class _FailingLoader:
     """load() で必ず例外を送出するダミーローダー（LOADERSの差し替え用）。
 
@@ -209,6 +232,33 @@ def test_one_file_load_failure_does_not_block_other_files(fake_env, monkeypatch)
     # 正常なファイルのチャンクはベクトルストアに登録されている
     sources = {doc.metadata.get("source") for doc in store.docs_by_id.values()}
     assert any("good.txt" in (s or "") for s in sources)
+
+
+def test_on_progress_is_called_for_files_that_ultimately_fail(fake_env, monkeypatch):
+    """異常系: 読み込みに失敗するファイルでも、on_progressは失敗が判明する前
+    （処理着手時点）に通知される（進捗バーが失敗ファイルの分だけ止まって
+    見えることのないように、成功/失敗に関わらず全対象ファイルを通知する）。"""
+    data_dir, _store = fake_env
+    _write(data_dir, "good.txt", "正常に読み込めるテキストです。" * 5)
+    _write(data_dir, "bad.txt", "壊れていることにするテキストです。" * 5)
+
+    real_text_loader = ingest.LOADERS[".txt"]
+
+    def flaky_loader(path):
+        if "bad.txt" in path:
+            return _FailingLoader(path)
+        return real_text_loader(path)
+
+    monkeypatch.setattr(ingest, "LOADERS", {**ingest.LOADERS, ".txt": flaky_loader})
+
+    calls = []
+    result = ingest.sync_data_dir(
+        verbose=False, on_progress=lambda current, total, name: calls.append((current, total, name))
+    )
+
+    assert result["failed"] == ["bad.txt"]
+    assert {name for _current, _total, name in calls} == {"good.txt", "bad.txt"}
+    assert all(total == 2 for _current, total, _name in calls)
 
 
 def test_pdf_load_failure_is_recorded_as_failed(fake_env, monkeypatch):

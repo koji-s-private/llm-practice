@@ -202,6 +202,27 @@ def test_startup_sync_reports_progress_via_on_progress_callback(monkeypatch):
     assert progress_calls == [(1, 2, "a.txt"), (2, 2, "b.txt")]
 
 
+def test_startup_sync_failure_after_partial_progress_shows_error_but_app_keeps_running(monkeypatch):
+    """異常系: 進捗コールバックが何度か呼ばれた途中でsync_data_dir()が例外を
+    送出しても、プログレスバーのクリーンアップ処理（progress_slot.empty()）で
+    クラッシュせず、従来通りst.error表示のみで後続処理が継続される。"""
+    progress_calls = []
+
+    def sync_fails_after_partial_progress(verbose=False, on_progress=None):
+        on_progress(1, 3, "a.txt")
+        progress_calls.append((1, 3, "a.txt"))
+        raise RuntimeError("disk full")
+
+    monkeypatch.setattr(ingest, "sync_data_dir", sync_fails_after_partial_progress)
+
+    at = _run_app()
+
+    assert at.exception == []
+    assert any("ドキュメントの同期に失敗しました" in e.value for e in at.error)
+    assert progress_calls == [(1, 3, "a.txt")]
+    assert "agent" in at.session_state
+
+
 def test_startup_sync_failure_shows_error_but_app_keeps_running(monkeypatch):
     """異常系: 起動時同期が例外を送出しても、st.error表示のみでクラッシュせず、
     エージェント構築（後続処理）は継続される。"""
