@@ -59,6 +59,7 @@ from ingest import (
 )
 from memory import (
     conversation_count,
+    delete_thread,
     list_threads,
     load_conversation,
     load_thread_title,
@@ -691,6 +692,39 @@ with st.sidebar:
                         # メッセージをセッションに残し、rerun後の描画タイミングでトーストを出す。
                         st.session_state["_thread_title_saved_message"] = "タイトルを保存しました"
                         st.rerun()
+
+            # インデックス済みファイルの削除（_render_indexed_file_list）と同じ「削除ボタン→
+            # 確認ボタン」の2段階確認にし、誤操作でスレッドを消してしまわないようにする。
+            pending_delete_thread_key = f"pending_delete_thread_{st.session_state.thread_id}"
+            if st.button(
+                "🗑️ このスレッドを削除",
+                key=f"delete_thread_button_{st.session_state.thread_id}",
+            ):
+                st.session_state[pending_delete_thread_key] = True
+
+            if st.session_state.get(pending_delete_thread_key):
+                st.warning("このスレッドの会話ログをすべて削除します。この操作は取り消せません。よろしいですか？")
+                col_confirm, col_cancel = st.columns(2)
+                if col_confirm.button(
+                    "削除する",
+                    key=f"confirm_delete_thread_{st.session_state.thread_id}",
+                    type="primary",
+                ):
+                    if delete_thread(st.session_state.thread_id):
+                        st.session_state.pop(pending_delete_thread_key, None)
+                        _sync_and_report("スレッドを削除中...")
+                        # 削除したスレッドは表示できないため、常に新しいスレッドへ切り替える。
+                        _start_new_chat()
+                        # エージェント構築に失敗した場合はrerunせず、st.error()の描画を
+                        # このスクリプト実行内に残す（他のスレッド切り替え箇所と同じ扱い）。
+                        if st.session_state.agent is not None:
+                            st.rerun()
+                    else:
+                        st.session_state.pop(pending_delete_thread_key, None)
+                        st.error("スレッドの削除に失敗しました（既に削除されている可能性があります）。")
+                if col_cancel.button("キャンセル", key=f"cancel_delete_thread_{st.session_state.thread_id}"):
+                    st.session_state.pop(pending_delete_thread_key, None)
+                    st.rerun()
 
     st.divider()
     # 「会話ID」という生のID文字列を主語にした表示ではなく、「今の会話を記憶に残すか」

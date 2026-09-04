@@ -17,7 +17,7 @@ app.py が直接 import している以下のシンボルを monkeypatch で軽�
   テストごとに切り替える）
 - `memory.new_thread_id` / `memory.conversation_count` / `memory.save_conversation` /
   `memory.list_threads` / `memory.load_conversation` / `memory.load_thread_title` /
-  `memory.save_thread_title`
+  `memory.save_thread_title` / `memory.delete_thread`
   （`memory.save_conversation` は実際の実装と同様、保存先ファイルパス(Path)を返す）
 
 app.py はモジュールトップレベルで `from ingest import ... sync_data_dir` のように
@@ -160,6 +160,7 @@ def _patch_light_dependencies(monkeypatch):
     monkeypatch.setattr(memory, "load_conversation", lambda thread_id: [])
     monkeypatch.setattr(memory, "load_thread_title", lambda thread_id: None)
     monkeypatch.setattr(memory, "save_thread_title", lambda thread_id, title: None)
+    monkeypatch.setattr(memory, "delete_thread", lambda thread_id: True)
     monkeypatch.setattr(feedback, "record_feedback", lambda *a, **k: None)
 
 
@@ -2808,6 +2809,203 @@ def test_start_new_chat_resets_thread_selector_and_does_not_pull_back_to_old_thr
     # 「新しい会話を始める」クリックで発行されるのは2件目のID。
     assert at.session_state["thread_id"] == "new-thread-2"
     assert at.session_state["messages"] == []
+
+
+# --- 9b. サイドバーの過去スレッド削除機能（Issue #139） ---
+
+
+def test_thread_delete_button_hidden_when_current_thread_has_no_saved_conversation():
+    """境界値: 現在のスレッドが保存済みスレッド一覧に無い場合（会話ログがまだ0件の
+    新規スレッド等）、削除ボタンは表示されない（デフォルトフィクスチャで
+    memory.list_threads は [] を返す）。"""
+    at = _run_app()
+
+    assert at.exception == []
+    assert not any("このスレッドを削除" in b.label for b in at.sidebar.button if b.label)
+
+
+def test_thread_delete_button_shown_for_current_thread(monkeypatch):
+    """正常系: 現在のスレッドが保存済みスレッド一覧に含まれる場合、削除ボタンが表示される。"""
+    from datetime import datetime
+
+    monkeypatch.setattr(
+        memory,
+        "list_threads",
+        lambda: [
+            {
+                "thread_id": "thread-test",
+                "created_at": datetime(2024, 1, 1, 9, 0),
+                "first_question": "質問A",
+                "count": 1,
+            }
+        ],
+    )
+
+    at = _run_app()
+
+    assert at.exception == []
+    assert any(b.key == "delete_thread_button_thread-test" for b in at.sidebar.button)
+
+
+def test_thread_delete_button_click_shows_confirmation_prompt(monkeypatch):
+    """正常系: 削除ボタンを押すと、即座には削除されず確認メッセージと
+    「削除する」「キャンセル」ボタンが表示される（2段階確認の1段階目）。"""
+    from datetime import datetime
+
+    monkeypatch.setattr(
+        memory,
+        "list_threads",
+        lambda: [
+            {
+                "thread_id": "thread-test",
+                "created_at": datetime(2024, 1, 1, 9, 0),
+                "first_question": "質問A",
+                "count": 1,
+            }
+        ],
+    )
+    delete_calls = []
+    monkeypatch.setattr(memory, "delete_thread", lambda thread_id: delete_calls.append(thread_id) or True)
+
+    at = _run_app()
+    delete_button = next(b for b in at.sidebar.button if b.key == "delete_thread_button_thread-test")
+    at = delete_button.click().run()
+
+    assert at.exception == []
+    assert len(at.sidebar.warning) == 1
+    assert any(b.key == "confirm_delete_thread_thread-test" for b in at.sidebar.button)
+    assert any(b.key == "cancel_delete_thread_thread-test" for b in at.sidebar.button)
+    # まだ削除は実行されていない
+    assert delete_calls == []
+
+
+def test_confirm_thread_delete_calls_delete_thread_resyncs_and_starts_new_chat(monkeypatch):
+    """正常系: 確認プロンプトで「削除する」を押すと memory.delete_thread() が呼ばれ、
+    続けて再同期（ingest.sync_data_dir呼び出し）が行われる。削除したスレッドは
+    現在表示中だったため、新しいスレッドIDが発行されメッセージ履歴も空になる。"""
+    from datetime import datetime
+
+    monkeypatch.setattr(
+        memory,
+        "list_threads",
+        lambda: [
+            {
+                "thread_id": "thread-test",
+                "created_at": datetime(2024, 1, 1, 9, 0),
+                "first_question": "質問A",
+                "count": 1,
+            }
+        ],
+    )
+    delete_calls = []
+    monkeypatch.setattr(memory, "delete_thread", lambda thread_id: delete_calls.append(thread_id) or True)
+
+    sync_calls = {"n": 0}
+
+    def counting_sync(verbose=False):
+        sync_calls["n"] += 1
+        return {"added": [], "updated": [], "removed": [], "failed": []}
+
+    monkeypatch.setattr(ingest, "sync_data_dir", counting_sync)
+    # 起動時のスレッド初期化（1回目）は既存の"thread-test"のままにし、
+    # 削除確定後の_start_new_chat()（2回目）でのみ新しいIDに切り替わったことを確認する。
+    thread_ids = iter(["thread-test", "new-thread-after-delete"])
+    monkeypatch.setattr(memory, "new_thread_id", lambda: next(thread_ids))
+
+    at = _run_app()
+    assert sync_calls["n"] == 1  # 起動時の1回
+
+    delete_button = next(b for b in at.sidebar.button if b.key == "delete_thread_button_thread-test")
+    at = delete_button.click().run()
+
+    confirm_button = next(b for b in at.sidebar.button if b.key == "confirm_delete_thread_thread-test")
+    at = confirm_button.click().run()
+
+    assert at.exception == []
+    assert delete_calls == ["thread-test"]
+    assert sync_calls["n"] == 2  # 削除確定後に再同期が呼ばれる
+    assert "pending_delete_thread_thread-test" not in at.session_state
+    assert at.sidebar.warning == []
+    assert at.session_state["thread_id"] == "new-thread-after-delete"
+    assert at.session_state["messages"] == []
+
+
+def test_confirm_thread_delete_shows_error_when_delete_thread_fails(monkeypatch):
+    """異常系: memory.delete_thread() がFalseを返した場合（対象スレッドが既に無い等）、
+    再同期・スレッド切り替えは行わずst.errorでユーザーに失敗を通知する。"""
+    from datetime import datetime
+
+    monkeypatch.setattr(
+        memory,
+        "list_threads",
+        lambda: [
+            {
+                "thread_id": "thread-test",
+                "created_at": datetime(2024, 1, 1, 9, 0),
+                "first_question": "質問A",
+                "count": 1,
+            }
+        ],
+    )
+    monkeypatch.setattr(memory, "delete_thread", lambda thread_id: False)
+
+    sync_calls = {"n": 0}
+
+    def counting_sync(verbose=False):
+        sync_calls["n"] += 1
+        return {"added": [], "updated": [], "removed": [], "failed": []}
+
+    monkeypatch.setattr(ingest, "sync_data_dir", counting_sync)
+
+    at = _run_app()
+    assert sync_calls["n"] == 1  # 起動時の1回
+
+    delete_button = next(b for b in at.sidebar.button if b.key == "delete_thread_button_thread-test")
+    at = delete_button.click().run()
+
+    confirm_button = next(b for b in at.sidebar.button if b.key == "confirm_delete_thread_thread-test")
+    at = confirm_button.click().run()
+
+    assert at.exception == []
+    assert sync_calls["n"] == 1  # 削除失敗時は再同期しない
+    assert "pending_delete_thread_thread-test" not in at.session_state
+    assert at.sidebar.error[0].value.startswith("スレッドの削除に失敗しました")
+    assert at.session_state["thread_id"] == "thread-test"  # 切り替わっていない
+
+
+def test_cancel_thread_delete_does_not_call_delete_thread(monkeypatch):
+    """正常系: 確認プロンプトで「キャンセル」を押すと削除は実行されず、
+    確認プロンプト自体も消える。"""
+    from datetime import datetime
+
+    monkeypatch.setattr(
+        memory,
+        "list_threads",
+        lambda: [
+            {
+                "thread_id": "thread-test",
+                "created_at": datetime(2024, 1, 1, 9, 0),
+                "first_question": "質問A",
+                "count": 1,
+            }
+        ],
+    )
+    delete_calls = []
+    monkeypatch.setattr(memory, "delete_thread", lambda thread_id: delete_calls.append(thread_id) or True)
+
+    at = _run_app()
+    delete_button = next(b for b in at.sidebar.button if b.key == "delete_thread_button_thread-test")
+    at = delete_button.click().run()
+    assert len(at.sidebar.warning) == 1
+
+    cancel_button = next(b for b in at.sidebar.button if b.key == "cancel_delete_thread_thread-test")
+    at = cancel_button.click().run()
+
+    assert at.exception == []
+    assert delete_calls == []
+    assert "pending_delete_thread_thread-test" not in at.session_state
+    assert at.sidebar.warning == []
+    assert at.session_state["thread_id"] == "thread-test"
 
 
 # --- 10. サイドバーのインデックス済みファイル一覧・削除機能 ---
