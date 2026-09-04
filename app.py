@@ -390,9 +390,10 @@ def _render_indexed_file_list() -> None:
         select_key = f"selected_delete_{name}"
         # チェックボックスをダウンロード/削除ボタンと同じ列に押し込むと、列幅が
         # 狭すぎてクリック領域が隣のボタンと重なってしまうため、独立した列として
-        # 分離しつつ、ラベル列の比率（5/6.5）は変更前（[5, 1]）の5/6に近い値を保ち、
-        # チャンク数バッジの折り返しが悪化しないようにする。
-        col_label, col_select, col_actions = st.columns([5, 0.5, 1])
+        # 分離する。非ラベル列（チェックボックス+アクション）の合計は変更前（[5, 1]）と
+        # 同じ1に保つことで、ラベル列の比率（5/6）もチャンク数バッジが折り返さない
+        # 変更前の水準を維持する。
+        col_label, col_select, col_actions = st.columns([5, 0.3, 0.7])
         col_label.markdown(f"📄 {name}　`{file_info['chunk_count']}チャンク`")
         col_select.checkbox("選択", key=select_key, label_visibility="collapsed", help=f"{name} を一括削除の対象に選択")
         col_download, col_delete = col_actions.columns(2)
