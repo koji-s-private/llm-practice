@@ -2944,7 +2944,7 @@ def test_confirm_thread_delete_calls_delete_thread_resyncs_and_starts_new_chat(m
 
     sync_calls = {"n": 0}
 
-    def counting_sync(verbose=False):
+    def counting_sync(verbose=False, on_progress=None):
         sync_calls["n"] += 1
         return {"added": [], "updated": [], "removed": [], "failed": []}
 
@@ -2993,7 +2993,7 @@ def test_confirm_thread_delete_shows_error_when_delete_thread_fails(monkeypatch)
 
     sync_calls = {"n": 0}
 
-    def counting_sync(verbose=False):
+    def counting_sync(verbose=False, on_progress=None):
         sync_calls["n"] += 1
         return {"added": [], "updated": [], "removed": [], "failed": []}
 
