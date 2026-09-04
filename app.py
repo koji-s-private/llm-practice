@@ -388,12 +388,14 @@ def _render_indexed_file_list() -> None:
         pending_key = f"pending_delete_{name}"
         download_key = f"pending_download_{name}"
         select_key = f"selected_delete_{name}"
-        # チェックボックスをボタン列側に寄せることで、ラベル列とボタン列の比率を
-        # 変更前（[5, 1]）と同じ5:1に保ち、チャンク数バッジの折り返しを増やさないようにする。
-        col_label, col_actions = st.columns([5, 1])
+        # チェックボックスをダウンロード/削除ボタンと同じ列に押し込むと、列幅が
+        # 狭すぎてクリック領域が隣のボタンと重なってしまうため、独立した列として
+        # 分離しつつ、ラベル列の比率（5/6.5）は変更前（[5, 1]）の5/6に近い値を保ち、
+        # チャンク数バッジの折り返しが悪化しないようにする。
+        col_label, col_select, col_actions = st.columns([5, 0.5, 1])
         col_label.markdown(f"📄 {name}　`{file_info['chunk_count']}チャンク`")
-        col_select, col_download, col_delete = col_actions.columns(3)
         col_select.checkbox("選択", key=select_key, label_visibility="collapsed", help=f"{name} を一括削除の対象に選択")
+        col_download, col_delete = col_actions.columns(2)
         if col_download.button("⬇️", key=f"download_button_{name}", help=f"{name} をダウンロード"):
             st.session_state[download_key] = True
             st.session_state.pop(pending_key, None)
