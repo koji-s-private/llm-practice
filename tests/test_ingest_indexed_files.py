@@ -1,4 +1,4 @@
-"""ingest.py の list_indexed_files() / delete_indexed_file() のテスト。
+"""ingest.py の list_indexed_files() / delete_indexed_file() / delete_indexed_files() のテスト。
 
 サイドバーのインデックス済みファイル一覧・削除機能のバックエンドロジックを、
 実際のベクトルDB・埋め込みモデルを使わずに検証する。
@@ -6,6 +6,8 @@
   manifest を直接組み立てて検証する。
 - delete_indexed_file() は safe_relative_dest() 経由でパスを解決し実ファイルを削除するだけで、
   manifest・ベクトルDBには一切触れない設計のため、DATA_DIR上のファイル操作のみを確認する。
+- delete_indexed_files() は delete_indexed_file() を順に呼び出す薄いラッパーのため、
+  同様にDATA_DIR上のファイル操作のみを確認する。
 """
 
 import pytest
@@ -287,3 +289,65 @@ def test_delete_indexed_file_rejects_traversal_within_subfolder_path(fake_data_e
     result = ingest.delete_indexed_file("manuals/../../etc/passwd")
 
     assert result is False
+
+
+# --- delete_indexed_files() ---
+
+
+def test_delete_indexed_files_removes_all_existing_files_and_returns_their_names(fake_data_env):
+    data_dir = fake_data_env
+    (data_dir / "a.txt").write_text("削除対象Aです。", encoding="utf-8")
+    (data_dir / "b.txt").write_text("削除対象Bです。", encoding="utf-8")
+
+    result = ingest.delete_indexed_files(["a.txt", "b.txt"])
+
+    assert result == ["a.txt", "b.txt"]
+    assert not (data_dir / "a.txt").exists()
+    assert not (data_dir / "b.txt").exists()
+
+
+def test_delete_indexed_files_skips_nonexistent_files_but_deletes_the_rest(fake_data_env):
+    # 一部のファイルが存在しない（既に削除済み等）場合でも、1件の失敗が他の削除を
+    # 妨げず、存在するファイルは正しく削除され、結果には存在したファイルのみが含まれる。
+    data_dir = fake_data_env
+    (data_dir / "exists.txt").write_text("存在するファイルです。", encoding="utf-8")
+
+    result = ingest.delete_indexed_files(["exists.txt", "missing.txt"])
+
+    assert result == ["exists.txt"]
+    assert not (data_dir / "exists.txt").exists()
+
+
+def test_delete_indexed_files_returns_empty_list_when_all_files_missing(fake_data_env):
+    result = ingest.delete_indexed_files(["missing_a.txt", "missing_b.txt"])
+
+    assert result == []
+
+
+def test_delete_indexed_files_returns_empty_list_for_empty_input_without_error(fake_data_env):
+    result = ingest.delete_indexed_files([])
+
+    assert result == []
+
+
+def test_delete_indexed_files_preserves_files_not_in_the_list(fake_data_env):
+    data_dir = fake_data_env
+    (data_dir / "target.txt").write_text("削除対象です。", encoding="utf-8")
+    (data_dir / "keep.txt").write_text("残すべきファイルです。", encoding="utf-8")
+
+    result = ingest.delete_indexed_files(["target.txt"])
+
+    assert result == ["target.txt"]
+    assert (data_dir / "keep.txt").exists()
+
+
+def test_delete_indexed_files_rejects_directory_traversal_entries(fake_data_env):
+    # delete_indexed_file()の挙動をそのまま引き継ぎ、パストラバーサルを試みる
+    # エントリはDATA_DIR外に触れず、結果からも除外される。
+    data_dir = fake_data_env
+    (data_dir / "ok.txt").write_text("正常なファイルです。", encoding="utf-8")
+
+    result = ingest.delete_indexed_files(["ok.txt", "../../etc/passwd"])
+
+    assert result == ["ok.txt"]
+    assert list(data_dir.iterdir()) == []
