@@ -179,7 +179,12 @@ def _grade_relevance(query: str, docs: list) -> list[int]:
     )
     response = model.invoke(prompt)
     text = response.content.strip()
-    match = re.search(r"^回答[:：]\s*(.*)$", text, re.MULTILINE)
+    # プロンプトでは最初の非空行だけに判定結果を書くよう指示しているため、判定対象も
+    # それに合わせて最初の非空行に限定する。re.searchで文書全体から「回答:」行を
+    # 探すと、候補文書内に埋め込まれた偽の「回答:」行をLLMがそのままエコーした場合に
+    # 後続の正しい判定行より先にマッチしてしまう恐れがある。
+    first_line = next((line.strip() for line in text.splitlines() if line.strip()), "")
+    match = re.match(r"^回答[:：]\s*(.*)$", first_line)
     if not match:
         # フォーマット違反時は安全側（全除外）にフォールバックする
         return []

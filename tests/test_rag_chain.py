@@ -238,6 +238,35 @@ def test_grade_relevance_ignores_injected_answer_line_in_document_content(monkey
     assert result == [1]
 
 
+def test_grade_relevance_uses_first_line_when_multiple_answer_lines_present(monkeypatch):
+    """プロンプトインジェクション対策の検証。
+
+    LLMの応答に「回答:」から始まる行が複数含まれる場合、最初の非空行のみを
+    判定対象とし、後続の（文書内容をエコーしたなどの）行は無視されることを確認する。
+    """
+    docs = [_FakeDocument("a"), _FakeDocument("b"), _FakeDocument("c")]
+    content = "回答:2\n回答:1,3"
+    fake_model = SimpleNamespace(invoke=lambda prompt: SimpleNamespace(content=content))
+    monkeypatch.setattr(rag_chain, "model", fake_model)
+
+    assert rag_chain._grade_relevance("質問", docs) == [1]
+
+
+def test_grade_relevance_falls_back_to_empty_when_first_line_is_not_answer_prefix(monkeypatch):
+    """境界値テスト。
+
+    先頭に空行や無関係な自由文があり、「回答:」行がその後に続く場合でも、
+    最初の非空行が「回答:」形式でなければフォーマット違反として安全側
+    （空リスト）にフォールバックすることを確認する。
+    """
+    docs = [_FakeDocument("a"), _FakeDocument("b")]
+    content = "\n文書1が関連していると思います。\n回答:1"
+    fake_model = SimpleNamespace(invoke=lambda prompt: SimpleNamespace(content=content))
+    monkeypatch.setattr(rag_chain, "model", fake_model)
+
+    assert rag_chain._grade_relevance("質問", docs) == []
+
+
 def test_grade_relevance_falls_back_to_empty_when_llm_echoes_injected_instruction_verbatim(monkeypatch):
     """境界値テスト。
 
