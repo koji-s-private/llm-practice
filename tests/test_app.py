@@ -133,7 +133,7 @@ class _FakeAgentWithMultipleToolCalls:
         yield AIMessageChunk(content=self.answer), {}
 
 
-def _ok_sync(verbose=False):
+def _ok_sync(verbose=False, on_progress=None):
     return {"added": [], "updated": [], "removed": [], "failed": []}
 
 
@@ -181,11 +181,32 @@ def test_startup_sync_success_shows_no_error():
     assert "agent" in at.session_state
 
 
+def test_startup_sync_reports_progress_via_on_progress_callback(monkeypatch):
+    """正常系: _sync_and_report()がsync_data_dir()に渡すon_progressを、
+    対象ファイルごとに(現在の番号, 総数, ファイル名)で呼び出しても例外なく完走する
+    （進捗バー更新用コールバックとsync_data_dir呼び出し側との連携確認）。"""
+    progress_calls = []
+
+    def sync_records_progress(verbose=False, on_progress=None):
+        for i, name in enumerate(["a.txt", "b.txt"], start=1):
+            on_progress(i, 2, name)
+            progress_calls.append((i, 2, name))
+        return {"added": ["a.txt", "b.txt"], "updated": [], "removed": [], "failed": []}
+
+    monkeypatch.setattr(ingest, "sync_data_dir", sync_records_progress)
+
+    at = _run_app()
+
+    assert at.exception == []
+    assert at.error == []
+    assert progress_calls == [(1, 2, "a.txt"), (2, 2, "b.txt")]
+
+
 def test_startup_sync_failure_shows_error_but_app_keeps_running(monkeypatch):
     """異常系: 起動時同期が例外を送出しても、st.error表示のみでクラッシュせず、
     エージェント構築（後続処理）は継続される。"""
 
-    def failing_sync(verbose=False):
+    def failing_sync(verbose=False, on_progress=None):
         raise RuntimeError("disk full")
 
     monkeypatch.setattr(ingest, "sync_data_dir", failing_sync)
@@ -207,7 +228,7 @@ def test_startup_sync_with_failed_files_shows_warning_and_toast(monkeypatch):
     （ingest.sync_data_dir()の戻り値仕様: added/updated/removed/failedの4キー。
     失敗ファイルがあるケースの回帰を防ぐために追加）。"""
 
-    def partial_failure_sync(verbose=False):
+    def partial_failure_sync(verbose=False, on_progress=None):
         return {
             "added": ["good.txt"],
             "updated": [],
@@ -240,7 +261,7 @@ def test_resync_button_failure_shows_error(monkeypatch):
     """
     call_count = {"n": 0}
 
-    def flaky_sync(verbose=False):
+    def flaky_sync(verbose=False, on_progress=None):
         call_count["n"] += 1
         if call_count["n"] == 1:
             return {"added": [], "updated": [], "removed": [], "failed": []}
@@ -267,7 +288,7 @@ def test_resync_button_failed_files_shows_warning_immediately(monkeypatch):
     呼ばれることの確認）。"""
     call_count = {"n": 0}
 
-    def flaky_sync(verbose=False):
+    def flaky_sync(verbose=False, on_progress=None):
         call_count["n"] += 1
         if call_count["n"] == 1:
             return {"added": [], "updated": [], "removed": [], "failed": []}
@@ -295,7 +316,7 @@ def test_resync_button_recovery_clears_warning_immediately(monkeypatch):
     居残らない（_show_failed_sync_files_warningのcontainer.empty()呼び出しの確認）。"""
     call_count = {"n": 0}
 
-    def flaky_sync(verbose=False):
+    def flaky_sync(verbose=False, on_progress=None):
         call_count["n"] += 1
         if call_count["n"] == 1:
             return {"added": [], "updated": [], "removed": [], "failed": []}
@@ -327,7 +348,7 @@ def test_resync_button_success_shows_no_warning(monkeypatch):
     変更後も、従来通り警告は表示されずエラーも出ない。"""
     call_count = {"n": 0}
 
-    def counting_sync(verbose=False):
+    def counting_sync(verbose=False, on_progress=None):
         call_count["n"] += 1
         return {"added": ["ok.txt"], "updated": [], "removed": [], "failed": []}
 
@@ -391,7 +412,7 @@ def test_google_drive_sync_button_success_shows_both_results(monkeypatch):
 
     db_sync_calls = {"n": 0}
 
-    def counting_sync(verbose=False):
+    def counting_sync(verbose=False, on_progress=None):
         db_sync_calls["n"] += 1
         return {"added": ["doc.docx"], "updated": [], "removed": ["old.txt"], "failed": []}
 
@@ -422,7 +443,7 @@ def test_google_drive_sync_button_missing_credentials_shows_error(monkeypatch):
 
     db_sync_calls = {"n": 0}
 
-    def counting_sync(verbose=False):
+    def counting_sync(verbose=False, on_progress=None):
         db_sync_calls["n"] += 1
         return {"added": [], "updated": [], "removed": [], "failed": []}
 
@@ -476,7 +497,7 @@ def test_google_drive_sync_button_db_reflection_failed_files_shows_warning(monke
 
     call_count = {"n": 0}
 
-    def flaky_sync(verbose=False):
+    def flaky_sync(verbose=False, on_progress=None):
         call_count["n"] += 1
         if call_count["n"] == 1:
             return {"added": [], "updated": [], "removed": [], "failed": []}
@@ -909,7 +930,7 @@ def test_chat_invoke_failure_skips_auto_knowledge_save(monkeypatch):
 
     sync_calls = {"n": 0}
 
-    def counting_sync(verbose=False):
+    def counting_sync(verbose=False, on_progress=None):
         sync_calls["n"] += 1
         return {"added": [], "updated": [], "removed": [], "failed": []}
 
@@ -1377,7 +1398,7 @@ def test_post_chat_saves_conversation_and_syncs_single_file_immediately(monkeypa
 
     sync_calls = {"n": 0}
 
-    def counting_sync(verbose=False):
+    def counting_sync(verbose=False, on_progress=None):
         sync_calls["n"] += 1
         return {"added": [], "updated": [], "removed": [], "failed": []}
 
@@ -1442,7 +1463,7 @@ def test_post_chat_add_single_conversation_file_success_updates_signature_immedi
 
     sync_calls = {"n": 0}
 
-    def counting_sync(verbose=False):
+    def counting_sync(verbose=False, on_progress=None):
         sync_calls["n"] += 1
         return {"added": [], "updated": [], "removed": [], "failed": []}
 
@@ -1490,7 +1511,7 @@ def test_post_chat_add_single_conversation_file_status_failed_shows_no_error_and
 
     sync_calls = {"n": 0}
 
-    def counting_sync(verbose=False):
+    def counting_sync(verbose=False, on_progress=None):
         sync_calls["n"] += 1
         return {"added": [], "updated": [], "removed": [], "failed": []}
 
@@ -1557,7 +1578,7 @@ def test_post_chat_add_single_conversation_file_failed_merges_without_duplicate_
     monkeypatch.setattr(
         ingest,
         "sync_data_dir",
-        lambda verbose=False: {"added": [], "updated": [], "removed": [], "failed": ["broken.pdf"]},
+        lambda verbose=False, on_progress=None: {"added": [], "updated": [], "removed": [], "failed": ["broken.pdf"]},
     )
 
     at = _run_app()
@@ -1698,7 +1719,7 @@ def test_post_chat_save_conversation_not_called_when_auto_save_memory_disabled(m
 
     sync_calls = {"n": 0}
 
-    def counting_sync(verbose=False):
+    def counting_sync(verbose=False, on_progress=None):
         sync_calls["n"] += 1
         return {"added": [], "updated": [], "removed": [], "failed": []}
 
@@ -1798,7 +1819,7 @@ def test_rerun_without_signature_change_skips_resync(monkeypatch):
 
     sync_calls = {"n": 0}
 
-    def counting_sync(verbose=False):
+    def counting_sync(verbose=False, on_progress=None):
         sync_calls["n"] += 1
         return {"added": [], "updated": [], "removed": [], "failed": []}
 
@@ -1822,7 +1843,7 @@ def test_rerun_with_signature_change_triggers_resync(monkeypatch):
 
     sync_calls = {"n": 0}
 
-    def counting_sync(verbose=False):
+    def counting_sync(verbose=False, on_progress=None):
         sync_calls["n"] += 1
         return {"added": [], "updated": [], "removed": [], "failed": []}
 
@@ -2028,7 +2049,7 @@ def test_upload_failed_sync_shows_warning_immediately(tmp_path, monkeypatch):
 
     call_count = {"n": 0}
 
-    def flaky_sync(verbose=False):
+    def flaky_sync(verbose=False, on_progress=None):
         call_count["n"] += 1
         if call_count["n"] == 1:
             return {"added": [], "updated": [], "removed": [], "failed": []}
@@ -2068,7 +2089,7 @@ def test_failed_sync_files_warning_persists_and_retries_until_fixed(monkeypatch)
 
     call_count = {"n": 0}
 
-    def flaky_sync(verbose=False):
+    def flaky_sync(verbose=False, on_progress=None):
         call_count["n"] += 1
         if call_count["n"] <= 2:
             return {"added": [], "updated": [], "removed": [], "failed": ["broken.pdf"]}
@@ -2106,7 +2127,7 @@ def test_sync_success_without_failed_files_updates_signature_and_no_warning(monk
 
     call_count = {"n": 0}
 
-    def counting_sync(verbose=False):
+    def counting_sync(verbose=False, on_progress=None):
         call_count["n"] += 1
         return {"added": [], "updated": [], "removed": [], "failed": []}
 
@@ -2133,7 +2154,7 @@ def test_failed_sync_files_keep_signature_unset_until_recovered(monkeypatch):
 
     call_count = {"n": 0}
 
-    def flaky_sync(verbose=False):
+    def flaky_sync(verbose=False, on_progress=None):
         call_count["n"] += 1
         if call_count["n"] == 1:
             return {"added": [], "updated": [], "removed": [], "failed": ["corrupt.pdf"]}
@@ -2878,7 +2899,7 @@ def test_confirm_delete_calls_delete_indexed_file_and_resyncs(monkeypatch):
 
     sync_calls = {"n": 0}
 
-    def counting_sync(verbose=False):
+    def counting_sync(verbose=False, on_progress=None):
         sync_calls["n"] += 1
         return {"added": [], "updated": [], "removed": [], "failed": []}
 
@@ -2908,7 +2929,7 @@ def test_confirm_delete_shows_error_when_delete_indexed_file_fails(monkeypatch):
 
     sync_calls = {"n": 0}
 
-    def counting_sync(verbose=False):
+    def counting_sync(verbose=False, on_progress=None):
         sync_calls["n"] += 1
         return {"added": [], "updated": [], "removed": [], "failed": []}
 

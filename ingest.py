@@ -45,6 +45,7 @@ import logging
 import os
 import re
 import sys
+from collections.abc import Callable
 from functools import partial
 from pathlib import Path
 
@@ -87,6 +88,9 @@ MANIFEST_PATH = PERSIST_DIR / "manifest.json"
 SYNC_LOCK_PATH = PERSIST_DIR / "sync.lock"
 # 通常の同期は数秒〜十数秒で終わるため、それより十分長い待ち時間を設けつつ無限待機は避ける。
 SYNC_LOCK_TIMEOUT_SECONDS = 60
+
+# 進捗コールバック: (現在の処理番号（1始まり）, 総ファイル数, 処理中のファイル名) を通知する。
+ProgressCallback = Callable[[int, int, str], None]
 
 
 class _ExcelLoader:
@@ -608,7 +612,7 @@ def data_dir_signature() -> tuple[int, float]:
     return (len(target_files), latest_mtime)
 
 
-def sync_data_dir(verbose: bool = True) -> dict:
+def sync_data_dir(verbose: bool = True, on_progress: ProgressCallback | None = None) -> dict:
     """data/ の内容とベクトルDBを同期する。
 
     戻り値: {"added": [...], "updated": [...], "removed": [...], "failed": [...]}
@@ -624,13 +628,17 @@ def sync_data_dir(verbose: bool = True) -> dict:
     manifest書き込みをファイルロック（SYNC_LOCK_PATH）で排他制御する。
     SYNC_LOCK_TIMEOUT_SECONDS以内にロックを獲得できなかった場合は
     `filelock.Timeout` をそのまま送出する。
+
+    on_progressを渡すと、対象ファイルごとに処理着手直前のタイミングで呼び出される
+    （UI側での進捗表示用。unchanged判定で即returnするファイルも含め、対象ファイル
+    全件について通知する）。
     """
     DATA_DIR.mkdir(parents=True, exist_ok=True)
     PERSIST_DIR.mkdir(parents=True, exist_ok=True)
 
     try:
         with FileLock(str(SYNC_LOCK_PATH), timeout=SYNC_LOCK_TIMEOUT_SECONDS):
-            return _sync_data_dir_locked(verbose=verbose)
+            return _sync_data_dir_locked(verbose=verbose, on_progress=on_progress)
     except Timeout:
         logger.warning(
             "%s のロック取得がタイムアウトしました（他のセッションが同期中の可能性があります）。",
@@ -785,7 +793,7 @@ def _ingest_file(name: str, path: Path, vector_store, manifest: dict, splitter, 
     return status
 
 
-def _sync_data_dir_locked(verbose: bool) -> dict:
+def _sync_data_dir_locked(verbose: bool, on_progress: ProgressCallback | None = None) -> dict:
     """sync_data_dir()の本体（呼び出し元がファイルロックを取得済みであることが前提）。"""
     vector_store = get_vectorstore()
     manifest = _load_manifest()
@@ -795,10 +803,13 @@ def _sync_data_dir_locked(verbose: bool) -> dict:
     current_files = {
         str(f.relative_to(DATA_DIR)): f for f in DATA_DIR.rglob("*") if f.is_file() and _is_indexable_file(f)
     }
+    total_files = len(current_files)
 
     result = {"added": [], "updated": [], "removed": [], "failed": []}
 
-    for name, path in current_files.items():
+    for index, (name, path) in enumerate(current_files.items(), start=1):
+        if on_progress is not None:
+            on_progress(index, total_files, name)
         status = _ingest_file(name, path, vector_store, manifest, splitter, verbose=verbose)
         if status in ("added", "updated", "failed"):
             result[status].append(name)

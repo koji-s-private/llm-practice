@@ -144,6 +144,31 @@ def test_thread_title_file_does_not_affect_signature(fake_env):
     assert ingest.data_dir_signature() == signature_before
 
 
+def test_sync_data_dir_calls_on_progress_for_each_file(fake_env):
+    """on_progressに (現在の番号, 総ファイル数, ファイル名) が対象ファイルごとに通知される。"""
+    data_dir, _store = fake_env
+    _write(data_dir, "a.txt", "十分な長さのテキストです。" * 5)
+    _write(data_dir, "b.txt", "こちらも十分な長さのテキストです。" * 5)
+
+    calls = []
+    ingest.sync_data_dir(verbose=False, on_progress=lambda current, total, name: calls.append((current, total, name)))
+
+    assert len(calls) == 2
+    assert {name for _current, _total, name in calls} == {"a.txt", "b.txt"}
+    assert all(total == 2 for _current, total, _name in calls)
+    assert sorted(current for current, _total, _name in calls) == [1, 2]
+
+
+def test_sync_data_dir_without_on_progress_still_works(fake_env):
+    """on_progress省略時（None）でも従来通り例外なく同期できる。"""
+    data_dir, _store = fake_env
+    _write(data_dir, "a.txt", "十分な長さのテキストです。" * 5)
+
+    result = ingest.sync_data_dir(verbose=False)
+
+    assert result == {"added": ["a.txt"], "updated": [], "removed": [], "failed": []}
+
+
 class _FailingLoader:
     """load() で必ず例外を送出するダミーローダー（LOADERSの差し替え用）。
 
@@ -2064,7 +2089,7 @@ def test_sync_data_dir_releases_lock_when_processing_raises(fake_env, monkeypatc
     data_dir, _store = fake_env
     _write(data_dir, "a.txt", "十分な長さのテキストです。" * 5)
 
-    def boom(verbose):
+    def boom(verbose, on_progress=None):
         raise RuntimeError("同期処理中の想定外エラー")
 
     monkeypatch.setattr(ingest, "_sync_data_dir_locked", boom)
@@ -2091,14 +2116,14 @@ def test_sync_data_dir_serializes_concurrent_thread_calls(fake_env, monkeypatch)
     active_count = 0
     max_active = 0
 
-    def slow_locked(verbose):
+    def slow_locked(verbose, on_progress=None):
         nonlocal active_count, max_active
         with counter_lock:
             active_count += 1
             max_active = max(max_active, active_count)
         try:
             time.sleep(0.05)
-            return original_locked(verbose=verbose)
+            return original_locked(verbose=verbose, on_progress=on_progress)
         finally:
             with counter_lock:
                 active_count -= 1
