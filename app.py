@@ -388,19 +388,16 @@ def _render_indexed_file_list() -> None:
         pending_key = f"pending_delete_{name}"
         download_key = f"pending_download_{name}"
         select_key = f"selected_delete_{name}"
-        # チェックボックスをダウンロード/削除ボタンと同じ列に押し込むと、列幅が
-        # 狭すぎてクリック領域が隣のボタンと重なってしまうため、独立した列として
-        # 分離する。非ラベル列（チェックボックス+アクション）の合計は変更前（[5, 1]）と
-        # 同じ1に保つことで、ラベル列の比率（5/6）もチャンク数バッジが折り返さない
-        # 変更前の水準を維持する。
-        col_label, col_select, col_actions = st.columns([5, 0.3, 0.7])
-        col_label.markdown(f"📄 {name}　`{file_info['chunk_count']}チャンク`")
-        col_select.checkbox("選択", key=select_key, label_visibility="collapsed", help=f"{name} を一括削除の対象に選択")
-        col_download, col_delete = col_actions.columns(2)
-        if col_download.button("⬇️", key=f"download_button_{name}", help=f"{name} をダウンロード"):
+        # チェックボックス・ダウンロード・削除を1行の狭い列に詰め込むと、列幅の
+        # 微調整では操作要素同士の重なりが解消しきれないため、ファイル名行と
+        # 操作行を分ける2段組みにし、操作行の3要素に均等かつ十分な幅を割り当てる。
+        st.markdown(f"📄 {name}　`{file_info['chunk_count']}チャンク`")
+        col_select, col_download, col_delete = st.columns([1, 1, 1])
+        col_select.checkbox("選択", key=select_key, label_visibility="visible", help=f"{name} を一括削除の対象に選択")
+        if col_download.button("⬇️ ダウンロード", key=f"download_button_{name}", help=f"{name} をダウンロード"):
             st.session_state[download_key] = True
             st.session_state.pop(pending_key, None)
-        if col_delete.button("🗑️", key=f"delete_button_{name}", help=f"{name} を削除"):
+        if col_delete.button("🗑️ 削除", key=f"delete_button_{name}", help=f"{name} を削除"):
             # 一括削除の確認を表示中に個別削除の確認を開いた場合、両方の
             # 確認ダイアログが同時に出てしまうため、一括側は閉じる。
             st.session_state[pending_key] = True
@@ -444,6 +441,8 @@ def _render_indexed_file_list() -> None:
             if col_cancel.button("キャンセル", key=f"cancel_delete_{name}"):
                 st.session_state.pop(pending_key, None)
                 st.rerun()
+
+        st.divider()
 
     _render_bulk_delete_controls(indexed_files)
 
