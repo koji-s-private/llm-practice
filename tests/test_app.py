@@ -567,7 +567,7 @@ def test_windowed_history_drops_oldest_messages_when_over_budget(monkeypatch):
     古いメッセージが間引かれ、先頭が必ずHumanMessageになる。
 
     conftest.pyのダミー環境変数によりデフォルトのCURRENT_PROVIDERは"anthropic"
-    （予算50000トークン）になっており、以下の会話量（約8000トークン相当）では
+    （予算50000トークン）になっており、以下の会話量（CJK考慮で約4900トークン相当）では
     間引きが発生しない。ここではOllama利用時の予算（デフォルト設定で約3192
     トークン）を明示的に使うことで、間引きが発生する条件を安定して再現する。"""
     import app
@@ -575,7 +575,7 @@ def test_windowed_history_drops_oldest_messages_when_over_budget(monkeypatch):
 
     monkeypatch.setattr(setup, "CURRENT_PROVIDER", "ollama")
 
-    long_text = "あ" * 2000  # 概算で500トークン程度
+    long_text = "あ" * 300  # CJK考慮のchars_per_token(概ね1)で概算300トークン程度
     messages = []
     for i in range(8):
         messages.append(HumanMessage(content=f"質問{i}: {long_text}"))
@@ -596,7 +596,7 @@ def test_windowed_history_does_not_mutate_input_list():
     （画面表示用のst.session_state.messagesを想定）自体は一切変更されない。"""
     import app
 
-    long_text = "あ" * 2000
+    long_text = "あ" * 300
     messages = []
     for i in range(8):
         messages.append(HumanMessage(content=f"質問{i}: {long_text}"))
@@ -617,7 +617,7 @@ def test_chat_streaming_sends_windowed_history_to_agent(monkeypatch):
     st.session_state.messagesはフルの履歴を保持し続ける（送信分のみが絞り込まれる）。
 
     conftest.pyのダミー環境変数によりデフォルトのCURRENT_PROVIDERは"anthropic"
-    （予算50000トークン）になっており、以下の会話量（約8000トークン相当）では
+    （予算50000トークン）になっており、以下の会話量（CJK考慮で約4200トークン相当）では
     間引きが発生しない。ここではOllama利用時の予算（デフォルト設定で約3192
     トークン）を明示的に使うことで、間引きが発生する条件を安定して再現する。"""
     import setup
@@ -627,9 +627,9 @@ def test_chat_streaming_sends_windowed_history_to_agent(monkeypatch):
     monkeypatch.setattr(rag_chain, "build_agent", lambda thread_id=None: fake_agent)
 
     at = _run_app()
-    # 概算で1メッセージあたり数百トークンになる長さの質問を複数ターン送り、
+    # 回答は固定の短文("短い回答")のため、質問側の長さだけで
     # Ollama利用時の既定予算(約3192トークン)を確実に超えさせる。
-    long_question = "あ" * 2000
+    long_question = "あ" * 500
     turn_count = 8
     for i in range(turn_count):
         at = at.chat_input[0].set_value(f"質問{i}: {long_question}").run()
@@ -735,7 +735,7 @@ def test_windowed_history_keeps_all_messages_for_anthropic_over_ollama_budget(mo
 
     monkeypatch.setattr(setup, "CURRENT_PROVIDER", "anthropic")
 
-    long_text = "あ" * 2000  # 概算で500トークン程度
+    long_text = "あ" * 300  # CJK考慮のchars_per_token(概ね1)で概算300トークン程度
     messages = []
     for i in range(8):
         messages.append(HumanMessage(content=f"質問{i}: {long_text}"))
@@ -754,7 +754,7 @@ def test_windowed_history_ollama_budget_change_affects_drop_result(monkeypatch):
 
     monkeypatch.setattr(setup, "CURRENT_PROVIDER", "ollama")
 
-    long_text = "あ" * 2000
+    long_text = "あ" * 300
     messages = []
     for i in range(8):
         messages.append(HumanMessage(content=f"質問{i}: {long_text}"))
@@ -778,7 +778,7 @@ def test_windowed_history_uses_fallback_budget_when_provider_is_none(monkeypatch
 
     monkeypatch.setattr(setup, "CURRENT_PROVIDER", None)
 
-    long_text = "あ" * 2000
+    long_text = "あ" * 300
     messages = []
     for i in range(8):
         messages.append(HumanMessage(content=f"質問{i}: {long_text}"))
