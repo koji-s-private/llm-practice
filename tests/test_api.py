@@ -295,14 +295,14 @@ def test_chat_sends_windowed_history_to_agent_when_over_ollama_budget(client, mo
     は含まれない。リクエストで受け取った history 自体は書き換えられない。
 
     conftest.pyのダミー環境変数によりデフォルトのCURRENT_PROVIDERは"anthropic"
-    （予算50000トークン）になっており、以下の会話量（約8000トークン相当）では
+    （予算50000トークン）になっており、以下の会話量（CJK考慮で約4900トークン相当）では
     間引きが発生しない。ここではOllama利用時の予算（デフォルト設定で約3192
     トークン）を明示的に使うことで、間引きが発生する条件を安定して再現する。"""
     monkeypatch.setattr(setup, "CURRENT_PROVIDER", "ollama")
     fake_agent = _FakeAgent(chunks=[_FakeChunk("短い回答")])
     monkeypatch.setattr(api_main, "build_agent", lambda thread_id: fake_agent)
 
-    long_text = "あ" * 2000  # 概算で500トークン程度
+    long_text = "あ" * 300  # CJK考慮のchars_per_token(概ね1)で概算300トークン程度
     history = []
     for i in range(8):
         history.append({"role": "user", "content": f"質問{i}: {long_text}"})
@@ -329,7 +329,7 @@ def test_chat_keeps_full_history_when_under_api_provider_budget(client, monkeypa
     fake_agent = _FakeAgent(chunks=[_FakeChunk("短い回答")])
     monkeypatch.setattr(api_main, "build_agent", lambda thread_id: fake_agent)
 
-    long_text = "あ" * 2000
+    long_text = "あ" * 300
     history = []
     for i in range(8):
         history.append({"role": "user", "content": f"質問{i}: {long_text}"})

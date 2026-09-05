@@ -38,6 +38,7 @@ pytest
 | `test_rag_chain.py` | `rag_chain.py` | 検索結果の関連度採点（`_grade_relevance`）と、「見つからない場合」のフォールバック応答のテスト |
 | `test_memory.py` | `memory.py` | 会話ログの保存（Markdownファイル書き込み）・件数カウントのテスト |
 | `test_feedback.py` | `feedback.py` | 回答フィードバック（👍/👎）の記録処理（`record_feedback`、JSON Linesへの追記・不正なratingの拒否）のテスト |
+| `test_history_utils.py` | `history_utils.py` | 会話履歴のトークン数見積もり（CJK比率に応じた`chars_per_token`の動的補正、`_cjk_ratio` / `_effective_chars_per_token` / `_count_tokens_ja_aware`）のテスト |
 | `test_app.py` | `app.py` | Streamlitのチャット画面のエラーハンドリングのテスト（`streamlit.testing.v1.AppTest` を使いスクリプト実行エンジン上で検証） |
 | `test_app_source_display.py` | `app.py` | 参照元スニペットの整形（`_format_snippet`）、参照元ラベル（`_format_source_label`）、過去スレッドラベル（`_format_thread_label`）の純粋関数のテスト |
 | `test_app_copy_button.py` | `app.py` | AI回答のコピー用HTML/JS組み立て（`_copy_button_html`）の純粋関数のテスト（特殊文字のエスケープ・XSS観点の検証を含む） |
