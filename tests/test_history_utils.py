@@ -4,8 +4,8 @@
 `tests/test_app.py` / `tests/test_api.py` で既にカバーされているため、ここでは
 CJK比率推定まわりの純粋関数（`_cjk_ratio` / `_effective_chars_per_token` /
 `_count_tokens_ja_aware`）を直接検証する。ただし、旧ロジック（chars_per_token=4.0
-固定）が日本語主体の会話で予算超過を見逃していたという今回の修正の核心（Issue #231）
-については、`_windowed_history` 自体の回帰テストも本ファイルに含める。
+固定）が日本語主体の会話で予算超過を見逃してしまう問題については、
+`_windowed_history` 自体の回帰テストも本ファイルに含める。
 """
 
 from langchain_core.messages import AIMessage, HumanMessage, trim_messages
@@ -135,7 +135,7 @@ def test_count_tokens_ja_aware_returns_zero_for_empty_messages():
 def test_windowed_history_trims_japanese_history_that_old_fixed_ratio_would_have_missed(monkeypatch):
     """回帰: 旧ロジック（trim_messagesのtoken_counter="approximate"、chars_per_token=4.0固定）
     では予算内と誤判定され間引かれなかったであろう日本語主体の会話履歴が、CJK比率を
-    考慮する新ロジック（_count_tokens_ja_aware）では正しく間引かれる（Issue #231）。"""
+    考慮する新ロジック（_count_tokens_ja_aware）では正しく間引かれる。"""
     import setup
 
     monkeypatch.setattr(setup, "CURRENT_PROVIDER", "ollama")
