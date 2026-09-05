@@ -3190,6 +3190,257 @@ def test_cancel_delete_does_not_call_delete_indexed_file(monkeypatch):
     assert at.sidebar.warning == []
 
 
+# --- 10a. サイドバーのインデックス済みファイル一覧・一括削除機能（Issue #226） ---
+
+
+def _checkbox(at: AppTest, name: str):
+    return next(c for c in at.sidebar.checkbox if c.key == f"selected_delete_{name}")
+
+
+def _bulk_delete_button(at: AppTest):
+    return next(b for b in at.sidebar.button if b.key == "bulk_delete_button")
+
+
+def test_bulk_delete_button_disabled_when_no_file_selected(monkeypatch):
+    """境界値: チェックボックスを何も選択していない場合、一括削除ボタンは
+    disabled状態で表示され、ヘルプ文言も「先に選択してください」になる。"""
+    monkeypatch.setattr(
+        ingest,
+        "list_indexed_files",
+        lambda: [{"name": "a.pdf", "chunk_count": 3}, {"name": "b.txt", "chunk_count": 1}],
+    )
+
+    at = _run_app()
+
+    button = _bulk_delete_button(at)
+    assert button.proto.disabled is True
+    assert button.help == "先にファイルを選択してください"
+
+
+def test_checking_a_file_enables_bulk_delete_button(monkeypatch):
+    """正常系: 1件でもチェックボックスを選択すると、一括削除ボタンが有効になる。"""
+    monkeypatch.setattr(
+        ingest,
+        "list_indexed_files",
+        lambda: [{"name": "a.pdf", "chunk_count": 3}, {"name": "b.txt", "chunk_count": 1}],
+    )
+
+    at = _run_app()
+    at = _checkbox(at, "a.pdf").check().run()
+
+    button = _bulk_delete_button(at)
+    assert button.proto.disabled is False
+    assert button.help == "チェックボックスで選択したファイルをまとめて削除します"
+
+
+def test_bulk_delete_button_click_shows_confirmation_prompt_for_selected_files_only(monkeypatch):
+    """正常系: 一括削除ボタンを押すと、選択したファイルのみを対象にした確認メッセージと
+    「削除する」「キャンセル」ボタンが表示され、まだ削除は実行されない。"""
+    monkeypatch.setattr(
+        ingest,
+        "list_indexed_files",
+        lambda: [
+            {"name": "a.pdf", "chunk_count": 3},
+            {"name": "b.txt", "chunk_count": 1},
+            {"name": "c.txt", "chunk_count": 2},
+        ],
+    )
+    delete_calls = []
+    monkeypatch.setattr(ingest, "delete_indexed_files", lambda names: delete_calls.append(names) or names)
+
+    at = _run_app()
+    at = _checkbox(at, "a.pdf").check().run()
+    at = _checkbox(at, "c.txt").check().run()
+    at = _bulk_delete_button(at).click().run()
+
+    assert at.exception == []
+    assert len(at.sidebar.warning) == 1
+    warning_text = at.sidebar.warning[0].value
+    assert "a.pdf" in warning_text
+    assert "c.txt" in warning_text
+    assert "b.txt" not in warning_text
+    assert any(b.key == "confirm_bulk_delete" for b in at.sidebar.button)
+    assert any(b.key == "cancel_bulk_delete" for b in at.sidebar.button)
+    assert delete_calls == []
+
+
+def test_confirm_bulk_delete_calls_delete_indexed_files_and_resyncs(monkeypatch):
+    """正常系: 確認プロンプトで「削除する」を押すと delete_indexed_files() が選択したファイル名の
+    リストで呼ばれ、再同期が行われる。削除完了後は確認プロンプト・チェックボックスの選択も消える。"""
+    # list_indexed_files()を削除結果に応じて動的に変化させ、削除後の再描画で
+    # 削除済みファイルのチェックボックスが再生成されない（＝選択状態が本当に消える）ことを確認する。
+    files = [{"name": "a.pdf", "chunk_count": 3}, {"name": "b.txt", "chunk_count": 1}]
+    monkeypatch.setattr(ingest, "list_indexed_files", lambda: list(files))
+    delete_calls = []
+
+    def fake_delete_indexed_files(names):
+        delete_calls.append(names)
+        files[:] = [f for f in files if f["name"] not in names]
+        return list(names)
+
+    monkeypatch.setattr(ingest, "delete_indexed_files", fake_delete_indexed_files)
+
+    sync_calls = {"n": 0}
+
+    def counting_sync(verbose=False, on_progress=None):
+        sync_calls["n"] += 1
+        return {"added": [], "updated": [], "removed": [], "failed": []}
+
+    monkeypatch.setattr(ingest, "sync_data_dir", counting_sync)
+
+    at = _run_app()
+    assert sync_calls["n"] == 1  # 起動時の1回
+
+    at = _checkbox(at, "a.pdf").check().run()
+    at = _checkbox(at, "b.txt").check().run()
+    at = _bulk_delete_button(at).click().run()
+
+    confirm_button = next(b for b in at.sidebar.button if b.key == "confirm_bulk_delete")
+    at = confirm_button.click().run()
+
+    assert at.exception == []
+    assert delete_calls == [["a.pdf", "b.txt"]]
+    assert sync_calls["n"] == 2  # 削除確定後に再同期が呼ばれる
+    assert "pending_bulk_delete" not in at.session_state
+    assert "selected_delete_a.pdf" not in at.session_state
+    assert "selected_delete_b.txt" not in at.session_state
+    assert at.sidebar.warning == []
+    assert at.sidebar.error == []
+
+
+def test_confirm_bulk_delete_shows_error_for_files_that_failed_to_delete(monkeypatch):
+    """異常系: 一部のファイルの削除に失敗した場合（delete_indexed_files()が一部だけ返す）、
+    成功分は再同期しつつ、失敗したファイル名をst.errorで通知する。失敗したファイルの
+    チェックボックス選択はクリアされずに残る。"""
+    # a.pdfのみ実際に削除され、b.txtは削除に失敗して一覧に残り続ける状況を再現する。
+    files = [{"name": "a.pdf", "chunk_count": 3}, {"name": "b.txt", "chunk_count": 1}]
+    monkeypatch.setattr(ingest, "list_indexed_files", lambda: list(files))
+
+    def fake_delete_indexed_files(names):
+        deleted = [n for n in names if n == "a.pdf"]
+        files[:] = [f for f in files if f["name"] not in deleted]
+        return deleted
+
+    monkeypatch.setattr(ingest, "delete_indexed_files", fake_delete_indexed_files)
+
+    sync_calls = {"n": 0}
+
+    def counting_sync(verbose=False, on_progress=None):
+        sync_calls["n"] += 1
+        return {"added": [], "updated": [], "removed": [], "failed": []}
+
+    monkeypatch.setattr(ingest, "sync_data_dir", counting_sync)
+
+    at = _run_app()
+    at = _checkbox(at, "a.pdf").check().run()
+    at = _checkbox(at, "b.txt").check().run()
+    at = _bulk_delete_button(at).click().run()
+
+    confirm_button = next(b for b in at.sidebar.button if b.key == "confirm_bulk_delete")
+    at = confirm_button.click().run()
+
+    assert at.exception == []
+    assert sync_calls["n"] == 2  # 成功したa.pdf分の再同期は行われる
+    assert "pending_bulk_delete" not in at.session_state
+    assert "selected_delete_a.pdf" not in at.session_state  # 削除成功分は選択解除される
+    assert at.session_state["selected_delete_b.txt"] is True  # 失敗分は選択状態が残る
+    assert "b.txt" in at.sidebar.error[0].value
+
+
+def test_cancel_bulk_delete_does_not_call_delete_indexed_files(monkeypatch):
+    """正常系: 確認プロンプトで「キャンセル」を押すと削除は実行されず、
+    確認プロンプト自体も消える（チェックボックスの選択状態は維持される）。"""
+    monkeypatch.setattr(
+        ingest,
+        "list_indexed_files",
+        lambda: [{"name": "a.pdf", "chunk_count": 3}],
+    )
+    delete_calls = []
+    monkeypatch.setattr(ingest, "delete_indexed_files", lambda names: delete_calls.append(names) or list(names))
+
+    at = _run_app()
+    at = _checkbox(at, "a.pdf").check().run()
+    at = _bulk_delete_button(at).click().run()
+    assert len(at.sidebar.warning) == 1
+
+    cancel_button = next(b for b in at.sidebar.button if b.key == "cancel_bulk_delete")
+    at = cancel_button.click().run()
+
+    assert at.exception == []
+    assert delete_calls == []
+    assert "pending_bulk_delete" not in at.session_state
+    assert at.sidebar.warning == []
+
+
+def test_confirm_bulk_delete_uses_selection_captured_at_button_press_time(monkeypatch):
+    """境界値（回帰防止）: 一括削除ボタン押下後、確認待ちの間にチェックボックスの選択状態を
+    変更しても、実際に削除される対象は押下時点で固定されたファイル名のままずれない。"""
+    monkeypatch.setattr(
+        ingest,
+        "list_indexed_files",
+        lambda: [{"name": "a.pdf", "chunk_count": 3}, {"name": "b.txt", "chunk_count": 1}],
+    )
+    delete_calls = []
+    monkeypatch.setattr(ingest, "delete_indexed_files", lambda names: delete_calls.append(names) or list(names))
+
+    at = _run_app()
+    at = _checkbox(at, "a.pdf").check().run()
+    at = _bulk_delete_button(at).click().run()
+
+    # 確認待ちの間にb.txtも選択状態にしてみる
+    at = _checkbox(at, "b.txt").check().run()
+
+    confirm_button = next(b for b in at.sidebar.button if b.key == "confirm_bulk_delete")
+    at = confirm_button.click().run()
+
+    assert at.exception == []
+    assert delete_calls == [["a.pdf"]]
+
+
+def test_opening_bulk_delete_confirm_closes_individual_delete_confirm(monkeypatch):
+    """回帰防止: 個別削除の確認表示中に一括削除ボタンを押すと、個別側の確認は閉じられ、
+    確認ダイアログが2つ同時に表示されないようにする。"""
+    monkeypatch.setattr(
+        ingest,
+        "list_indexed_files",
+        lambda: [{"name": "a.pdf", "chunk_count": 3}, {"name": "b.txt", "chunk_count": 1}],
+    )
+
+    at = _run_app()
+    delete_button = next(b for b in at.sidebar.button if b.key == "delete_button_a.pdf")
+    at = delete_button.click().run()
+    assert "pending_delete_a.pdf" in at.session_state
+
+    at = _checkbox(at, "b.txt").check().run()
+    at = _bulk_delete_button(at).click().run()
+
+    assert "pending_delete_a.pdf" not in at.session_state
+    assert "pending_bulk_delete" in at.session_state
+    assert len(at.sidebar.warning) == 1
+
+
+def test_opening_individual_delete_confirm_closes_bulk_delete_confirm(monkeypatch):
+    """回帰防止: 一括削除の確認表示中に個別削除ボタンを押すと、一括側の確認は閉じられ、
+    確認ダイアログが2つ同時に表示されないようにする。"""
+    monkeypatch.setattr(
+        ingest,
+        "list_indexed_files",
+        lambda: [{"name": "a.pdf", "chunk_count": 3}, {"name": "b.txt", "chunk_count": 1}],
+    )
+
+    at = _run_app()
+    at = _checkbox(at, "a.pdf").check().run()
+    at = _bulk_delete_button(at).click().run()
+    assert "pending_bulk_delete" in at.session_state
+
+    delete_button = next(b for b in at.sidebar.button if b.key == "delete_button_b.txt")
+    at = delete_button.click().run()
+
+    assert "pending_bulk_delete" not in at.session_state
+    assert "pending_delete_b.txt" in at.session_state
+    assert len(at.sidebar.warning) == 1
+
+
 # --- 10b. サイドバーのインデックス済みファイル一覧・ダウンロード機能（Issue #209） ---
 
 

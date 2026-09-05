@@ -881,6 +881,16 @@ def delete_indexed_file(name: str) -> bool:
     return True
 
 
+def delete_indexed_files(names: list[str]) -> list[str]:
+    """複数のインデックス済みファイルをdata/から削除する。
+
+    delete_indexed_file()を順に呼び出す薄いラッパー。1件の失敗が他の削除を
+    妨げないよう続行し、実際に削除できたファイル名のリストを返す
+    （manifest・ベクトルDBへの反映はdelete_indexed_file()と同様、呼び出し元のsync_data_dir()に委ねる）。
+    """
+    return [name for name in names if delete_indexed_file(name)]
+
+
 def _dir_size_mb(path: Path) -> float:
     if not path.exists():
         return 0.0
