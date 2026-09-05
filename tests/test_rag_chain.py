@@ -350,6 +350,13 @@ def test_system_prompt_prohibits_url_suggestion_in_general_knowledge_fallback():
     assert "一般知識の内容そのものを回答に含めてください" in rag_chain.SYSTEM_PROMPT
 
 
+def test_system_prompt_instructs_inline_citation_numbers():
+    """複数の参照元を根拠にした場合はインライン引用番号を付け、参照元が1件のみ・
+    対応が不明瞭な場合は無理に付けないようフォールバックを指示していることを確認する。"""
+    assert "複数の参照元を根拠にした場合" in rag_chain.SYSTEM_PROMPT
+    assert "無理に番号を付けず" in rag_chain.SYSTEM_PROMPT
+
+
 # --- retrieve_context (build_agent の中で作られる検索ツール) ---
 
 
@@ -407,6 +414,22 @@ def test_retrieve_context_returns_relevant_docs(monkeypatch):
     assert artifact == [doc2]
     assert "これも関連する内容" in content
     assert "a.txt" not in content
+
+
+def test_retrieve_context_numbers_sources_in_retrieved_order(monkeypatch):
+    """serialized内の各Sourceには、retrieved_docsの出現順（1始まり）の番号が
+    付与されており、LLMが回答本文で使う引用番号（[1][2]...）と対応することを確認する。"""
+    doc1 = _FakeDocument("1件目の内容", {"source": "a.txt"})
+    doc2 = _FakeDocument("2件目の内容", {"source": "b.txt"})
+    retrieve_context, _ = _build_agent_with_store(monkeypatch, results=[(doc1, 0.1), (doc2, 0.2)])
+    monkeypatch.setattr(rag_chain, "_grade_relevance", lambda query, docs: [0, 1])
+
+    content, artifact = retrieve_context.func("質問")
+
+    assert artifact == [doc1, doc2]
+    assert "[1] Source:" in content
+    assert "[2] Source:" in content
+    assert content.index("[1] Source:") < content.index("[2] Source:")
 
 
 def test_retrieve_context_limits_number_of_returned_docs(monkeypatch):
@@ -626,6 +649,84 @@ def test_retrieve_context_content_does_not_leak_distance_score(monkeypatch):
 
     assert "distance_score" not in content
     assert artifact[0].metadata["distance_score"] == 0.3
+
+
+# --- retrieve_context: 引用番号（citation_number）の割り当て ---
+
+
+def test_retrieve_context_sets_citation_number_matching_serialized_position(monkeypatch):
+    """正常系: 単発の呼び出しでは、doc.metadata["citation_number"]がserialized内の
+    [N]番号とそのまま対応すること。"""
+    doc1 = _FakeDocument("1件目の内容", {"source": "a.txt"})
+    doc2 = _FakeDocument("2件目の内容", {"source": "b.txt"})
+    retrieve_context, _ = _build_agent_with_store(monkeypatch, results=[(doc1, 0.1), (doc2, 0.2)])
+    monkeypatch.setattr(rag_chain, "_grade_relevance", lambda query, docs: [0, 1])
+
+    _, artifact = retrieve_context.func("質問")
+
+    assert artifact[0].metadata["citation_number"] == 1
+    assert artifact[1].metadata["citation_number"] == 2
+
+
+def test_retrieve_context_reuses_citation_number_for_same_doc_across_calls(monkeypatch):
+    """正常系: 同じエージェント内でretrieve_contextが複数回呼ばれ、同じ文書
+    （重複排除キーが同一）が再びヒットしても、初回に割り当てた番号を再利用すること。"""
+    doc_a = _FakeDocument("Aの内容", {"source": "a.txt"})
+    retrieve_context, _ = _build_agent_with_store(monkeypatch, results=[(doc_a, 0.1)])
+    monkeypatch.setattr(rag_chain, "_grade_relevance", lambda query, docs: [0])
+
+    retrieve_context.func("1回目の質問")
+    _, artifact = retrieve_context.func("2回目の質問（同じ文書が再ヒット）")
+
+    assert artifact[0].metadata["citation_number"] == 1
+
+
+def test_retrieve_context_assigns_sequential_citation_numbers_across_calls(monkeypatch):
+    """正常系: 1ターン中にretrieve_contextが2回呼ばれ、それぞれ別の文書がヒットした
+    場合、毎回[1]から振り直されるのではなく通し番号（1,2）が割り当てられること。"""
+    doc_a = _FakeDocument("Aの内容", {"source": "a.txt"})
+    doc_b = _FakeDocument("Bの内容", {"source": "b.txt"})
+    store = _FakeVectorStore(results=[(doc_a, 0.1)])
+    monkeypatch.setattr(rag_chain, "get_vectorstore", lambda: store)
+    agent = rag_chain.build_agent(thread_id="thread-1")
+    retrieve_context = agent.tools[0]
+    monkeypatch.setattr(rag_chain, "_grade_relevance", lambda query, docs: [0])
+
+    content1, artifact1 = retrieve_context.func("1回目の質問")
+    assert artifact1[0].metadata["citation_number"] == 1
+    assert "[1] Source:" in content1
+
+    store._results = [(doc_b, 0.1)]
+    content2, artifact2 = retrieve_context.func("2回目の質問")
+
+    assert artifact2[0].metadata["citation_number"] == 2
+    assert "[2] Source:" in content2
+
+
+def test_retrieve_context_content_does_not_leak_citation_number(monkeypatch):
+    """citation_numberは先頭の[N]で既に示しているため、Source:内のメタデータ辞書
+    表示には重複して含めないこと。"""
+    doc = _FakeDocument("関連する内容", {"source": "a.txt"})
+    retrieve_context, _ = _build_agent_with_store(monkeypatch, results=[(doc, 0.3)])
+    monkeypatch.setattr(rag_chain, "_grade_relevance", lambda query, docs: [0])
+
+    content, artifact = retrieve_context.func("質問")
+
+    assert "citation_number" not in content
+    assert artifact[0].metadata["citation_number"] == 1
+
+
+# --- source_dedupe_key ---
+
+
+def test_source_dedupe_key_includes_source_page_thread_id_and_page_content():
+    doc = _FakeDocument("本文", {"source": "a.txt", "page": 2, "thread_id": "t1"})
+    assert rag_chain.source_dedupe_key(doc) == ("a.txt", 2, "t1", "本文")
+
+
+def test_source_dedupe_key_defaults_missing_metadata_to_none():
+    doc = _FakeDocument("本文", {})
+    assert rag_chain.source_dedupe_key(doc) == (None, None, None, "本文")
 
 
 # --- get_vectorstore のdocstring（CVE-2026-45829に関するセキュリティ注記） ---

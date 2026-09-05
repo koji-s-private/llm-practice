@@ -68,7 +68,7 @@ from memory import (
     save_conversation,
     save_thread_title,
 )
-from rag_chain import build_agent
+from rag_chain import build_agent, source_dedupe_key
 from source_formatting import format_relevance_tier as _format_relevance_tier
 from source_formatting import format_snippet as _format_snippet
 from source_formatting import format_source_label as _format_source_label
@@ -539,12 +539,16 @@ def _render_answer_provenance(sources: list) -> None:
     st.caption("🔍 ドキュメントに基づく回答")
     # 件数をタイトルに出し、各項目を枠線付きcontainerで区切ることで、
     # 狭い画面幅でも項目の境界が分かりやすくスクロール・タップしやすくする。
+    # 番号は回答本文にLLMが付ける引用番号（例: [1]）と一致させるため、rag_chain側で
+    # 割り当てたcitation_numberをそのまま使う。過去の会話ログから復元されたsources
+    # （citation_numberを持たない）向けに、位置ベースの連番へフォールバックする。
     with st.expander(f"参照した箇所を見る（{len(sources)}件）"):
-        for i, doc in enumerate(sources, start=1):
+        for position, doc in enumerate(sources, start=1):
+            number = doc.metadata.get("citation_number", position)
             label = _format_source_label(doc.metadata)
             relevance = _format_relevance_tier(doc.metadata)
             with st.container(border=True):
-                st.markdown(f"**[{i}] {label}**")
+                st.markdown(f"**[{number}] {label}**")
                 if relevance:
                     st.caption(relevance)
                 st.text(_format_snippet(doc.page_content))
@@ -989,12 +993,7 @@ if question:
                             # .txt/.md等ではsource/thread_idだけでは同一ファイル内の別チャンクを
                             # 区別できないため。
                             for doc in chunk.artifact:
-                                key = (
-                                    doc.metadata.get("source"),
-                                    doc.metadata.get("page"),
-                                    doc.metadata.get("thread_id"),
-                                    doc.page_content,
-                                )
+                                key = source_dedupe_key(doc)
                                 if key in seen_source_keys:
                                     continue
                                 seen_source_keys.add(key)

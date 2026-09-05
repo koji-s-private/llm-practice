@@ -1071,6 +1071,92 @@ def test_chat_streaming_sources_expander_label_shows_count(monkeypatch):
     assert expanders[0].label == "参照した箇所を見る（2件）"
 
 
+def test_chat_streaming_answer_inline_citation_numbers_match_source_order(monkeypatch):
+    """正常系: 回答本文中のインライン引用番号（[1][2]）は、そのまま回答テキストとして
+    描画され、参照元expander側の番号（sourcesの出現順=retrieve_contextの番号順）と一致する。"""
+    doc_a = _FakeSourceDoc(page_content="Aの内容", metadata={"source": "a.txt"})
+    doc_b = _FakeSourceDoc(page_content="Bの内容", metadata={"source": "b.txt"})
+    fake_agent = _FakeAgentWithSources(answer="Aの情報です[1]。Bの情報です[2]。", artifact=[doc_a, doc_b])
+    monkeypatch.setattr(rag_chain, "build_agent", lambda thread_id=None: fake_agent)
+
+    at = _run_app()
+    at.chat_input[0].set_value("質問です").run()
+
+    assert at.exception == []
+    assert any("Aの情報です[1]。Bの情報です[2]。" in m.value for m in at.markdown)
+    expander = [e for e in at.expander if "参照した箇所を見る" in e.label][0]
+    item_containers = list(expander.children.values())
+    assert item_containers[0].markdown[0].value.startswith("**[1]")
+    assert item_containers[1].markdown[0].value.startswith("**[2]")
+
+
+def test_chat_streaming_uses_citation_number_metadata_instead_of_position(monkeypatch):
+    """正常系: doc.metadata["citation_number"]が設定されている場合、参照元expanderの
+    番号表示は出現順の位置ではなくこの値をそのまま使う（会話が長く続くターンでは
+    位置と値がずれうるため、位置ベースのenumerateにフォールバックしてはいけない）。"""
+    doc = _FakeSourceDoc(page_content="後続ターンの内容", metadata={"source": "a.txt", "citation_number": 5})
+    fake_agent = _FakeAgentWithSources(answer="内容です[5]。", artifact=[doc])
+    monkeypatch.setattr(rag_chain, "build_agent", lambda thread_id=None: fake_agent)
+
+    at = _run_app()
+    at.chat_input[0].set_value("質問です").run()
+
+    assert at.exception == []
+    expander = [e for e in at.expander if "参照した箇所を見る" in e.label][0]
+    item_containers = list(expander.children.values())
+    assert item_containers[0].markdown[0].value.startswith("**[5]")
+
+
+def test_chat_streaming_citation_numbers_persist_across_multiple_tool_calls(monkeypatch):
+    """正常系: retrieve_contextが1ターン中に複数回呼ばれ、各回のartifactの
+    doc.metadata["citation_number"]が呼び出しをまたいだ通し番号（rag_chain側で
+    割り当て済みの値）になっている場合、参照元expander側もその番号をそのまま表示し、
+    回答本文の引用番号[1][2][3]と一致すること。"""
+    doc_a = _FakeSourceDoc(page_content="Aの内容", metadata={"source": "a.txt", "citation_number": 1})
+    doc_b = _FakeSourceDoc(page_content="Bの内容", metadata={"source": "b.txt", "citation_number": 2})
+    doc_c = _FakeSourceDoc(page_content="Cの内容", metadata={"source": "c.txt", "citation_number": 3})
+    fake_agent = _FakeAgentWithMultipleToolCalls(
+        answer="Aは[1]、Bは[2]、Cは[3]です。",
+        artifacts=[[doc_a], [doc_b, doc_c]],
+    )
+    monkeypatch.setattr(rag_chain, "build_agent", lambda thread_id=None: fake_agent)
+
+    at = _run_app()
+    at.chat_input[0].set_value("質問です").run()
+
+    assert at.exception == []
+    expander = [e for e in at.expander if "参照した箇所を見る" in e.label][0]
+    item_containers = list(expander.children.values())
+    assert len(item_containers) == 3
+    assert item_containers[0].markdown[0].value.startswith("**[1]")
+    assert item_containers[1].markdown[0].value.startswith("**[2]")
+    assert item_containers[2].markdown[0].value.startswith("**[3]")
+
+
+def test_chat_streaming_reuses_citation_number_for_duplicate_doc_across_tool_calls(monkeypatch):
+    """正常系: 複数回のretrieve_context呼び出しにまたがって同じ文書が重複ヒットしても、
+    重複排除後に残る1件はrag_chain側が割り当てた元の番号のまま表示され、
+    ズレた番号や重複した別番号が振られないこと。"""
+    doc_a_call1 = _FakeSourceDoc(page_content="Aの内容", metadata={"source": "a.txt", "citation_number": 1})
+    doc_a_call2 = _FakeSourceDoc(page_content="Aの内容", metadata={"source": "a.txt", "citation_number": 1})
+    doc_b = _FakeSourceDoc(page_content="Bの内容", metadata={"source": "b.txt", "citation_number": 2})
+    fake_agent = _FakeAgentWithMultipleToolCalls(
+        answer="Aは[1]、Bは[2]です。",
+        artifacts=[[doc_a_call1], [doc_a_call2, doc_b]],
+    )
+    monkeypatch.setattr(rag_chain, "build_agent", lambda thread_id=None: fake_agent)
+
+    at = _run_app()
+    at.chat_input[0].set_value("質問です").run()
+
+    assert at.exception == []
+    expander = [e for e in at.expander if "参照した箇所を見る" in e.label][0]
+    item_containers = list(expander.children.values())
+    assert len(item_containers) == 2
+    assert item_containers[0].markdown[0].value.startswith("**[1]")
+    assert item_containers[1].markdown[0].value.startswith("**[2]")
+
+
 def test_chat_streaming_sources_expander_label_shows_singular_count(monkeypatch):
     """境界値: 参照元が1件のみの場合でも件数表示は複数形と同じ書式（1件）になる。"""
     doc_a = _FakeSourceDoc(page_content="Aの内容", metadata={"source": "a.txt"})
