@@ -106,6 +106,20 @@ SYSTEM_PROMPT = (
 GLOBAL_THREAD_ID = "global"
 
 
+def source_dedupe_key(doc) -> tuple:
+    """参照元ドキュメントの同一性判定キー（重複排除・引用番号の割り当てで共用する）。
+
+    page_contentも含めるのは、pageを持たない.txt/.md等ではsource/thread_idだけでは
+    同一ファイル内の別チャンクを区別できないため。
+    """
+    return (
+        doc.metadata.get("source"),
+        doc.metadata.get("page"),
+        doc.metadata.get("thread_id"),
+        doc.page_content,
+    )
+
+
 class _PrefixedEmbeddings(Embeddings):
     """埋め込み計算の直前にだけquery/passageプレフィックスを付与するラッパー。
 
@@ -212,6 +226,11 @@ def build_agent(thread_id: str = GLOBAL_THREAD_ID):
     """
     vector_store = get_vectorstore()
     allowed_thread_ids = list({GLOBAL_THREAD_ID, thread_id})
+    # retrieve_contextは1ターン中に複数回呼ばれることがあり、そのたびに番号を1から
+    # 振り直すとLLMが本文に書く引用番号とapp.py側の参照元一覧の番号がずれてしまう。
+    # このエージェント（=会話スレッド）が生きている間、同じ文書には常に同じ番号を
+    # 再利用する（トレードオフとして、ターンが進むほど番号は大きくなり続ける）。
+    citation_numbers: dict[tuple, int] = {}
 
     @tool(response_format="content_and_artifact")
     def retrieve_context(query: str):
@@ -252,14 +271,22 @@ def build_agent(thread_id: str = GLOBAL_THREAD_ID):
         if not retrieved_docs:
             return "関連する情報はドキュメント内に見つかりませんでした。", []
 
-        # 先頭の[N]は、SYSTEM_PROMPTの指示に従ってLLMが回答本文に付ける引用番号の元になる。
-        # app.py側の参照元一覧もretrieved_docsの出現順にenumerate(start=1)しているため、
-        # ここでの番号と一致する。
-        # LLMに渡すcontentにはdistance_scoreを含めない（UI表示専用のためプロンプト内容を変えない）。
+        for doc in retrieved_docs:
+            key = source_dedupe_key(doc)
+            if key not in citation_numbers:
+                citation_numbers[key] = len(citation_numbers) + 1
+            doc.metadata["citation_number"] = citation_numbers[key]
+
+        # 先頭の[N]はcitation_numbersで管理する永続的な番号で、SYSTEM_PROMPTの指示に
+        # 従ってLLMが回答本文に付ける引用番号の元になる。app.py側の参照元一覧も
+        # 同じcitation_number（doc.metadata経由）を使って表示するため一致する。
+        # LLMに渡すcontentにはdistance_score/citation_numberを含めない
+        # （UI表示専用のためプロンプト内容を変えない。番号は先頭の[N]で既に示している）。
         serialized = "\n\n".join(
-            f"[{i}] Source: { ({k: v for k, v in doc.metadata.items() if k != 'distance_score'}) }\n"
+            f"[{doc.metadata['citation_number']}] Source: "
+            f"{ ({k: v for k, v in doc.metadata.items() if k not in ('distance_score', 'citation_number')}) }\n"
             f"Content: {doc.page_content[:MAX_DOC_CHARS]}"
-            for i, doc in enumerate(retrieved_docs, start=1)
+            for doc in retrieved_docs
         )
         return serialized, retrieved_docs
 
