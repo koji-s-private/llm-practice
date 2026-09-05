@@ -1071,6 +1071,25 @@ def test_chat_streaming_sources_expander_label_shows_count(monkeypatch):
     assert expanders[0].label == "参照した箇所を見る（2件）"
 
 
+def test_chat_streaming_answer_inline_citation_numbers_match_source_order(monkeypatch):
+    """正常系: 回答本文中のインライン引用番号（[1][2]）は、そのまま回答テキストとして
+    描画され、参照元expander側の番号（sourcesの出現順=retrieve_contextの番号順）と一致する。"""
+    doc_a = _FakeSourceDoc(page_content="Aの内容", metadata={"source": "a.txt"})
+    doc_b = _FakeSourceDoc(page_content="Bの内容", metadata={"source": "b.txt"})
+    fake_agent = _FakeAgentWithSources(answer="Aの情報です[1]。Bの情報です[2]。", artifact=[doc_a, doc_b])
+    monkeypatch.setattr(rag_chain, "build_agent", lambda thread_id=None: fake_agent)
+
+    at = _run_app()
+    at.chat_input[0].set_value("質問です").run()
+
+    assert at.exception == []
+    assert any("Aの情報です[1]。Bの情報です[2]。" in m.value for m in at.markdown)
+    expander = [e for e in at.expander if "参照した箇所を見る" in e.label][0]
+    item_containers = list(expander.children.values())
+    assert item_containers[0].markdown[0].value.startswith("**[1]")
+    assert item_containers[1].markdown[0].value.startswith("**[2]")
+
+
 def test_chat_streaming_sources_expander_label_shows_singular_count(monkeypatch):
     """境界値: 参照元が1件のみの場合でも件数表示は複数形と同じ書式（1件）になる。"""
     doc_a = _FakeSourceDoc(page_content="Aの内容", metadata={"source": "a.txt"})

@@ -466,6 +466,9 @@ def _render_answer_provenance(sources: list) -> None:
     st.caption("🔍 ドキュメントに基づく回答")
     # 件数をタイトルに出し、各項目を枠線付きcontainerで区切ることで、
     # 狭い画面幅でも項目の境界が分かりやすくスクロール・タップしやすくする。
+    # ここでのenumerate番号は、回答本文にLLMが付ける引用番号（例: [1]）と一致させたい。
+    # 1ターン中に有効な検索結果を返すretrieve_context呼び出しは通常1回だけ（SYSTEM_PROMPT参照）
+    # なので、sourcesの出現順は検索結果のserialized内の番号順とそのまま一致する。
     with st.expander(f"参照した箇所を見る（{len(sources)}件）"):
         for i, doc in enumerate(sources, start=1):
             label = _format_source_label(doc.metadata)

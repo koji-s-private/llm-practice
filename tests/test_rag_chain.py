@@ -350,6 +350,13 @@ def test_system_prompt_prohibits_url_suggestion_in_general_knowledge_fallback():
     assert "一般知識の内容そのものを回答に含めてください" in rag_chain.SYSTEM_PROMPT
 
 
+def test_system_prompt_instructs_inline_citation_numbers():
+    """複数の参照元を根拠にした場合はインライン引用番号を付け、参照元が1件のみ・
+    対応が不明瞭な場合は無理に付けないようフォールバックを指示していることを確認する。"""
+    assert "複数の参照元を根拠にした場合" in rag_chain.SYSTEM_PROMPT
+    assert "無理に番号を付けず" in rag_chain.SYSTEM_PROMPT
+
+
 # --- retrieve_context (build_agent の中で作られる検索ツール) ---
 
 
@@ -407,6 +414,22 @@ def test_retrieve_context_returns_relevant_docs(monkeypatch):
     assert artifact == [doc2]
     assert "これも関連する内容" in content
     assert "a.txt" not in content
+
+
+def test_retrieve_context_numbers_sources_in_retrieved_order(monkeypatch):
+    """serialized内の各Sourceには、retrieved_docsの出現順（1始まり）の番号が
+    付与されており、LLMが回答本文で使う引用番号（[1][2]...）と対応することを確認する。"""
+    doc1 = _FakeDocument("1件目の内容", {"source": "a.txt"})
+    doc2 = _FakeDocument("2件目の内容", {"source": "b.txt"})
+    retrieve_context, _ = _build_agent_with_store(monkeypatch, results=[(doc1, 0.1), (doc2, 0.2)])
+    monkeypatch.setattr(rag_chain, "_grade_relevance", lambda query, docs: [0, 1])
+
+    content, artifact = retrieve_context.func("質問")
+
+    assert artifact == [doc1, doc2]
+    assert "[1] Source:" in content
+    assert "[2] Source:" in content
+    assert content.index("[1] Source:") < content.index("[2] Source:")
 
 
 def test_retrieve_context_limits_number_of_returned_docs(monkeypatch):
