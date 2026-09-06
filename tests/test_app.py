@@ -40,6 +40,7 @@ app.py はモジュールトップレベルで `from ingest import ... sync_data
 from pathlib import Path
 
 import pytest
+from filelock import FileLock
 from langchain_core.messages import AIMessage, AIMessageChunk, HumanMessage, ToolMessage
 from streamlit.delta_generator import DeltaGenerator
 from streamlit.testing.v1 import AppTest
@@ -2092,6 +2093,34 @@ def test_upload_invalid_filename_shows_error_without_warning(tmp_path, monkeypat
     assert len(at.error) == 1
     assert "不正なファイル名のためスキップしました: evil.txt" in at.error[0].value
     assert at.warning == []
+
+
+def test_upload_lock_timeout_shows_error_and_does_not_save_file(tmp_path, monkeypatch):
+    """異常系（TOCTOU対策ロックのタイムアウト）: 他セッションがupload_lock()のロックを
+    保持中でタイムアウトした場合、ファイルは保存されずst.errorが表示される。
+    resolve_upload_dest()やupload_lock()自体はフェイクにせず、実際にFileLockを
+    他スレッドが保持した状態を作ってTimeoutを再現する。"""
+    data_dir = tmp_path / "data"
+    persist_dir = tmp_path / "chroma_db"
+    persist_dir.mkdir(parents=True)
+    monkeypatch.setattr(ingest, "DATA_DIR", data_dir)
+    monkeypatch.setattr(ingest, "SYNC_LOCK_PATH", persist_dir / "sync.lock")
+    monkeypatch.setattr(ingest, "SYNC_LOCK_TIMEOUT_SECONDS", 0.1)
+
+    other_session_lock = FileLock(str(ingest.SYNC_LOCK_PATH))
+    other_session_lock.acquire()
+    try:
+        at = _run_app()
+        at.file_uploader[0].set_value(("report.txt", b"content", "text/plain"))
+        at = at.run()
+    finally:
+        other_session_lock.release()
+
+    assert at.exception == []
+    assert len(at.error) == 1
+    assert "他のセッションがファイルを同期中" in at.error[0].value
+    assert at.warning == []
+    assert not (data_dir / "report.txt").exists()
 
 
 def test_upload_not_reprocessed_on_unrelated_new_chat_button_rerun(tmp_path, monkeypatch):

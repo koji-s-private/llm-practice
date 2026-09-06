@@ -30,6 +30,7 @@ from pathlib import Path
 
 import streamlit as st
 import streamlit.components.v1 as st_components
+from filelock import Timeout
 from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 from streamlit.delta_generator import DeltaGenerator
 
@@ -57,6 +58,7 @@ from ingest import (
     resolve_upload_dest,
     safe_relative_dest,
     sync_data_dir,
+    upload_lock,
 )
 from memory import (
     conversation_count,
@@ -880,26 +882,37 @@ with st.sidebar:
         # パスを返すので、元のファイル名と異なる場合はリネームされたとみなし警告表示する。
         saved_paths: set[Path] = set()
         renamed = []
-        for f in new_uploaded_files:
-            dest = resolve_upload_dest(f.name, taken_paths=saved_paths)
-            # st.file_uploader(type=[...])はサーバー側でも拡張子を検証するため、
-            # 通常この分岐には到達しないが、resolve_upload_dest()自体は汎用関数であり将来
-            # 呼び出し元が増える可能性もあるため多重防御として残している。
-            if dest is None:
-                st.error(f"不正なファイル名のためスキップしました: {f.name}")
-                st.session_state.processed_upload_ids.add(f.file_id)
-                continue
-            if dest.name != f.name:
-                renamed.append((f.name, dest.name))
-            dest.write_bytes(f.getvalue())
-            saved_paths.add(dest)
-            st.session_state.processed_upload_ids.add(f.file_id)
-        if renamed:
-            st.warning(
-                "同名のファイルが既に存在したため、既存ファイルを上書きせず別名で保存しました:\n"
-                + "\n".join(f"- {old} → {new}" for old, new in renamed)
+        try:
+            # resolve_upload_dest()の空きパス判定からwrite_bytes()完了までをロックで囲み、
+            # 複数セッションが同名ファイルをほぼ同時にアップロードしても無警告の上書きが
+            # 起きないようにする（判定〜書き込みの間に他セッションが割り込むTOCTOU対策）。
+            with upload_lock():
+                for f in new_uploaded_files:
+                    dest = resolve_upload_dest(f.name, taken_paths=saved_paths)
+                    # st.file_uploader(type=[...])はサーバー側でも拡張子を検証するため、
+                    # 通常この分岐には到達しないが、resolve_upload_dest()自体は汎用関数であり将来
+                    # 呼び出し元が増える可能性もあるため多重防御として残している。
+                    if dest is None:
+                        st.error(f"不正なファイル名のためスキップしました: {f.name}")
+                        st.session_state.processed_upload_ids.add(f.file_id)
+                        continue
+                    if dest.name != f.name:
+                        renamed.append((f.name, dest.name))
+                    dest.write_bytes(f.getvalue())
+                    saved_paths.add(dest)
+                    st.session_state.processed_upload_ids.add(f.file_id)
+        except Timeout:
+            st.error(
+                "他のセッションがファイルを同期中のため、アップロードに失敗しました。"
+                "しばらく待ってから再度お試しください。"
             )
-        _sync_and_report("アップロードされたファイルを取り込み中...", failed_sync_warning_slot)
+        else:
+            if renamed:
+                st.warning(
+                    "同名のファイルが既に存在したため、既存ファイルを上書きせず別名で保存しました:\n"
+                    + "\n".join(f"- {old} → {new}" for old, new in renamed)
+                )
+            _sync_and_report("アップロードされたファイルを取り込み中...", failed_sync_warning_slot)
 
 _last_question = ""
 for index, message in enumerate(st.session_state.messages):

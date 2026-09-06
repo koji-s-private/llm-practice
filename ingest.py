@@ -399,6 +399,19 @@ def resolve_upload_dest(filename: str, taken_paths: set[Path] | None = None) -> 
     return candidate
 
 
+def upload_lock() -> FileLock:
+    """アップロードファイルの保存先確保〜書き込み完了までを排他制御するファイルロックを返す。
+
+    resolve_upload_dest()の空きパス判定はexists()チェックのみに依存するため、判定から
+    実際の書き込み(write_bytes)までの間に他セッションが同じパスへ割り込むと、確認済みの
+    空きパスが既に埋まっているケース（TOCTOU）が起こりうる。sync_data_dir()と同じ
+    SYNC_LOCK_PATHを流用し、呼び出し元はresolve_upload_dest()から書き込み完了までを
+    `with upload_lock():` で囲むことでこれを防ぐ。ロック取得がタイムアウトした場合は
+    `filelock.Timeout` を送出する。
+    """
+    return FileLock(str(SYNC_LOCK_PATH), timeout=SYNC_LOCK_TIMEOUT_SECONDS)
+
+
 def _load_manifest() -> dict:
     if not MANIFEST_PATH.exists():
         return {}

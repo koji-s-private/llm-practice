@@ -32,12 +32,20 @@ from typing import Literal
 from fastapi import FastAPI, File, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
+from filelock import Timeout
 from langchain_core.documents import Document
 from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 from pydantic import BaseModel
 
 from history_utils import _windowed_history
-from ingest import SUPPORTED_EXTENSIONS, delete_indexed_file, list_indexed_files, resolve_upload_dest, sync_data_dir
+from ingest import (
+    SUPPORTED_EXTENSIONS,
+    delete_indexed_file,
+    list_indexed_files,
+    resolve_upload_dest,
+    sync_data_dir,
+    upload_lock,
+)
 from memory import (
     CONVERSATIONS_DIR,
     THREAD_ID_PATTERN,
@@ -255,27 +263,36 @@ async def upload_files(files: list[UploadFile] = File(default=[])) -> dict:
     リネームされた旨をユーザーに案内できる。保存先の解決（パストラバーサル検証・拡張子検証含む）を
     全ファイル分先に済ませてから書き込むことで、一部のファイルだけ不正で拒否された際に
     他のファイルだけ保存済みという中途半端な状態を残さないようにしている（ただし書き込み中の
-    I/Oエラー自体まではこの検証で防げない）。
+    I/Oエラー自体まではこの検証で防げない）。resolve_upload_dest()の判定から書き込み完了までを
+    upload_lock()で囲み、複数クライアントが同名ファイルをほぼ同時にアップロードしても
+    無警告の上書きが起きないようにする（TOCTOU対策）。
     """
     destinations: list[tuple[UploadFile, Path]] = []
     saved_paths: set[Path] = set()
-    for file in files:
-        filename = file.filename or ""
-        if Path(filename).suffix.lower() not in SUPPORTED_EXTENSIONS:
-            raise HTTPException(status_code=400, detail=f"対応していないファイル形式です: {filename}")
-        dest = resolve_upload_dest(filename, taken_paths=saved_paths)
-        if dest is None:
-            raise HTTPException(status_code=400, detail=f"不正なファイル名です: {filename}")
-        saved_paths.add(dest)
-        destinations.append((file, dest))
-
     uploaded = []
-    for file, dest in destinations:
-        dest.parent.mkdir(parents=True, exist_ok=True)
-        dest.write_bytes(await file.read())
-        uploaded.append(
-            {"original_name": file.filename, "saved_name": dest.name, "renamed": dest.name != file.filename}
-        )
+    try:
+        with upload_lock():
+            for file in files:
+                filename = file.filename or ""
+                if Path(filename).suffix.lower() not in SUPPORTED_EXTENSIONS:
+                    raise HTTPException(status_code=400, detail=f"対応していないファイル形式です: {filename}")
+                dest = resolve_upload_dest(filename, taken_paths=saved_paths)
+                if dest is None:
+                    raise HTTPException(status_code=400, detail=f"不正なファイル名です: {filename}")
+                saved_paths.add(dest)
+                destinations.append((file, dest))
+
+            for file, dest in destinations:
+                dest.parent.mkdir(parents=True, exist_ok=True)
+                dest.write_bytes(await file.read())
+                uploaded.append(
+                    {"original_name": file.filename, "saved_name": dest.name, "renamed": dest.name != file.filename}
+                )
+    except Timeout as e:
+        raise HTTPException(
+            status_code=503,
+            detail="他のセッションがファイルを同期中のため、アップロードに失敗しました。しばらくしてから再試行してください。",
+        ) from e
 
     if uploaded:
         sync_data_dir(verbose=False)
