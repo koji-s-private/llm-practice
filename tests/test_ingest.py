@@ -2208,6 +2208,102 @@ def test_sync_data_dir_serializes_concurrent_thread_calls(fake_env, monkeypatch)
     assert total_added == 2
 
 
+# --- upload_lock(): アップロード時のTOCTOU対策ロック ---
+
+
+def test_upload_lock_returns_filelock_for_sync_lock_path(fake_env):
+    # sync_data_dir()と同じSYNC_LOCK_PATH・SYNC_LOCK_TIMEOUT_SECONDSを流用していることを確認する
+    lock = ingest.upload_lock()
+
+    assert isinstance(lock, FileLock)
+    assert lock.lock_file == str(ingest.SYNC_LOCK_PATH)
+    assert lock.timeout == ingest.SYNC_LOCK_TIMEOUT_SECONDS
+
+
+def test_upload_lock_raises_timeout_when_already_held_by_other_session(fake_env, monkeypatch):
+    # 他のセッションがロックを保持中の場合、待機時間内に取得できなければfilelock.Timeoutを送出する
+    monkeypatch.setattr(ingest, "SYNC_LOCK_TIMEOUT_SECONDS", 0.1)
+
+    other_session_lock = FileLock(str(ingest.SYNC_LOCK_PATH))
+    other_session_lock.acquire()
+    try:
+        with pytest.raises(Timeout):
+            with ingest.upload_lock():
+                pass
+    finally:
+        other_session_lock.release()
+
+    # ロック解放後は通常どおりすぐ取得できる（残留していない）
+    with ingest.upload_lock():
+        pass
+
+
+def test_concurrent_uploads_without_lock_can_silently_overwrite_each_other(fake_env):
+    """異常系境界値（TOCTOU再現）: upload_lock()を使わずresolve_upload_dest()から
+    write_bytes()までを実行すると、判定〜書き込みの間に他セッションが割り込んで
+    同じ「空いているはず」のパスに書き込んでしまい、一方の内容が無警告で失われうる。
+    このテストはロックが機能していることの確認ではなく、ロック無しでは実際に
+    TOCTOUが再現する（＝以降のロック有りテストに意味がある）ことを検証する。"""
+    data_dir, _store = fake_env
+    barrier = threading.Barrier(2)
+    results = {}
+
+    def worker(name, content):
+        barrier.wait()  # 両セッションがほぼ同時にresolve_upload_dest()を呼ぶよう同期する
+        dest = ingest.resolve_upload_dest("report.txt")
+        time.sleep(0.05)  # 判定から書き込みまでの間に他セッションが割り込む余地を作る
+        dest.write_bytes(content.encode("utf-8"))
+        results[name] = dest
+
+    threads = [
+        threading.Thread(target=worker, args=("A", "セッションAの内容")),
+        threading.Thread(target=worker, args=("B", "セッションBの内容")),
+    ]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+
+    # ロックが無いため両セッションとも同じパス（無印のreport.txt）を「空いている」と
+    # 誤判定し、後から書き込んだ方が先の内容を上書きしてしまう
+    assert results["A"] == results["B"] == data_dir.resolve() / "report.txt"
+    assert [p.name for p in data_dir.iterdir()] == ["report.txt"]
+    final_content = (data_dir / "report.txt").read_text(encoding="utf-8")
+    assert final_content in ("セッションAの内容", "セッションBの内容")
+
+
+def test_upload_lock_prevents_concurrent_uploads_from_overwriting_each_other(fake_env):
+    """正常系: 同じ競合状況でもresolve_upload_dest()から書き込み完了までを
+    upload_lock()で囲めば、後から入ったセッションは先のセッションの書き込み完了後に
+    resolve_upload_dest()を呼ぶことになり、別パス（"report (2).txt"）に保存される。
+    両セッションのファイルがどちらも上書きされずに残ることを確認する。"""
+    data_dir, _store = fake_env
+    barrier = threading.Barrier(2)
+    results = {}
+
+    def worker(name, content):
+        barrier.wait()
+        with ingest.upload_lock():
+            dest = ingest.resolve_upload_dest("report.txt")
+            time.sleep(0.05)
+            dest.write_bytes(content.encode("utf-8"))
+        results[name] = dest
+
+    threads = [
+        threading.Thread(target=worker, args=("A", "セッションAの内容")),
+        threading.Thread(target=worker, args=("B", "セッションBの内容")),
+    ]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+
+    assert results["A"] != results["B"]
+    assert {p.name for p in results.values()} == {"report.txt", "report (2).txt"}
+    saved_contents = {name: path.read_text(encoding="utf-8") for name, path in results.items()}
+    assert saved_contents == {"A": "セッションAの内容", "B": "セッションBの内容"}
+
+
 # --- ログ出力の一本化（print()廃止、logger経由のみ） ---
 #
 # sync_data_dir() / _load_pdf() / _load_pdf_with_docling() は以前 print() と

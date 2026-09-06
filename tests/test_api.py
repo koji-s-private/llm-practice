@@ -12,6 +12,8 @@
 """
 
 import json
+import threading
+import time
 
 import pytest
 from fastapi import HTTPException
@@ -20,6 +22,7 @@ from langchain_core.documents import Document
 from langchain_core.messages import AIMessageChunk, ToolMessage
 
 import api.main as api_main
+import ingest
 import memory
 import setup
 
@@ -683,6 +686,81 @@ def test_upload_files_accepts_supported_extension_case_insensitively(client, mon
     )
 
     assert response.status_code == 200
+
+
+def test_upload_files_returns_503_when_lock_times_out(client, monkeypatch, tmp_path):
+    """異常系: 他セッションがファイル同期中でupload_lock()の取得がタイムアウトした場合、
+    503を返し、どのファイルも保存されない（TOCTOU対策のロック取得失敗時のフォールバック）。"""
+    from filelock import Timeout as FileLockTimeout
+
+    class _AlwaysTimeoutLock:
+        def __enter__(self):
+            raise FileLockTimeout("dummy-lock")
+
+        def __exit__(self, *args):
+            return False
+
+    monkeypatch.setattr(api_main, "upload_lock", lambda: _AlwaysTimeoutLock())
+    monkeypatch.setattr(api_main, "resolve_upload_dest", lambda filename, taken_paths=None: tmp_path / filename)
+    sync_calls = []
+    monkeypatch.setattr(api_main, "sync_data_dir", lambda verbose=False: sync_calls.append(verbose) or {})
+
+    response = client.post(
+        "/api/files/upload",
+        files=[("files", ("report.txt", b"content", "text/plain"))],
+    )
+
+    assert response.status_code == 503
+    assert not (tmp_path / "report.txt").exists()
+    assert sync_calls == []
+
+
+def test_upload_files_concurrent_same_filename_saves_both_without_overwrite(client, monkeypatch, tmp_path):
+    """異常系境界値（TOCTOU再現・実疎通）: resolve_upload_dest()・upload_lock()をフェイクに
+    差し替えず実物のまま使い、同名ファイルを2つのリクエストからほぼ同時にアップロードしても、
+    upload_lock()による排他制御で両方が異なるパスに保存され、どちらの内容も上書きされないことを
+    確認する（判定から書き込みまでの間に他リクエストが割り込む余地を意図的に広げるため、
+    resolve_upload_dest()の戻り値を実物のまま少し遅延させている）。"""
+    data_dir = tmp_path / "data"
+    persist_dir = tmp_path / "chroma_db"
+    persist_dir.mkdir(parents=True)
+    monkeypatch.setattr(ingest, "DATA_DIR", data_dir)
+    monkeypatch.setattr(ingest, "SYNC_LOCK_PATH", persist_dir / "sync.lock")
+    monkeypatch.setattr(api_main, "sync_data_dir", lambda verbose=False: {})
+
+    original_resolve = ingest.resolve_upload_dest
+
+    def slow_resolve(filename, taken_paths=None):
+        dest = original_resolve(filename, taken_paths=taken_paths)
+        time.sleep(0.05)
+        return dest
+
+    monkeypatch.setattr(api_main, "resolve_upload_dest", slow_resolve)
+
+    responses = {}
+
+    def worker(name, content):
+        responses[name] = client.post(
+            "/api/files/upload",
+            files=[("files", ("report.txt", content, "text/plain"))],
+        )
+
+    threads = [
+        threading.Thread(target=worker, args=("A", b"session-a-content")),
+        threading.Thread(target=worker, args=("B", b"session-b-content")),
+    ]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+
+    for response in responses.values():
+        assert response.status_code == 200
+
+    saved_names = {responses[name].json()["uploaded"][0]["saved_name"] for name in ("A", "B")}
+    assert saved_names == {"report.txt", "report (2).txt"}
+    contents = {(data_dir / name).read_bytes() for name in saved_names}
+    assert contents == {b"session-a-content", b"session-b-content"}
 
 
 # --- DELETE /api/files/{name} ---
