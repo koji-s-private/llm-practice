@@ -935,6 +935,13 @@ for index, message in enumerate(st.session_state.messages):
 
 _render_empty_state_guidance()
 
+if st.session_state.messages and len(_windowed_history(st.session_state.messages)) < len(st.session_state.messages):
+    # LLMへの送信直前に行われるウィンドウイング（_windowed_history）と同じ判定を
+    # 表示側でも行う。Streamlitのチャット画面は常に最新メッセージへ自動スクロールするため、
+    # ユーザーが実際に着地する入力欄直上に表示し、静的な導入文（st.caption）と混同されない
+    # よう視覚的に区別できるst.infoを使う。
+    st.info("会話が長くなったため、古いやりとりの一部はAIの参照対象から外れています。")
+
 user_input = st.chat_input("資料について気になることを聞いてみましょう")
 
 # 再生成ボタン押下時にセットされるフラグ。popで読み取りと同時に消しておくことで、
