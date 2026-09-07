@@ -914,12 +914,6 @@ with st.sidebar:
                 )
             _sync_and_report("アップロードされたファイルを取り込み中...", failed_sync_warning_slot)
 
-if st.session_state.messages and len(_windowed_history(st.session_state.messages)) < len(st.session_state.messages):
-    # LLMへの送信直前に行われるウィンドウイング（_windowed_history）と同じ判定を
-    # 表示側でも行い、画面には全履歴を出しつつAIが実際には参照していない古いやりとりが
-    # あることをユーザーに伝える。
-    st.caption("会話が長くなったため、古いやりとりの一部はAIの参照対象から外れています。")
-
 _last_question = ""
 for index, message in enumerate(st.session_state.messages):
     role = "user" if isinstance(message, HumanMessage) else "assistant"
@@ -940,6 +934,13 @@ for index, message in enumerate(st.session_state.messages):
         _last_question = message.content
 
 _render_empty_state_guidance()
+
+if st.session_state.messages and len(_windowed_history(st.session_state.messages)) < len(st.session_state.messages):
+    # LLMへの送信直前に行われるウィンドウイング（_windowed_history）と同じ判定を
+    # 表示側でも行う。Streamlitのチャット画面は常に最新メッセージへ自動スクロールするため、
+    # ユーザーが実際に着地する入力欄直上に表示し、静的な導入文（st.caption）と混同されない
+    # よう視覚的に区別できるst.infoを使う。
+    st.info("会話が長くなったため、古いやりとりの一部はAIの参照対象から外れています。")
 
 user_input = st.chat_input("資料について気になることを聞いてみましょう")
 

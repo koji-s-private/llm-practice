@@ -798,8 +798,7 @@ def test_windowed_history_uses_fallback_budget_when_provider_is_none(monkeypatch
 
 def test_history_windowing_notice_hidden_when_under_budget(monkeypatch):
     """正常系: 短い会話（トークン予算内）ではウィンドウイングが発生しないため、
-    「古いやりとりの一部はAIの参照対象から外れています」という通知キャプションは
-    表示されない。"""
+    「古いやりとりの一部はAIの参照対象から外れています」という通知は表示されない。"""
     fake_agent = _FakeAgent(answer="短い回答")
     monkeypatch.setattr(rag_chain, "build_agent", lambda thread_id=None: fake_agent)
 
@@ -807,14 +806,14 @@ def test_history_windowing_notice_hidden_when_under_budget(monkeypatch):
     at.chat_input[0].set_value("短い質問です").run()
 
     assert at.exception == []
-    caption_texts = [c.value for c in at.caption]
-    assert not any("古いやりとりの一部はAIの参照対象から外れています" in text for text in caption_texts)
+    info_texts = [i.value for i in at.info]
+    assert not any("古いやりとりの一部はAIの参照対象から外れています" in text for text in info_texts)
 
 
 def test_history_windowing_notice_shown_when_over_budget(monkeypatch):
     """異常系境界値: 会話が長くなりOllama利用時のトークン予算を超えてウィンドウイングが
-    発生した場合、チャット履歴の表示直前に「古いやりとりの一部はAIの参照対象から
-    外れています」という控えめな通知キャプションが表示される
+    発生した場合、チャット入力欄の直前（ユーザーが実際に着地するスクロール位置）に
+    「古いやりとりの一部はAIの参照対象から外れています」という通知がst.infoで表示される
     （test_chat_streaming_sends_windowed_history_to_agentと同じ条件で間引きを再現する）。"""
     import app
     import setup
@@ -833,8 +832,8 @@ def test_history_windowing_notice_shown_when_over_budget(monkeypatch):
     # 画面表示用の履歴は全ターン分残っている一方、実際に送信される分は間引かれている
     # （ウィンドウイングが発生している）ことを前提に、通知が表示されることを確認する。
     assert len(app._windowed_history(at.session_state["messages"])) < len(at.session_state["messages"])
-    caption_texts = [c.value for c in at.caption]
-    assert any("古いやりとりの一部はAIの参照対象から外れています" in text for text in caption_texts)
+    info_texts = [i.value for i in at.info]
+    assert any("古いやりとりの一部はAIの参照対象から外れています" in text for text in info_texts)
 
 
 def test_history_windowing_notice_absent_when_no_messages(monkeypatch):
@@ -847,9 +846,9 @@ def test_history_windowing_notice_absent_when_no_messages(monkeypatch):
 
     assert at.exception == []
     assert at.session_state["messages"] == []
-    caption_texts = [c.value for c in at.caption]
-    assert not any("古いやりとりの一部はAIの参照対象から外れています" in text for text in caption_texts)
-    assert any("まだドキュメントが登録されていません" in i.value for i in at.info)
+    info_texts = [i.value for i in at.info]
+    assert not any("古いやりとりの一部はAIの参照対象から外れています" in text for text in info_texts)
+    assert any("まだドキュメントが登録されていません" in text for text in info_texts)
 
 
 # --- 2. チャット処理中の agent.invoke() 呼び出し ---
