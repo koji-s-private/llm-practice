@@ -914,6 +914,12 @@ with st.sidebar:
                 )
             _sync_and_report("アップロードされたファイルを取り込み中...", failed_sync_warning_slot)
 
+if st.session_state.messages and len(_windowed_history(st.session_state.messages)) < len(st.session_state.messages):
+    # LLMへの送信直前に行われるウィンドウイング（_windowed_history）と同じ判定を
+    # 表示側でも行い、画面には全履歴を出しつつAIが実際には参照していない古いやりとりが
+    # あることをユーザーに伝える。
+    st.caption("会話が長くなったため、古いやりとりの一部はAIの参照対象から外れています。")
+
 _last_question = ""
 for index, message in enumerate(st.session_state.messages):
     role = "user" if isinstance(message, HumanMessage) else "assistant"
