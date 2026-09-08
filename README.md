@@ -398,6 +398,46 @@ ruff format --check .  # フォーマットチェック（差分を直接適用�
 `ruff check` / `ruff format --check` / `pytest` を自動実行し、いずれかが失敗すると
 CIジョブ全体が失敗します（マージ前に問題へ気づける状態にするため）。
 
+### 精度評価スクリプト（手動実行）
+
+`scripts/` 配下には、`pytest` の対象（ロジック単体のテスト）とは別に、実際にモデルを
+動かして精度を数値評価するスクリプトを用意しています。いずれも本番の `data/` や
+`chroma_db/` には一切アクセスせず、評価用の一時ディレクトリにコレクションを作成して
+実行後に破棄するため、手動で自由に実行できます。
+
+- `scripts/evaluate_retrieval.py`: 一次検索（ベクトル類似度）の適合率・再現率の評価
+- `scripts/evaluate_relevance_grading.py`: LLM採点（`_grade_relevance`、reranking）の適合率・再現率の評価
+- `scripts/evaluate_model_accuracy.py`: RAGパイプライン全体（検索→LLM採点→エージェント最終回答）の
+  回答精度をモデルごとに比較評価する。固定の質問セットに対して回答を生成し、正解キーワードが
+  回答に含まれているかを機械的・決定的に判定してスコア化する（LLM-as-judge方式の追加LLM呼び出しは
+  行わない）
+
+```bash
+# Ollamaで pull 済みのモデルを指定して実行（デフォルトのプロバイダはOllama。無料・ローカルで完結する）
+python scripts/evaluate_model_accuracy.py --model llama3.1
+
+# 複数モデルを指定すると、モデルごとの正答率を比較できる
+python scripts/evaluate_model_accuracy.py --model llama3.1 --model qwen2.5
+```
+
+出力例:
+
+```
+[モデル比較]
+モデル                         |    正答率 |    平均含有率
+-------------------------------------------------------
+llama3.1                       |   0.875 |     0.938
+qwen2.5                        |   0.750 |     0.813
+```
+
+Anthropic/OpenAI等の有料APIモデルを評価したい場合は、`--provider anthropic` のような
+プロバイダ指定に加えて `--allow-paid-api` を明示的に指定した場合のみ実行できます
+（デフォルトの実行経路では有料APIへのリクエストは一切発生しません）。
+
+```bash
+python scripts/evaluate_model_accuracy.py --model claude-sonnet-5 --provider anthropic --allow-paid-api
+```
+
 ## 今後の発展案
 
 - 過去の会話（会話ID）を一覧から選んで再開する機能（現状は新しい会話を始めることしかできない）

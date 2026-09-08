@@ -84,6 +84,19 @@ def test_grade_relevance_parses_comma_separated_indices(monkeypatch):
     assert rag_chain._grade_relevance("質問", docs) == [0, 2]
 
 
+def test_grade_relevance_uses_explicit_chat_model_over_global_model(monkeypatch):
+    """chat_model引数を渡した場合、グローバルなrag_chain.modelではなくそちらが使われることを確認する
+    （scripts/evaluate_model_accuracy.pyがモデルを差し替えて評価するための前提条件）。"""
+    docs = [_FakeDocument("a")]
+    global_model = SimpleNamespace(
+        invoke=lambda prompt: (_ for _ in ()).throw(AssertionError("グローバルmodelは呼ばれてはいけない"))
+    )
+    monkeypatch.setattr(rag_chain, "model", global_model)
+    injected_model = SimpleNamespace(invoke=lambda prompt: SimpleNamespace(content="回答:1"))
+
+    assert rag_chain._grade_relevance("質問", docs, injected_model) == [0]
+
+
 def test_grade_relevance_returns_empty_when_llm_says_none(monkeypatch):
     docs = [_FakeDocument("a"), _FakeDocument("b")]
     fake_model = SimpleNamespace(invoke=lambda prompt: SimpleNamespace(content="回答:なし"))
@@ -357,6 +370,41 @@ def test_system_prompt_instructs_inline_citation_numbers():
     assert "無理に番号を付けず" in rag_chain.SYSTEM_PROMPT
 
 
+# --- build_agent の chat_model 引数（モデル差し替え） ---
+
+
+def test_build_agent_passes_injected_chat_model_to_create_agent(monkeypatch):
+    """chat_model引数を渡した場合、create_agent()にはグローバルなrag_chain.modelではなく
+    そちらが渡されることを確認する（scripts/evaluate_model_accuracy.pyがモデルを差し替えて
+    評価するための前提条件）。"""
+    store = _FakeVectorStore(results=[])
+    monkeypatch.setattr(rag_chain, "get_vectorstore", lambda: store)
+    injected_model = SimpleNamespace(invoke=lambda prompt: SimpleNamespace(content="回答:なし"))
+
+    agent = rag_chain.build_agent(thread_id="thread-1", chat_model=injected_model)
+
+    assert agent.model is injected_model
+
+
+def test_build_agent_passes_injected_chat_model_to_grade_relevance(monkeypatch):
+    """retrieve_context内部の_grade_relevance呼び出しにも、注入したchat_modelが
+    グローバルmodelの代わりに渡されることを確認する。"""
+    doc = _FakeDocument("関連しそうな内容", {"source": "a.txt"})
+    store = _FakeVectorStore(results=[(doc, 0.1)])
+    monkeypatch.setattr(rag_chain, "get_vectorstore", lambda: store)
+    global_model = SimpleNamespace(
+        invoke=lambda prompt: (_ for _ in ()).throw(AssertionError("グローバルmodelは呼ばれてはいけない"))
+    )
+    monkeypatch.setattr(rag_chain, "model", global_model)
+    injected_model = SimpleNamespace(invoke=lambda prompt: SimpleNamespace(content="回答:1"))
+
+    agent = rag_chain.build_agent(thread_id="thread-1", chat_model=injected_model)
+    retrieve_context = agent.tools[0]
+    _, artifact = retrieve_context.func("質問")
+
+    assert artifact == [doc]
+
+
 # --- retrieve_context (build_agent の中で作られる検索ツール) ---
 
 
@@ -372,7 +420,7 @@ def test_retrieve_context_falls_back_when_no_candidates(monkeypatch):
 def test_retrieve_context_falls_back_when_all_candidates_graded_irrelevant(monkeypatch):
     doc = _FakeDocument("無関係な内容", {"source": "a.txt"})
     retrieve_context, _ = _build_agent_with_store(monkeypatch, results=[(doc, 0.1)])
-    monkeypatch.setattr(rag_chain, "_grade_relevance", lambda query, docs: [])
+    monkeypatch.setattr(rag_chain, "_grade_relevance", lambda query, docs, *_args: [])
 
     content, artifact = retrieve_context.func("質問")
 
@@ -391,7 +439,7 @@ def test_retrieve_context_filters_out_candidates_beyond_recall_threshold(monkeyp
 
     seen_docs = {}
 
-    def fake_grade(query, docs):
+    def fake_grade(query, docs, *_args):
         seen_docs["docs"] = docs
         return list(range(len(docs)))
 
@@ -407,7 +455,7 @@ def test_retrieve_context_returns_relevant_docs(monkeypatch):
     doc1 = _FakeDocument("関連する内容", {"source": "a.txt"})
     doc2 = _FakeDocument("これも関連する内容", {"source": "b.txt"})
     retrieve_context, _ = _build_agent_with_store(monkeypatch, results=[(doc1, 0.1), (doc2, 0.2)])
-    monkeypatch.setattr(rag_chain, "_grade_relevance", lambda query, docs: [1])
+    monkeypatch.setattr(rag_chain, "_grade_relevance", lambda query, docs, *_args: [1])
 
     content, artifact = retrieve_context.func("質問")
 
@@ -422,7 +470,7 @@ def test_retrieve_context_numbers_sources_in_retrieved_order(monkeypatch):
     doc1 = _FakeDocument("1件目の内容", {"source": "a.txt"})
     doc2 = _FakeDocument("2件目の内容", {"source": "b.txt"})
     retrieve_context, _ = _build_agent_with_store(monkeypatch, results=[(doc1, 0.1), (doc2, 0.2)])
-    monkeypatch.setattr(rag_chain, "_grade_relevance", lambda query, docs: [0, 1])
+    monkeypatch.setattr(rag_chain, "_grade_relevance", lambda query, docs, *_args: [0, 1])
 
     content, artifact = retrieve_context.func("質問")
 
@@ -438,7 +486,7 @@ def test_retrieve_context_limits_number_of_returned_docs(monkeypatch):
     docs = [_FakeDocument(f"内容{i}", {"source": f"{i}.txt"}) for i in range(rag_chain.MAX_RETRIEVED_DOCS + 3)]
     results = [(doc, 0.1 * i) for i, doc in enumerate(docs)]
     retrieve_context, _ = _build_agent_with_store(monkeypatch, results=results)
-    monkeypatch.setattr(rag_chain, "_grade_relevance", lambda query, docs: list(range(len(docs))))
+    monkeypatch.setattr(rag_chain, "_grade_relevance", lambda query, docs, *_args: list(range(len(docs))))
 
     content, artifact = retrieve_context.func("質問")
 
@@ -454,7 +502,7 @@ def test_retrieve_context_returns_all_docs_when_relevant_count_equals_max(monkey
     docs = [_FakeDocument(f"内容{i}", {"source": f"{i}.txt"}) for i in range(rag_chain.MAX_RETRIEVED_DOCS)]
     results = [(doc, 0.1 * i) for i, doc in enumerate(docs)]
     retrieve_context, _ = _build_agent_with_store(monkeypatch, results=results)
-    monkeypatch.setattr(rag_chain, "_grade_relevance", lambda query, docs: list(range(len(docs))))
+    monkeypatch.setattr(rag_chain, "_grade_relevance", lambda query, docs, *_args: list(range(len(docs))))
 
     content, artifact = retrieve_context.func("質問")
 
@@ -468,7 +516,7 @@ def test_retrieve_context_returns_all_docs_when_relevant_count_below_max(monkeyp
     誤って作用せず、そのまま全件返すことを確認する。"""
     doc = _FakeDocument("唯一の関連文書", {"source": "only.txt"})
     retrieve_context, _ = _build_agent_with_store(monkeypatch, results=[(doc, 0.1)])
-    monkeypatch.setattr(rag_chain, "_grade_relevance", lambda query, docs: [0])
+    monkeypatch.setattr(rag_chain, "_grade_relevance", lambda query, docs, *_args: [0])
 
     content, artifact = retrieve_context.func("質問")
 
@@ -482,7 +530,7 @@ def test_retrieve_context_truncates_doc_content_in_serialized_output(monkeypatch
     long_content = "あ" * (rag_chain.MAX_DOC_CHARS + 100)
     doc = _FakeDocument(long_content, {"source": "long.txt"})
     retrieve_context, _ = _build_agent_with_store(monkeypatch, results=[(doc, 0.1)])
-    monkeypatch.setattr(rag_chain, "_grade_relevance", lambda query, docs: [0])
+    monkeypatch.setattr(rag_chain, "_grade_relevance", lambda query, docs, *_args: [0])
 
     content, artifact = retrieve_context.func("質問")
 
@@ -498,7 +546,7 @@ def test_retrieve_context_does_not_truncate_content_at_exactly_max_doc_chars(mon
     exact_content = "あ" * rag_chain.MAX_DOC_CHARS
     doc = _FakeDocument(exact_content, {"source": "exact.txt"})
     retrieve_context, _ = _build_agent_with_store(monkeypatch, results=[(doc, 0.1)])
-    monkeypatch.setattr(rag_chain, "_grade_relevance", lambda query, docs: [0])
+    monkeypatch.setattr(rag_chain, "_grade_relevance", lambda query, docs, *_args: [0])
 
     content, artifact = retrieve_context.func("質問")
 
@@ -513,7 +561,7 @@ def test_retrieve_context_does_not_truncate_short_doc_content(monkeypatch):
     assert len(short_content) < rag_chain.MAX_DOC_CHARS
     doc = _FakeDocument(short_content, {"source": "short.txt"})
     retrieve_context, _ = _build_agent_with_store(monkeypatch, results=[(doc, 0.1)])
-    monkeypatch.setattr(rag_chain, "_grade_relevance", lambda query, docs: [0])
+    monkeypatch.setattr(rag_chain, "_grade_relevance", lambda query, docs, *_args: [0])
 
     content, artifact = retrieve_context.func("質問")
 
@@ -565,7 +613,7 @@ def test_retrieve_context_includes_docs_without_is_fallback_key(monkeypatch):
     monkeypatch.setattr(rag_chain, "get_vectorstore", lambda: store)
     agent = rag_chain.build_agent(thread_id="thread-1")
     retrieve_context = agent.tools[0]
-    monkeypatch.setattr(rag_chain, "_grade_relevance", lambda query, docs: list(range(len(docs))))
+    monkeypatch.setattr(rag_chain, "_grade_relevance", lambda query, docs, *_args: list(range(len(docs))))
 
     _, artifact = retrieve_context.func("質問")
 
@@ -582,7 +630,7 @@ def test_retrieve_context_sets_distance_score_on_returned_doc_metadata(monkeypat
     artifactのDocument.metadata["distance_score"]にそのまま設定されること。"""
     doc = _FakeDocument("関連する内容", {"source": "a.txt"})
     retrieve_context, _ = _build_agent_with_store(monkeypatch, results=[(doc, 0.3)])
-    monkeypatch.setattr(rag_chain, "_grade_relevance", lambda query, docs: [0])
+    monkeypatch.setattr(rag_chain, "_grade_relevance", lambda query, docs, *_args: [0])
 
     _, artifact = retrieve_context.func("質問")
 
@@ -595,7 +643,7 @@ def test_retrieve_context_sets_distinct_distance_score_per_doc(monkeypatch):
     doc1 = _FakeDocument("1件目", {"source": "a.txt"})
     doc2 = _FakeDocument("2件目", {"source": "b.txt"})
     retrieve_context, _ = _build_agent_with_store(monkeypatch, results=[(doc1, 0.1), (doc2, 0.9)])
-    monkeypatch.setattr(rag_chain, "_grade_relevance", lambda query, docs: [0, 1])
+    monkeypatch.setattr(rag_chain, "_grade_relevance", lambda query, docs, *_args: [0, 1])
 
     _, artifact = retrieve_context.func("質問")
 
@@ -608,7 +656,7 @@ def test_retrieve_context_sets_distance_score_of_zero_for_exact_match(monkeypatc
     取りこぼされず正しく設定されること。"""
     doc = _FakeDocument("完全一致の内容", {"source": "exact.txt"})
     retrieve_context, _ = _build_agent_with_store(monkeypatch, results=[(doc, 0.0)])
-    monkeypatch.setattr(rag_chain, "_grade_relevance", lambda query, docs: [0])
+    monkeypatch.setattr(rag_chain, "_grade_relevance", lambda query, docs, *_args: [0])
 
     _, artifact = retrieve_context.func("質問")
 
@@ -621,7 +669,7 @@ def test_retrieve_context_sets_distance_score_just_below_recall_threshold(monkey
     doc = _FakeDocument("しきい値付近の内容", {"source": "edge.txt"})
     score = rag_chain.RECALL_DISTANCE_THRESHOLD - 0.01
     retrieve_context, _ = _build_agent_with_store(monkeypatch, results=[(doc, score)])
-    monkeypatch.setattr(rag_chain, "_grade_relevance", lambda query, docs: [0])
+    monkeypatch.setattr(rag_chain, "_grade_relevance", lambda query, docs, *_args: [0])
 
     _, artifact = retrieve_context.func("質問")
 
@@ -643,7 +691,7 @@ def test_retrieve_context_content_does_not_leak_distance_score(monkeypatch):
     content（serialized）には混入しないこと。"""
     doc = _FakeDocument("関連する内容", {"source": "a.txt"})
     retrieve_context, _ = _build_agent_with_store(monkeypatch, results=[(doc, 0.3)])
-    monkeypatch.setattr(rag_chain, "_grade_relevance", lambda query, docs: [0])
+    monkeypatch.setattr(rag_chain, "_grade_relevance", lambda query, docs, *_args: [0])
 
     content, artifact = retrieve_context.func("質問")
 
@@ -660,7 +708,7 @@ def test_retrieve_context_sets_citation_number_matching_serialized_position(monk
     doc1 = _FakeDocument("1件目の内容", {"source": "a.txt"})
     doc2 = _FakeDocument("2件目の内容", {"source": "b.txt"})
     retrieve_context, _ = _build_agent_with_store(monkeypatch, results=[(doc1, 0.1), (doc2, 0.2)])
-    monkeypatch.setattr(rag_chain, "_grade_relevance", lambda query, docs: [0, 1])
+    monkeypatch.setattr(rag_chain, "_grade_relevance", lambda query, docs, *_args: [0, 1])
 
     _, artifact = retrieve_context.func("質問")
 
@@ -673,7 +721,7 @@ def test_retrieve_context_reuses_citation_number_for_same_doc_across_calls(monke
     （重複排除キーが同一）が再びヒットしても、初回に割り当てた番号を再利用すること。"""
     doc_a = _FakeDocument("Aの内容", {"source": "a.txt"})
     retrieve_context, _ = _build_agent_with_store(monkeypatch, results=[(doc_a, 0.1)])
-    monkeypatch.setattr(rag_chain, "_grade_relevance", lambda query, docs: [0])
+    monkeypatch.setattr(rag_chain, "_grade_relevance", lambda query, docs, *_args: [0])
 
     retrieve_context.func("1回目の質問")
     _, artifact = retrieve_context.func("2回目の質問（同じ文書が再ヒット）")
@@ -690,7 +738,7 @@ def test_retrieve_context_assigns_sequential_citation_numbers_across_calls(monke
     monkeypatch.setattr(rag_chain, "get_vectorstore", lambda: store)
     agent = rag_chain.build_agent(thread_id="thread-1")
     retrieve_context = agent.tools[0]
-    monkeypatch.setattr(rag_chain, "_grade_relevance", lambda query, docs: [0])
+    monkeypatch.setattr(rag_chain, "_grade_relevance", lambda query, docs, *_args: [0])
 
     content1, artifact1 = retrieve_context.func("1回目の質問")
     assert artifact1[0].metadata["citation_number"] == 1
@@ -708,7 +756,7 @@ def test_retrieve_context_content_does_not_leak_citation_number(monkeypatch):
     表示には重複して含めないこと。"""
     doc = _FakeDocument("関連する内容", {"source": "a.txt"})
     retrieve_context, _ = _build_agent_with_store(monkeypatch, results=[(doc, 0.3)])
-    monkeypatch.setattr(rag_chain, "_grade_relevance", lambda query, docs: [0])
+    monkeypatch.setattr(rag_chain, "_grade_relevance", lambda query, docs, *_args: [0])
 
     content, artifact = retrieve_context.func("質問")
 
