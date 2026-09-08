@@ -39,7 +39,7 @@ def _ok_sync(verbose=False, on_progress=None):
 def _patch_light_dependencies(monkeypatch):
     monkeypatch.setattr(ingest, "sync_data_dir", _ok_sync)
     monkeypatch.setattr(ingest, "add_single_conversation_file", lambda path: "added")
-    monkeypatch.setattr(rag_chain, "build_agent", lambda thread_id=None: _FakeAgent())
+    monkeypatch.setattr(rag_chain, "build_agent", lambda thread_id=None, chat_model=None: _FakeAgent())
     monkeypatch.setattr(memory, "new_thread_id", lambda: "thread-test")
     monkeypatch.setattr(memory, "conversation_count", lambda thread_id: 0)
     monkeypatch.setattr(memory, "save_conversation", lambda *a, **k: _FAKE_SAVED_CONVERSATION_PATH)
@@ -128,7 +128,7 @@ def test_feedback_buttons_not_shown_when_generation_fails(monkeypatch):
             raise RuntimeError("boom")
             yield  # pragma: no cover - ジェネレータにするためのダミー
 
-    monkeypatch.setattr(rag_chain, "build_agent", lambda thread_id=None: _FailingAgent())
+    monkeypatch.setattr(rag_chain, "build_agent", lambda thread_id=None, chat_model=None: _FailingAgent())
 
     at = _run_app()
     at.chat_input[0].set_value("質問です").run()

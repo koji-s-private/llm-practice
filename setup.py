@@ -40,6 +40,12 @@ OLLAMA_MODEL = os.environ.get("OLLAMA_MODEL", "llama3.1")
 # 明示的に指定する。
 OLLAMA_NUM_CTX = int(os.environ.get("OLLAMA_NUM_CTX", "8192"))
 
+# 外部APIプロバイダの候補モデル名。実在しないモデルIDを指定するとAPI呼び出し時に
+# エラーになるため、_build_model() と list_available_models() / build_chat_model() の
+# 選択肢を必ずこの定数で一致させる。
+ANTHROPIC_MODEL = "claude-sonnet-5"
+OPENAI_MODEL = "gpt-5-chat-latest"
+
 # 現在実際に使用しているプロバイダ名（"ollama" / "anthropic" / "openai"）。
 # _build_model() 実行時に確定させ、app.py 側から参照してエラーメッセージの出し分けに使う。
 CURRENT_PROVIDER: str | None = None
@@ -65,26 +71,40 @@ def _ollama_available() -> bool:
         return False
 
 
-def _ollama_model_pulled() -> bool:
-    """OLLAMA_MODELがOllamaに実際にpull済みかを `/api/tags` で確認する。
+def _fetch_ollama_pulled_model_names() -> set[str] | None:
+    """Ollamaの `/api/tags` からpull済みモデル名一覧（タグ付き、例: "llama3.1:latest"）を取得する。
 
-    未pullだとモデル呼び出し時に初めて"model not found"エラーになるため事前検出する。
-    Ollamaのモデル名はタグ付き（例: "llama3.1:latest"）で返るため、OLLAMA_MODELに
-    タグが無い場合は暗黙のデフォルトタグ "latest" を補って比較する。APIへの到達自体に
-    失敗した場合は判定不能なだけなので、安全側（pull済みとみなす）に倒す。
+    APIへの到達自体に失敗した場合やスキーマ不一致の場合は判定不能としてNoneを返す
+    （「pull済みモデルが0件」と「取得に失敗した」を呼び出し元が区別できるようにするため）。
     """
     url = f"http://{OLLAMA_HOST}:{OLLAMA_PORT}/api/tags"
     try:
         with urllib.request.urlopen(url, timeout=0.5) as response:
             data = json.loads(response.read())
     except (OSError, urllib.error.URLError, ValueError):
-        return True
-
-    # 最上位がオブジェクトでない場合（配列・文字列など）もスキーマ不一致として判定不能扱いにする。
+        return None
     if not isinstance(data, dict):
+        return None
+    return {model.get("name", "") for model in data.get("models", [])}
+
+
+def _ollama_pulled_model_names() -> set[str]:
+    """一覧表示用途のpull済みモデル名一覧。取得失敗時は空集合を返す。"""
+    return _fetch_ollama_pulled_model_names() or set()
+
+
+def _ollama_model_pulled() -> bool:
+    """OLLAMA_MODELがOllamaに実際にpull済みかを確認する。
+
+    未pullだとモデル呼び出し時に初めて"model not found"エラーになるため事前検出する。
+    Ollamaのモデル名はタグ付き（例: "llama3.1:latest"）で返るため、OLLAMA_MODELに
+    タグが無い場合は暗黙のデフォルトタグ "latest" を補って比較する。一覧取得自体に
+    失敗した場合は判定不能なだけなので、安全側（pull済みとみなす）に倒す。
+    """
+    names = _fetch_ollama_pulled_model_names()
+    if names is None:
         return True
 
-    names = {model.get("name", "") for model in data.get("models", [])}
     candidates = {OLLAMA_MODEL}
     if ":" not in OLLAMA_MODEL:
         candidates.add(f"{OLLAMA_MODEL}:latest")
@@ -122,10 +142,10 @@ def _build_model():
         print(f"[setup] {CURRENT_PROVIDER_FALLBACK_REASON}")
 
     if os.environ.get("ANTHROPIC_API_KEY"):
-        print("[setup] ANTHROPIC_API_KEY を検出: Claude (claude-sonnet-5) を使用します。")
+        print(f"[setup] ANTHROPIC_API_KEY を検出: Claude ({ANTHROPIC_MODEL}) を使用します。")
         CURRENT_PROVIDER = "anthropic"
-        CURRENT_MODEL_NAME = "claude-sonnet-5"
-        return init_chat_model("claude-sonnet-5", model_provider="anthropic")
+        CURRENT_MODEL_NAME = ANTHROPIC_MODEL
+        return init_chat_model(ANTHROPIC_MODEL, model_provider="anthropic")
 
     openai_key = os.environ.get("OPENAI_API_KEY")
     if not openai_key:
@@ -143,17 +163,56 @@ def _build_model():
         )
         os.environ["OPENAI_API_KEY"] = openai_key
 
-    print("[setup] Ollama未起動・ANTHROPIC_API_KEY未設定のため、OpenAI (gpt-5-chat-latest) にフォールバックします。")
+    print(f"[setup] Ollama未起動・ANTHROPIC_API_KEY未設定のため、OpenAI ({OPENAI_MODEL}) にフォールバックします。")
     CURRENT_PROVIDER = "openai"
-    CURRENT_MODEL_NAME = "gpt-5-chat-latest"
-    return init_chat_model("gpt-5-chat-latest", model_provider="openai")
+    CURRENT_MODEL_NAME = OPENAI_MODEL
+    return init_chat_model(OPENAI_MODEL, model_provider="openai")
+
+
+def list_available_models() -> list[dict]:
+    """UI上のモデル切替選択肢として提示できるモデル一覧を返す。
+
+    APIキーが未設定のプロバイダは、ユーザーが意図せず課金対象のAPIを呼び出して
+    しまわないよう一覧に含めない。各要素は {"provider": ..., "model": ...} の形式。
+    """
+    models = [{"provider": "ollama", "model": name} for name in sorted(_ollama_pulled_model_names())]
+    if os.environ.get("ANTHROPIC_API_KEY"):
+        models.append({"provider": "anthropic", "model": ANTHROPIC_MODEL})
+    if os.environ.get("OPENAI_API_KEY"):
+        models.append({"provider": "openai", "model": OPENAI_MODEL})
+    return models
+
+
+def build_chat_model(provider: str, model_name: str):
+    """指定されたprovider/model名から実際にチャットモデルインスタンスを構築する。
+
+    UIでのモデル切替時に、_build_model()と一貫したプロバイダごとの構築ロジックを
+    使い回すための関数（Ollamaサーバー自体の再起動は不要で、モデル指定を切り替えるだけでよい）。
+    """
+    if provider == "ollama":
+        return init_chat_model(model_name, model_provider="ollama", num_ctx=OLLAMA_NUM_CTX)
+    if provider in ("anthropic", "openai"):
+        return init_chat_model(model_name, model_provider=provider)
+    raise ValueError(f"未対応のプロバイダです: {provider}")
+
+
+PROVIDER_LABELS = {"ollama": "Ollama", "anthropic": "Anthropic", "openai": "OpenAI"}
+
+
+def model_label(provider: str | None, model_name: str | None) -> str:
+    """「プロバイダ名 (モデル名)」形式の表示ラベルを組み立てる（例: "Ollama (llama3.1)"）。"""
+    provider_label = PROVIDER_LABELS.get(provider, provider or "不明")
+    return f"{provider_label} ({model_name})"
 
 
 def current_model_label() -> str:
-    """サイドバー表示用に「プロバイダ名 (モデル名)」形式の文字列を返す（例: "Ollama (llama3.1)"）。"""
-    provider_labels = {"ollama": "Ollama", "anthropic": "Anthropic", "openai": "OpenAI"}
-    provider_label = provider_labels.get(CURRENT_PROVIDER, CURRENT_PROVIDER or "不明")
-    return f"{provider_label} ({CURRENT_MODEL_NAME})"
+    """起動時に自動選択されたモデルのサイドバー表示用ラベルを返す。
+
+    UIでユーザーが手動でモデルを切り替えた後の表示にはこの関数ではなく、
+    切替後の状態を渡した model_label() を使う（本関数はCURRENT_PROVIDER/
+    CURRENT_MODEL_NAMEという起動時固定値しか参照しないため）。
+    """
+    return model_label(CURRENT_PROVIDER, CURRENT_MODEL_NAME)
 
 
 model = _build_model()

@@ -242,20 +242,17 @@ def _format_invoke_error_message(e: Exception) -> str:
     return f"回答の生成に失敗しました。{cause}（詳細: {e}）"
 
 
-_PROVIDER_LABELS = {"anthropic": "Anthropic", "openai": "OpenAI"}
-
-
 def _show_provider_fallback_warning() -> None:
-    """Ollama（無料・ローカル）が使えず有料APIにフォールバックしている場合、起動直後に警告バナーを表示する。
+    """Ollama（無料・ローカル）が使えず有料APIに自動フォールバックした場合、起動直後に警告バナーを表示する。
 
-    ユーザーが気づかないうちに課金対象のAPIが使われ続けることを防ぐため、
-    setup.CURRENT_PROVIDERが"ollama"以外になっているスクリプト実行では毎回表示する。
-    フォールバック理由（reason）は長文になりうるため、警告本文は短く保ち、
-    st.captionで補足として分離することでサイドバーが縦に間延びするのを防ぐ。
+    ユーザーが自分の意思でUIから有料APIモデルへ切り替えた場合はこの限りではないため、
+    「一度も手動でモデルを切り替えていない（起動時の自動選択のまま）」場合にのみ表示する。
     """
+    if st.session_state.get("model_manually_selected"):
+        return
     if setup.CURRENT_PROVIDER == "ollama" or setup.CURRENT_PROVIDER is None:
         return
-    provider_label = _PROVIDER_LABELS.get(setup.CURRENT_PROVIDER, setup.CURRENT_PROVIDER)
+    provider_label = setup.PROVIDER_LABELS.get(setup.CURRENT_PROVIDER, setup.CURRENT_PROVIDER)
     st.warning(f"有料API（{provider_label}）を使用中です（Ollama利用不可）", icon="⚠️")
     reason = setup.CURRENT_PROVIDER_FALLBACK_REASON
     if reason:
@@ -270,7 +267,7 @@ def _build_agent_safely(thread_id: str):
     クラッシュさせずエラー表示に留める。失敗時はNoneを返す。
     """
     try:
-        return build_agent(thread_id)
+        return build_agent(thread_id, chat_model=st.session_state.get("chat_model"))
     except Exception as e:
         st.error(f"RAGエージェントの初期化に失敗しました。時間をおいて再度お試しください。（詳細: {e}）")
         return None
@@ -650,6 +647,63 @@ def _render_regenerate_button(index: int) -> None:
         st.rerun()
 
 
+def _model_switcher_key(model: dict) -> tuple:
+    """モデル切替の選択肢照合用キー。Ollamaのタグ付き/タグなし表記のゆれ
+    （例: "llama3.1" と "llama3.1:latest"）を同一モデルとして扱うため、
+    ollamaに限りタグ部分を取り除いてから比較する。
+    """
+    name = model["model"]
+    if model["provider"] == "ollama" and name:
+        name = name.split(":", 1)[0]
+    return (model["provider"], name)
+
+
+def _render_model_switcher() -> None:
+    """入力欄の直上に、使用するLLMモデルを切り替える小さなセレクターを表示する。
+
+    APIキー未設定のプロバイダはsetup.list_available_models()の時点で除外されているため、
+    ここでは一覧に出てきたものをそのままselectboxの選択肢にするだけでよい。
+    現在のモデルが一覧に見つからない場合、selectboxをindex=Noneのプレースホルダー状態で
+    表示する。indexを0番目にフォールバックさせると、ユーザーが何も操作していなくても
+    「選択が変わった」ように見えてしまい、意図しないモデル切替が起きるため。
+    """
+    available_models = setup.list_available_models()
+    if not available_models:
+        return
+
+    current_key = _model_switcher_key(
+        {"provider": st.session_state.selected_provider, "model": st.session_state.selected_model_name}
+    )
+    matched_index = next(
+        (i for i, m in enumerate(available_models) if _model_switcher_key(m) == current_key),
+        None,
+    )
+
+    with st.popover("🤖 モデルを切り替え"):
+        if matched_index is None:
+            current_label = setup.model_label(st.session_state.selected_provider, st.session_state.selected_model_name)
+            st.caption(f"現在使用中: {current_label}（一覧に見つかりません）")
+        selected_model = st.selectbox(
+            "使用するモデル",
+            options=available_models,
+            format_func=lambda m: f"{setup.PROVIDER_LABELS.get(m['provider'], m['provider'])}: {m['model']}",
+            index=matched_index,
+            key="model_switcher_select",
+        )
+        if selected_model is None:
+            return
+        if matched_index is not None and selected_model == available_models[matched_index]:
+            return
+
+        with st.spinner("モデルを切り替え中..."):
+            st.session_state.chat_model = setup.build_chat_model(selected_model["provider"], selected_model["model"])
+            st.session_state.selected_provider = selected_model["provider"]
+            st.session_state.selected_model_name = selected_model["model"]
+            st.session_state.model_manually_selected = True
+            st.session_state.agent = _build_agent_safely(st.session_state.thread_id)
+        st.rerun()
+
+
 def _switch_thread(thread_id: str) -> None:
     """選択された過去スレッドに切り替え、そのスレッドの会話履歴をチャット画面に復元する。"""
     st.session_state.thread_id = thread_id
@@ -667,6 +721,13 @@ def _switch_thread(thread_id: str) -> None:
 
 if "thread_id" not in st.session_state:
     st.session_state.thread_id = new_thread_id()
+
+if "chat_model" not in st.session_state:
+    # 初期値は起動時にsetup._build_model()が自動選択したモデルをそのまま使う。
+    # ユーザーがUIから切り替えるまではこの状態のままにする。
+    st.session_state.selected_provider = setup.CURRENT_PROVIDER
+    st.session_state.selected_model_name = setup.CURRENT_MODEL_NAME
+    st.session_state.chat_model = setup.model
 
 # Streamlitは操作のたびにスクリプト全体を再実行する仕様なので、軽量シグネチャ
 # （ファイル数+最新mtime、内容は読まない）で前回値と比較し、data/の変更
@@ -712,7 +773,8 @@ with st.sidebar:
     if "_thread_title_saved_message" in st.session_state:
         st.toast(st.session_state.pop("_thread_title_saved_message"), icon="✅")
 
-    st.caption(f"🤖 使用中のモデル: {setup.current_model_label()}")
+    current_label = setup.model_label(st.session_state.selected_provider, st.session_state.selected_model_name)
+    st.caption(f"🤖 使用中のモデル: {current_label}")
     _show_provider_fallback_warning()
 
     if st.button("🆕 新しい会話を始める", use_container_width=True):
@@ -941,6 +1003,8 @@ if st.session_state.messages and len(_windowed_history(st.session_state.messages
     # ユーザーが実際に着地する入力欄直上に表示し、静的な導入文（st.caption）と混同されない
     # よう視覚的に区別できるst.infoを使う。
     st.info("会話が長くなったため、古いやりとりの一部はAIの参照対象から外れています。")
+
+_render_model_switcher()
 
 user_input = st.chat_input("資料について気になることを聞いてみましょう")
 
