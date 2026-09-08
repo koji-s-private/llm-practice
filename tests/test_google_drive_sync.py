@@ -5,6 +5,8 @@ Driveサービスクライアントに monkeypatch して、ミラー処理（ex
 スキップ・削除検知）だけを検証する（tests/test_ingest.py の fake_env フィクスチャに倣う）。
 """
 
+import logging
+
 import pytest
 
 import google_drive_sync
@@ -251,3 +253,116 @@ def test_dest_path_for_rejects_absolute_path_override(fake_env, tmp_path):
     dest_path = google_drive_sync._dest_path_for(drive_file)
 
     assert dest_path is None or dest_path.resolve().parent == drive_dir.resolve()
+
+
+def test_multiple_distinct_files_use_plain_filenames(fake_env, monkeypatch):
+    """同名衝突が無ければ、従来通り素のファイル名でダウンロードされる（回帰確認）。"""
+    drive_dir = fake_env
+    drive_files = [
+        {"id": "pdf1", "name": "a.pdf", "mimeType": "application/pdf"},
+        {"id": "pdf2", "name": "b.pdf", "mimeType": "application/pdf"},
+    ]
+    _use_fake_service(monkeypatch, drive_files, media_contents={"pdf1": b"a-bytes", "pdf2": b"b-bytes"})
+
+    result = google_drive_sync.sync_google_drive_files(verbose=False)
+
+    assert sorted(result["added"]) == ["a.pdf", "b.pdf"]
+    assert (drive_dir / "a.pdf").read_bytes() == b"a-bytes"
+    assert (drive_dir / "b.pdf").read_bytes() == b"b-bytes"
+
+
+def test_duplicate_names_are_disambiguated_and_both_saved(fake_env, monkeypatch):
+    """同一フォルダ内に同名（拡張子込みで完全一致）ファイルが2件あっても、両方が別名で残る。"""
+    drive_dir = fake_env
+    drive_files = [
+        {"id": "aaaaaaaa1111", "name": "report.pdf", "mimeType": "application/pdf"},
+        {"id": "bbbbbbbb2222", "name": "report.pdf", "mimeType": "application/pdf"},
+    ]
+    _use_fake_service(
+        monkeypatch,
+        drive_files,
+        media_contents={"aaaaaaaa1111": b"content-A", "bbbbbbbb2222": b"content-B"},
+    )
+
+    result = google_drive_sync.sync_google_drive_files(verbose=False)
+
+    expected_names = {"report_aaaaaaaa.pdf", "report_bbbbbbbb.pdf"}
+    assert set(result["added"]) == expected_names
+    # 素の名前（識別子なし）のファイルは作られない
+    assert not (drive_dir / "report.pdf").exists()
+    assert (drive_dir / "report_aaaaaaaa.pdf").read_bytes() == b"content-A"
+    assert (drive_dir / "report_bbbbbbbb.pdf").read_bytes() == b"content-B"
+
+
+def test_three_way_duplicate_names_are_all_disambiguated_and_saved(fake_env, monkeypatch):
+    """3件以上の同名ファイルが存在しても、全件が別名で欠落なく保存される。"""
+    drive_dir = fake_env
+    drive_files = [
+        {"id": "aaaaaaaa1111", "name": "dup.txt", "mimeType": "text/plain"},
+        {"id": "bbbbbbbb2222", "name": "dup.txt", "mimeType": "text/plain"},
+        {"id": "cccccccc3333", "name": "dup.txt", "mimeType": "text/plain"},
+    ]
+    media_contents = {
+        "aaaaaaaa1111": b"content-A",
+        "bbbbbbbb2222": b"content-B",
+        "cccccccc3333": b"content-C",
+    }
+    _use_fake_service(monkeypatch, drive_files, media_contents=media_contents)
+
+    result = google_drive_sync.sync_google_drive_files(verbose=False)
+
+    expected_names = {"dup_aaaaaaaa.txt", "dup_bbbbbbbb.txt", "dup_cccccccc.txt"}
+    assert set(result["added"]) == expected_names
+    assert (drive_dir / "dup_aaaaaaaa.txt").read_bytes() == b"content-A"
+    assert (drive_dir / "dup_bbbbbbbb.txt").read_bytes() == b"content-B"
+    assert (drive_dir / "dup_cccccccc.txt").read_bytes() == b"content-C"
+
+
+def test_duplicate_name_collision_logs_warning(fake_env, monkeypatch, caplog):
+    """同名衝突を検出した際に警告ログが出力されることを確認する。"""
+    drive_files = [
+        {"id": "aaaaaaaa1111", "name": "report.pdf", "mimeType": "application/pdf"},
+        {"id": "bbbbbbbb2222", "name": "report.pdf", "mimeType": "application/pdf"},
+    ]
+    _use_fake_service(
+        monkeypatch,
+        drive_files,
+        media_contents={"aaaaaaaa1111": b"content-A", "bbbbbbbb2222": b"content-B"},
+    )
+
+    with caplog.at_level(logging.WARNING, logger="google_drive_sync"):
+        google_drive_sync.sync_google_drive_files(verbose=False)
+
+    warnings = [r for r in caplog.records if r.levelname == "WARNING"]
+    assert any("report.pdf" in r.getMessage() for r in warnings)
+
+
+def test_duplicate_resolved_next_sync_reverts_to_plain_name_and_removes_stale_copy(fake_env, monkeypatch):
+    """次回同期で重複の片方がDrive側から削除された場合、識別子付きの旧ファイルはstaleとして
+    削除され、残った方が素のファイル名で保存されることを確認する。"""
+    drive_dir = fake_env
+    drive_files = [
+        {"id": "aaaaaaaa1111", "name": "report.pdf", "mimeType": "application/pdf"},
+        {"id": "bbbbbbbb2222", "name": "report.pdf", "mimeType": "application/pdf"},
+    ]
+    _use_fake_service(
+        monkeypatch,
+        drive_files,
+        media_contents={"aaaaaaaa1111": b"content-A", "bbbbbbbb2222": b"content-B"},
+    )
+    google_drive_sync.sync_google_drive_files(verbose=False)
+    assert (drive_dir / "report_aaaaaaaa.pdf").exists()
+    assert (drive_dir / "report_bbbbbbbb.pdf").exists()
+
+    # Drive側から bbbbbbbb2222 が削除され、衝突が解消された状態を模擬する
+    _use_fake_service(monkeypatch, [drive_files[0]], media_contents={"aaaaaaaa1111": b"content-A"})
+    result = google_drive_sync.sync_google_drive_files(verbose=False)
+
+    # 生存しているファイル(aaaaaaaa1111)は識別子無しの新しいdest_pathで再ダウンロードされるため、
+    # 識別子付きの旧ファイル2つ（生存側・消滅側の両方）はどちらも「Drive上の現状と一致しないもの」
+    # としてstale削除される。内容自体はreport.pdfとして生き残るためデータ欠落ではない。
+    assert sorted(result["removed"]) == ["report_aaaaaaaa.pdf", "report_bbbbbbbb.pdf"]
+    assert "report.pdf" in result["added"]
+    assert not (drive_dir / "report_aaaaaaaa.pdf").exists()
+    assert not (drive_dir / "report_bbbbbbbb.pdf").exists()
+    assert (drive_dir / "report.pdf").read_bytes() == b"content-A"
