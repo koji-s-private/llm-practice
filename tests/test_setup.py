@@ -532,3 +532,214 @@ def test_current_model_label_shows_none_literal_when_model_name_is_none(monkeypa
     monkeypatch.setattr(setup, "CURRENT_MODEL_NAME", None)
 
     assert setup.current_model_label() == "Ollama (None)"
+
+
+# --- list_available_models()（モデル切替UIの選択肢一覧、Issue #236） ---
+
+
+def _patch_ollama_names(monkeypatch, names):
+    monkeypatch.setattr(setup, "_ollama_pulled_model_names", lambda: names)
+
+
+def test_list_available_models_reflects_ollama_pulled_models(monkeypatch):
+    """正常系: Ollamaのpull済みモデル一覧が、provider="ollama"の要素としてそのまま反映される。"""
+    _patch_ollama_names(monkeypatch, {"llama3.1:latest", "mistral:latest"})
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+
+    models = setup.list_available_models()
+
+    assert models == [
+        {"provider": "ollama", "model": "llama3.1:latest"},
+        {"provider": "ollama", "model": "mistral:latest"},
+    ]
+
+
+def test_list_available_models_sorts_ollama_models_by_name(monkeypatch):
+    """境界値: pull済みモデルの取得順序に関わらず、名前順にソートされて返る。"""
+    _patch_ollama_names(monkeypatch, {"zzz-model:latest", "aaa-model:latest"})
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+
+    models = setup.list_available_models()
+
+    assert [m["model"] for m in models] == ["aaa-model:latest", "zzz-model:latest"]
+
+
+def test_list_available_models_empty_when_no_ollama_models_and_no_keys(monkeypatch):
+    """異常系/課金ガード: Ollamaにpull済みモデルが無く、APIキーも未設定の場合は空リスト。"""
+    _patch_ollama_names(monkeypatch, set())
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+
+    assert setup.list_available_models() == []
+
+
+def test_list_available_models_excludes_anthropic_without_key(monkeypatch):
+    """課金ガード: ANTHROPIC_API_KEY未設定の場合、Anthropicの選択肢は一切出さない。"""
+    _patch_ollama_names(monkeypatch, set())
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+
+    models = setup.list_available_models()
+
+    assert all(m["provider"] != "anthropic" for m in models)
+
+
+def test_list_available_models_excludes_openai_without_key(monkeypatch):
+    """課金ガード: OPENAI_API_KEY未設定の場合、OpenAIの選択肢は一切出さない。"""
+    _patch_ollama_names(monkeypatch, set())
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+
+    models = setup.list_available_models()
+
+    assert all(m["provider"] != "openai" for m in models)
+
+
+def test_list_available_models_includes_anthropic_when_key_set(monkeypatch):
+    """正常系: ANTHROPIC_API_KEYが設定されている場合のみAnthropicの選択肢が1件追加される。"""
+    _patch_ollama_names(monkeypatch, set())
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "test-dummy-key")
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+
+    models = setup.list_available_models()
+
+    assert models == [{"provider": "anthropic", "model": setup.ANTHROPIC_MODEL}]
+
+
+def test_list_available_models_includes_openai_when_key_set(monkeypatch):
+    """正常系: OPENAI_API_KEYが設定されている場合のみOpenAIの選択肢が1件追加される。"""
+    _patch_ollama_names(monkeypatch, set())
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    monkeypatch.setenv("OPENAI_API_KEY", "test-dummy-key")
+
+    models = setup.list_available_models()
+
+    assert models == [{"provider": "openai", "model": setup.OPENAI_MODEL}]
+
+
+def test_list_available_models_includes_ollama_and_both_paid_apis_together(monkeypatch):
+    """正常系: Ollamaのpull済みモデルと両方のAPIキーが揃っている場合、
+    Ollama（名前順） → Anthropic → OpenAI の順で全件反映される。"""
+    _patch_ollama_names(monkeypatch, {"llama3.1:latest"})
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "test-dummy-key")
+    monkeypatch.setenv("OPENAI_API_KEY", "test-dummy-key")
+
+    models = setup.list_available_models()
+
+    assert models == [
+        {"provider": "ollama", "model": "llama3.1:latest"},
+        {"provider": "anthropic", "model": setup.ANTHROPIC_MODEL},
+        {"provider": "openai", "model": setup.OPENAI_MODEL},
+    ]
+
+
+def test_ollama_pulled_model_names_returns_empty_set_when_fetch_fails(monkeypatch):
+    """異常系: Ollamaサーバーに到達できない場合、一覧表示用途では空集合にフォールバックする
+    （_ollama_model_pulled()の安全側判定=Trueとは異なり、一覧表示は「0件」として扱う）。"""
+    monkeypatch.setattr(setup, "_fetch_ollama_pulled_model_names", lambda: None)
+
+    assert setup._ollama_pulled_model_names() == set()
+
+
+def test_ollama_pulled_model_names_returns_actual_set_on_success(monkeypatch):
+    monkeypatch.setattr(setup, "_fetch_ollama_pulled_model_names", lambda: {"llama3.1:latest"})
+
+    assert setup._ollama_pulled_model_names() == {"llama3.1:latest"}
+
+
+# --- build_chat_model()（モデル切替UIから実際にチャットモデルを構築する） ---
+
+
+def test_build_chat_model_ollama_passes_expected_args(monkeypatch):
+    calls = []
+    monkeypatch.setattr(setup, "init_chat_model", lambda *a, **k: calls.append((a, k)) or object())
+
+    setup.build_chat_model("ollama", "llama3.1")
+
+    assert len(calls) == 1
+    args, kwargs = calls[0]
+    assert args[0] == "llama3.1"
+    assert kwargs["model_provider"] == "ollama"
+    assert kwargs["num_ctx"] == setup.OLLAMA_NUM_CTX
+
+
+def test_build_chat_model_anthropic_passes_expected_args(monkeypatch):
+    calls = []
+    monkeypatch.setattr(setup, "init_chat_model", lambda *a, **k: calls.append((a, k)) or object())
+
+    setup.build_chat_model("anthropic", "claude-sonnet-5")
+
+    assert len(calls) == 1
+    args, kwargs = calls[0]
+    assert args[0] == "claude-sonnet-5"
+    assert kwargs["model_provider"] == "anthropic"
+    assert "num_ctx" not in kwargs
+
+
+def test_build_chat_model_openai_passes_expected_args(monkeypatch):
+    calls = []
+    monkeypatch.setattr(setup, "init_chat_model", lambda *a, **k: calls.append((a, k)) or object())
+
+    setup.build_chat_model("openai", "gpt-5-chat-latest")
+
+    assert len(calls) == 1
+    args, kwargs = calls[0]
+    assert args[0] == "gpt-5-chat-latest"
+    assert kwargs["model_provider"] == "openai"
+    assert "num_ctx" not in kwargs
+
+
+def test_build_chat_model_unknown_provider_raises_value_error():
+    """異常系: 未対応のプロバイダ名を指定するとValueErrorを送出する。"""
+    with pytest.raises(ValueError) as exc_info:
+        setup.build_chat_model("unknown-provider", "some-model")
+
+    assert "unknown-provider" in str(exc_info.value)
+
+
+def test_build_chat_model_returns_init_chat_model_result(monkeypatch):
+    """正常系: build_chat_model()はinit_chat_model()の戻り値をそのまま返す。"""
+    sentinel = object()
+    monkeypatch.setattr(setup, "init_chat_model", lambda *a, **k: sentinel)
+
+    assert setup.build_chat_model("ollama", "llama3.1") is sentinel
+
+
+# --- model_label() / PROVIDER_LABELS（表示ラベルの整形、Issue #236） ---
+
+
+def test_provider_labels_constant_has_expected_entries():
+    assert setup.PROVIDER_LABELS == {
+        "ollama": "Ollama",
+        "anthropic": "Anthropic",
+        "openai": "OpenAI",
+    }
+
+
+def test_model_label_ollama():
+    assert setup.model_label("ollama", "llama3.1") == "Ollama (llama3.1)"
+
+
+def test_model_label_anthropic():
+    assert setup.model_label("anthropic", "claude-sonnet-5") == "Anthropic (claude-sonnet-5)"
+
+
+def test_model_label_openai():
+    assert setup.model_label("openai", "gpt-5-chat-latest") == "OpenAI (gpt-5-chat-latest)"
+
+
+def test_model_label_unknown_provider_falls_back_to_raw_string():
+    """異常系: 未知のprovider文字列でもクラッシュせず、生の文字列をそのまま使う。"""
+    assert setup.model_label("unknown-provider", "some-model") == "unknown-provider (some-model)"
+
+
+def test_model_label_none_provider_falls_back_to_fumei():
+    """境界値: providerがNoneの場合は「不明」というフォールバック表示になる。"""
+    assert setup.model_label(None, "some-model") == "不明 (some-model)"
+
+
+def test_model_label_none_model_name_shows_none_literal():
+    """境界値: model_nameがNoneの場合は例外を送出せず"None"という文字列がそのまま表示される。"""
+    assert setup.model_label("ollama", None) == "Ollama (None)"

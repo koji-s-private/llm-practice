@@ -153,7 +153,7 @@ def _patch_light_dependencies(monkeypatch):
     """
     monkeypatch.setattr(ingest, "sync_data_dir", _ok_sync)
     monkeypatch.setattr(ingest, "add_single_conversation_file", lambda path: "added")
-    monkeypatch.setattr(rag_chain, "build_agent", lambda thread_id=None: _FakeAgent())
+    monkeypatch.setattr(rag_chain, "build_agent", lambda thread_id=None, chat_model=None: _FakeAgent())
     monkeypatch.setattr(memory, "new_thread_id", lambda: "thread-test")
     monkeypatch.setattr(memory, "conversation_count", lambda thread_id: 0)
     monkeypatch.setattr(memory, "save_conversation", lambda *a, **k: _FAKE_SAVED_CONVERSATION_PATH)
@@ -625,7 +625,7 @@ def test_chat_streaming_sends_windowed_history_to_agent(monkeypatch):
 
     monkeypatch.setattr(setup, "CURRENT_PROVIDER", "ollama")
     fake_agent = _FakeAgent(answer="短い回答")
-    monkeypatch.setattr(rag_chain, "build_agent", lambda thread_id=None: fake_agent)
+    monkeypatch.setattr(rag_chain, "build_agent", lambda thread_id=None, chat_model=None: fake_agent)
 
     at = _run_app()
     # 回答は固定の短文("短い回答")のため、質問側の長さだけで
@@ -800,7 +800,7 @@ def test_history_windowing_notice_hidden_when_under_budget(monkeypatch):
     """正常系: 短い会話（トークン予算内）ではウィンドウイングが発生しないため、
     「古いやりとりの一部はAIの参照対象から外れています」という通知は表示されない。"""
     fake_agent = _FakeAgent(answer="短い回答")
-    monkeypatch.setattr(rag_chain, "build_agent", lambda thread_id=None: fake_agent)
+    monkeypatch.setattr(rag_chain, "build_agent", lambda thread_id=None, chat_model=None: fake_agent)
 
     at = _run_app()
     at.chat_input[0].set_value("短い質問です").run()
@@ -820,7 +820,7 @@ def test_history_windowing_notice_shown_when_over_budget(monkeypatch):
 
     monkeypatch.setattr(setup, "CURRENT_PROVIDER", "ollama")
     fake_agent = _FakeAgent(answer="短い回答")
-    monkeypatch.setattr(rag_chain, "build_agent", lambda thread_id=None: fake_agent)
+    monkeypatch.setattr(rag_chain, "build_agent", lambda thread_id=None, chat_model=None: fake_agent)
 
     at = _run_app()
     long_question = "あ" * 500
@@ -857,7 +857,7 @@ def test_history_windowing_notice_absent_when_no_messages(monkeypatch):
 def test_chat_success_appends_history_and_shows_answer(monkeypatch):
     """正常系: agent.invoke() が成功すれば回答が表示され、会話履歴にも追加される。"""
     fake_agent = _FakeAgent(answer="これが回答です")
-    monkeypatch.setattr(rag_chain, "build_agent", lambda thread_id=None: fake_agent)
+    monkeypatch.setattr(rag_chain, "build_agent", lambda thread_id=None, chat_model=None: fake_agent)
 
     at = _run_app()
     at.chat_input[0].set_value("質問です").run()
@@ -878,7 +878,7 @@ def test_chat_invoke_failure_shows_ollama_message_when_provider_is_ollama(monkey
 
     monkeypatch.setattr(setup, "CURRENT_PROVIDER", "ollama")
     fake_agent = _FakeAgent(exc=ConnectionError("connection refused"))
-    monkeypatch.setattr(rag_chain, "build_agent", lambda thread_id=None: fake_agent)
+    monkeypatch.setattr(rag_chain, "build_agent", lambda thread_id=None, chat_model=None: fake_agent)
 
     at = _run_app()
     at.chat_input[0].set_value("質問です").run()
@@ -899,7 +899,7 @@ def test_chat_invoke_failure_shows_api_message_when_provider_is_cloud(monkeypatc
 
     monkeypatch.setattr(setup, "CURRENT_PROVIDER", provider)
     fake_agent = _FakeAgent(exc=RuntimeError("invalid api key"))
-    monkeypatch.setattr(rag_chain, "build_agent", lambda thread_id=None: fake_agent)
+    monkeypatch.setattr(rag_chain, "build_agent", lambda thread_id=None, chat_model=None: fake_agent)
 
     at = _run_app()
     at.chat_input[0].set_value("質問です").run()
@@ -921,7 +921,7 @@ def test_chat_invoke_failure_shows_model_not_found_message_when_provider_is_olla
 
     monkeypatch.setattr(setup, "CURRENT_PROVIDER", "ollama")
     fake_agent = _FakeAgent(exc=RuntimeError("model 'llama3.1' not found, try pulling it first"))
-    monkeypatch.setattr(rag_chain, "build_agent", lambda thread_id=None: fake_agent)
+    monkeypatch.setattr(rag_chain, "build_agent", lambda thread_id=None, chat_model=None: fake_agent)
 
     at = _run_app()
     at.chat_input[0].set_value("質問です").run()
@@ -941,7 +941,7 @@ def test_chat_invoke_failure_model_not_found_detection_is_case_insensitive(monke
 
     monkeypatch.setattr(setup, "CURRENT_PROVIDER", "ollama")
     fake_agent = _FakeAgent(exc=RuntimeError("Model 'llama3.1' NOT FOUND"))
-    monkeypatch.setattr(rag_chain, "build_agent", lambda thread_id=None: fake_agent)
+    monkeypatch.setattr(rag_chain, "build_agent", lambda thread_id=None, chat_model=None: fake_agent)
 
     at = _run_app()
     at.chat_input[0].set_value("質問です").run()
@@ -966,7 +966,7 @@ def test_chat_invoke_failure_requires_both_keywords_for_model_not_found_message(
 
     monkeypatch.setattr(setup, "CURRENT_PROVIDER", "ollama")
     fake_agent = _FakeAgent(exc=RuntimeError(exc_message))
-    monkeypatch.setattr(rag_chain, "build_agent", lambda thread_id=None: fake_agent)
+    monkeypatch.setattr(rag_chain, "build_agent", lambda thread_id=None, chat_model=None: fake_agent)
 
     at = _run_app()
     at.chat_input[0].set_value("質問です").run()
@@ -986,7 +986,7 @@ def test_chat_invoke_failure_shows_generic_fallback_when_provider_is_none(monkey
 
     monkeypatch.setattr(setup, "CURRENT_PROVIDER", None)
     fake_agent = _FakeAgent(exc=RuntimeError("unexpected"))
-    monkeypatch.setattr(rag_chain, "build_agent", lambda thread_id=None: fake_agent)
+    monkeypatch.setattr(rag_chain, "build_agent", lambda thread_id=None, chat_model=None: fake_agent)
 
     at = _run_app()
     at.chat_input[0].set_value("質問です").run()
@@ -1004,7 +1004,7 @@ def test_chat_invoke_failure_skips_auto_knowledge_save(monkeypatch):
     """異常系境界値: invoke失敗時は save_conversation が呼ばれない
     （＝data/conversations/への保存自体が発生しないため、後続の同期対象にもならない）。"""
     fake_agent = _FakeAgent(exc=RuntimeError("boom"))
-    monkeypatch.setattr(rag_chain, "build_agent", lambda thread_id=None: fake_agent)
+    monkeypatch.setattr(rag_chain, "build_agent", lambda thread_id=None, chat_model=None: fake_agent)
 
     save_calls = []
     monkeypatch.setattr(memory, "save_conversation", lambda *a, **k: save_calls.append(a))
@@ -1033,7 +1033,7 @@ def test_chat_streaming_chunks_are_concatenated_into_history(monkeypatch):
     """正常系: agent.stream()が回答を複数チャンクに分けて返しても、
     st.write_streamで正しく連結された1つの回答として会話履歴に保存される。"""
     fake_agent = _FakeAgent(chunks=["これ", "が", "分割された回答です"])
-    monkeypatch.setattr(rag_chain, "build_agent", lambda thread_id=None: fake_agent)
+    monkeypatch.setattr(rag_chain, "build_agent", lambda thread_id=None, chat_model=None: fake_agent)
 
     at = _run_app()
     at.chat_input[0].set_value("質問です").run()
@@ -1050,7 +1050,7 @@ def test_chat_streaming_clears_searching_placeholder_after_first_token(monkeypat
     """正常系: 最初の回答トークンが届いた時点で「🔍 検索して回答を考え中...」の
     プレースホルダーが消え、最終的な画面には残らない。"""
     fake_agent = _FakeAgent(answer="回答")
-    monkeypatch.setattr(rag_chain, "build_agent", lambda thread_id=None: fake_agent)
+    monkeypatch.setattr(rag_chain, "build_agent", lambda thread_id=None, chat_model=None: fake_agent)
 
     at = _run_app()
     at.chat_input[0].set_value("質問です").run()
@@ -1071,7 +1071,7 @@ def test_chat_streaming_anthropic_content_blocks_are_extracted_as_text(monkeypat
             [{"type": "text", "text": "Anthropic形式の回答です"}],
         ]
     )
-    monkeypatch.setattr(rag_chain, "build_agent", lambda thread_id=None: fake_agent)
+    monkeypatch.setattr(rag_chain, "build_agent", lambda thread_id=None, chat_model=None: fake_agent)
 
     at = _run_app()
     at.chat_input[0].set_value("質問です").run()
@@ -1088,7 +1088,7 @@ def test_chat_streaming_exception_clears_partial_answer_from_screen(monkeypatch)
     途中まで描画された回答テキストが画面（markdown要素）に残らず、
     st.errorのみが表示される。"""
     fake_agent = _FakeAgent(chunks=["途中まで表示された回答"], exc=RuntimeError("stream broken"))
-    monkeypatch.setattr(rag_chain, "build_agent", lambda thread_id=None: fake_agent)
+    monkeypatch.setattr(rag_chain, "build_agent", lambda thread_id=None, chat_model=None: fake_agent)
 
     at = _run_app()
     at.chat_input[0].set_value("質問です").run()
@@ -1103,7 +1103,7 @@ def test_chat_streaming_tool_message_artifact_becomes_sources_expander(monkeypat
     expanderとして正しく表示される（一括invokeからstreamに変わっても
     参照元表示のロジックが壊れていないことの回帰確認）。"""
     fake_agent = _FakeAgentWithSources(answer="文書に基づく回答", artifact=[_FakeSourceDoc()])
-    monkeypatch.setattr(rag_chain, "build_agent", lambda thread_id=None: fake_agent)
+    monkeypatch.setattr(rag_chain, "build_agent", lambda thread_id=None, chat_model=None: fake_agent)
 
     at = _run_app()
     at.chat_input[0].set_value("質問です").run()
@@ -1119,7 +1119,7 @@ def test_chat_streaming_sources_expander_label_shows_count(monkeypatch):
     doc_a = _FakeSourceDoc(page_content="Aの内容", metadata={"source": "a.txt"})
     doc_b = _FakeSourceDoc(page_content="Bの内容", metadata={"source": "b.txt"})
     fake_agent = _FakeAgentWithSources(answer="複数件ヒットした回答", artifact=[doc_a, doc_b])
-    monkeypatch.setattr(rag_chain, "build_agent", lambda thread_id=None: fake_agent)
+    monkeypatch.setattr(rag_chain, "build_agent", lambda thread_id=None, chat_model=None: fake_agent)
 
     at = _run_app()
     at.chat_input[0].set_value("質問です").run()
@@ -1136,7 +1136,7 @@ def test_chat_streaming_answer_inline_citation_numbers_match_source_order(monkey
     doc_a = _FakeSourceDoc(page_content="Aの内容", metadata={"source": "a.txt"})
     doc_b = _FakeSourceDoc(page_content="Bの内容", metadata={"source": "b.txt"})
     fake_agent = _FakeAgentWithSources(answer="Aの情報です[1]。Bの情報です[2]。", artifact=[doc_a, doc_b])
-    monkeypatch.setattr(rag_chain, "build_agent", lambda thread_id=None: fake_agent)
+    monkeypatch.setattr(rag_chain, "build_agent", lambda thread_id=None, chat_model=None: fake_agent)
 
     at = _run_app()
     at.chat_input[0].set_value("質問です").run()
@@ -1155,7 +1155,7 @@ def test_chat_streaming_uses_citation_number_metadata_instead_of_position(monkey
     位置と値がずれうるため、位置ベースのenumerateにフォールバックしてはいけない）。"""
     doc = _FakeSourceDoc(page_content="後続ターンの内容", metadata={"source": "a.txt", "citation_number": 5})
     fake_agent = _FakeAgentWithSources(answer="内容です[5]。", artifact=[doc])
-    monkeypatch.setattr(rag_chain, "build_agent", lambda thread_id=None: fake_agent)
+    monkeypatch.setattr(rag_chain, "build_agent", lambda thread_id=None, chat_model=None: fake_agent)
 
     at = _run_app()
     at.chat_input[0].set_value("質問です").run()
@@ -1178,7 +1178,7 @@ def test_chat_streaming_citation_numbers_persist_across_multiple_tool_calls(monk
         answer="Aは[1]、Bは[2]、Cは[3]です。",
         artifacts=[[doc_a], [doc_b, doc_c]],
     )
-    monkeypatch.setattr(rag_chain, "build_agent", lambda thread_id=None: fake_agent)
+    monkeypatch.setattr(rag_chain, "build_agent", lambda thread_id=None, chat_model=None: fake_agent)
 
     at = _run_app()
     at.chat_input[0].set_value("質問です").run()
@@ -1203,7 +1203,7 @@ def test_chat_streaming_reuses_citation_number_for_duplicate_doc_across_tool_cal
         answer="Aは[1]、Bは[2]です。",
         artifacts=[[doc_a_call1], [doc_a_call2, doc_b]],
     )
-    monkeypatch.setattr(rag_chain, "build_agent", lambda thread_id=None: fake_agent)
+    monkeypatch.setattr(rag_chain, "build_agent", lambda thread_id=None, chat_model=None: fake_agent)
 
     at = _run_app()
     at.chat_input[0].set_value("質問です").run()
@@ -1220,7 +1220,7 @@ def test_chat_streaming_sources_expander_label_shows_singular_count(monkeypatch)
     """境界値: 参照元が1件のみの場合でも件数表示は複数形と同じ書式（1件）になる。"""
     doc_a = _FakeSourceDoc(page_content="Aの内容", metadata={"source": "a.txt"})
     fake_agent = _FakeAgentWithSources(answer="1件だけヒットした回答", artifact=[doc_a])
-    monkeypatch.setattr(rag_chain, "build_agent", lambda thread_id=None: fake_agent)
+    monkeypatch.setattr(rag_chain, "build_agent", lambda thread_id=None, chat_model=None: fake_agent)
 
     at = _run_app()
     at.chat_input[0].set_value("質問です").run()
@@ -1237,7 +1237,7 @@ def test_chat_streaming_source_items_rendered_in_bordered_containers(monkeypatch
     doc_a = _FakeSourceDoc(page_content="Aの内容", metadata={"source": "a.txt"})
     doc_b = _FakeSourceDoc(page_content="Bの内容", metadata={"source": "b.txt"})
     fake_agent = _FakeAgentWithSources(answer="複数件ヒットした回答", artifact=[doc_a, doc_b])
-    monkeypatch.setattr(rag_chain, "build_agent", lambda thread_id=None: fake_agent)
+    monkeypatch.setattr(rag_chain, "build_agent", lambda thread_id=None, chat_model=None: fake_agent)
 
     at = _run_app()
     at.chat_input[0].set_value("質問です").run()
@@ -1257,7 +1257,7 @@ def test_chat_streaming_source_item_shows_relevance_caption(monkeypatch):
     （例: "🟢 関連度: 高"）が表示される。"""
     doc_a = _FakeSourceDoc(page_content="Aの内容", metadata={"source": "a.txt", "distance_score": 0.1})
     fake_agent = _FakeAgentWithSources(answer="関連度付きの回答", artifact=[doc_a])
-    monkeypatch.setattr(rag_chain, "build_agent", lambda thread_id=None: fake_agent)
+    monkeypatch.setattr(rag_chain, "build_agent", lambda thread_id=None, chat_model=None: fake_agent)
 
     at = _run_app()
     at.chat_input[0].set_value("質問です").run()
@@ -1274,7 +1274,7 @@ def test_chat_streaming_source_item_hides_relevance_caption_when_score_missing(m
     では関連度キャプション自体が表示されない。"""
     doc_a = _FakeSourceDoc(page_content="Aの内容", metadata={"source": "a.txt"})
     fake_agent = _FakeAgentWithSources(answer="関連度なしの回答", artifact=[doc_a])
-    monkeypatch.setattr(rag_chain, "build_agent", lambda thread_id=None: fake_agent)
+    monkeypatch.setattr(rag_chain, "build_agent", lambda thread_id=None, chat_model=None: fake_agent)
 
     at = _run_app()
     at.chat_input[0].set_value("質問です").run()
@@ -1291,7 +1291,7 @@ def test_chat_streaming_multiple_source_items_show_distinct_relevance_tiers(monk
     doc_high = _FakeSourceDoc(page_content="高関連度の内容", metadata={"source": "high.txt", "distance_score": 0.2})
     doc_low = _FakeSourceDoc(page_content="低関連度の内容", metadata={"source": "low.txt", "distance_score": 1.2})
     fake_agent = _FakeAgentWithSources(answer="複数件の回答", artifact=[doc_high, doc_low])
-    monkeypatch.setattr(rag_chain, "build_agent", lambda thread_id=None: fake_agent)
+    monkeypatch.setattr(rag_chain, "build_agent", lambda thread_id=None, chat_model=None: fake_agent)
 
     at = _run_app()
     at.chat_input[0].set_value("質問です").run()
@@ -1314,7 +1314,7 @@ def test_chat_streaming_dedupes_sources_across_multiple_tool_calls(monkeypatch):
         answer="複数回検索した末の回答",
         artifacts=[[duplicated_doc_call1], [duplicated_doc_call2, unique_doc]],
     )
-    monkeypatch.setattr(rag_chain, "build_agent", lambda thread_id=None: fake_agent)
+    monkeypatch.setattr(rag_chain, "build_agent", lambda thread_id=None, chat_model=None: fake_agent)
 
     at = _run_app()
     at.chat_input[0].set_value("質問です").run()
@@ -1332,7 +1332,7 @@ def test_chat_streaming_no_expander_when_retrieve_context_never_called(monkeypat
     """境界値: retrieve_contextが1回も呼ばれずToolMessageが1件も届かない場合、
     sourcesは空のままとなり「参照した箇所を見る」expanderは表示されない。"""
     fake_agent = _FakeAgent(answer="一般知識のみによる回答")
-    monkeypatch.setattr(rag_chain, "build_agent", lambda thread_id=None: fake_agent)
+    monkeypatch.setattr(rag_chain, "build_agent", lambda thread_id=None, chat_model=None: fake_agent)
 
     at = _run_app()
     at.chat_input[0].set_value("質問です").run()
@@ -1351,7 +1351,7 @@ def test_chat_streaming_keeps_same_source_different_page_as_distinct(monkeypatch
         answer="複数ページを参照した回答",
         artifacts=[[page1_doc], [page2_doc]],
     )
-    monkeypatch.setattr(rag_chain, "build_agent", lambda thread_id=None: fake_agent)
+    monkeypatch.setattr(rag_chain, "build_agent", lambda thread_id=None, chat_model=None: fake_agent)
 
     at = _run_app()
     at.chat_input[0].set_value("質問です").run()
@@ -1375,7 +1375,7 @@ def test_chat_streaming_dedupes_partial_overlap_across_three_tool_calls(monkeypa
         answer="3回検索した末の回答",
         artifacts=[[doc_a], [doc_b, doc_a_dup], [doc_c, doc_b_dup]],
     )
-    monkeypatch.setattr(rag_chain, "build_agent", lambda thread_id=None: fake_agent)
+    monkeypatch.setattr(rag_chain, "build_agent", lambda thread_id=None, chat_model=None: fake_agent)
 
     at = _run_app()
     at.chat_input[0].set_value("質問です").run()
@@ -1398,7 +1398,7 @@ def test_chat_streaming_no_dedupe_when_all_sources_distinct(monkeypatch):
         answer="3回検索した末の回答",
         artifacts=[[doc_a], [doc_b], [doc_c]],
     )
-    monkeypatch.setattr(rag_chain, "build_agent", lambda thread_id=None: fake_agent)
+    monkeypatch.setattr(rag_chain, "build_agent", lambda thread_id=None, chat_model=None: fake_agent)
 
     at = _run_app()
     at.chat_input[0].set_value("質問です").run()
@@ -1424,7 +1424,7 @@ def test_chat_streaming_keeps_distinct_chunks_when_page_and_thread_id_both_missi
         answer="sample.txtを参照した回答",
         artifacts=[[chunk1, chunk2]],
     )
-    monkeypatch.setattr(rag_chain, "build_agent", lambda thread_id=None: fake_agent)
+    monkeypatch.setattr(rag_chain, "build_agent", lambda thread_id=None, chat_model=None: fake_agent)
 
     at = _run_app()
     at.chat_input[0].set_value("質問です").run()
@@ -1442,7 +1442,7 @@ def test_chat_streaming_exception_after_partial_chunks_skips_history_and_save(mo
     部分的な回答が会話履歴に残らず、save_conversationも呼ばれない
     （answer=Noneのまま後続処理がスキップされる従来仕様の回帰確認）。"""
     fake_agent = _FakeAgent(chunks=["途中まで", "の回答"], exc=RuntimeError("stream broken"))
-    monkeypatch.setattr(rag_chain, "build_agent", lambda thread_id=None: fake_agent)
+    monkeypatch.setattr(rag_chain, "build_agent", lambda thread_id=None, chat_model=None: fake_agent)
 
     save_calls = []
     monkeypatch.setattr(memory, "save_conversation", lambda *a, **k: save_calls.append(a))
@@ -1481,7 +1481,7 @@ def test_chat_streaming_shows_cancel_button_with_correct_key(monkeypatch):
     中断される挙動）はAppTestが完全同期実行のため再現できないが、ボタンが
     想定通りのkeyで生成されていること自体は button() 呼び出しのフックで確認できる。"""
     fake_agent = _FakeAgent(answer="回答")
-    monkeypatch.setattr(rag_chain, "build_agent", lambda thread_id=None: fake_agent)
+    monkeypatch.setattr(rag_chain, "build_agent", lambda thread_id=None, chat_model=None: fake_agent)
     button_calls = _track_button_calls(monkeypatch)
 
     at = _run_app()
@@ -1496,7 +1496,7 @@ def test_chat_streaming_success_clears_cancel_button(monkeypatch):
     """正常系: 回答生成が正常に完了すると、キャンセルボタンを描画した
     プレースホルダーに対して empty() が呼ばれ、ボタンが画面から消える。"""
     fake_agent = _FakeAgent(answer="回答")
-    monkeypatch.setattr(rag_chain, "build_agent", lambda thread_id=None: fake_agent)
+    monkeypatch.setattr(rag_chain, "build_agent", lambda thread_id=None, chat_model=None: fake_agent)
     button_calls = _track_button_calls(monkeypatch)
 
     original_empty = DeltaGenerator.empty
@@ -1520,7 +1520,7 @@ def test_chat_streaming_exception_also_clears_cancel_button(monkeypatch):
     """異常系: ストリーム中に例外が発生した場合も、except節でキャンセルボタンの
     プレースホルダーが empty() され、押しても意味のない状態のボタンが残らない。"""
     fake_agent = _FakeAgent(chunks=["途中まで"], exc=RuntimeError("stream broken"))
-    monkeypatch.setattr(rag_chain, "build_agent", lambda thread_id=None: fake_agent)
+    monkeypatch.setattr(rag_chain, "build_agent", lambda thread_id=None, chat_model=None: fake_agent)
     button_calls = _track_button_calls(monkeypatch)
 
     original_empty = DeltaGenerator.empty
@@ -1549,7 +1549,7 @@ def test_post_chat_saves_conversation_and_syncs_single_file_immediately(monkeypa
     add_single_conversation_file が同じturn内で1回だけ呼ばれる（data/全件を再走査する
     sync_data_dir は呼ばれない）。"""
     fake_agent = _FakeAgent(answer="回答")
-    monkeypatch.setattr(rag_chain, "build_agent", lambda thread_id=None: fake_agent)
+    monkeypatch.setattr(rag_chain, "build_agent", lambda thread_id=None, chat_model=None: fake_agent)
 
     saved_path = Path("/tmp/data/conversations/thread-test/saved.md")
     save_calls = []
@@ -1591,7 +1591,7 @@ def test_post_chat_saves_conversation_with_accumulated_sources(monkeypatch):
     sources（Documentのリスト）がそのままキーワード引数として渡される。"""
     doc = _FakeSourceDoc(page_content="根拠の内容", metadata={"source": "doc1.txt"})
     fake_agent = _FakeAgentWithSources(answer="文書に基づく回答", artifact=[doc])
-    monkeypatch.setattr(rag_chain, "build_agent", lambda thread_id=None: fake_agent)
+    monkeypatch.setattr(rag_chain, "build_agent", lambda thread_id=None, chat_model=None: fake_agent)
 
     save_calls = []
     monkeypatch.setattr(memory, "save_conversation", lambda *a, **k: save_calls.append((a, k)) or Path("/tmp/x.md"))
@@ -1615,7 +1615,7 @@ def test_post_chat_add_single_conversation_file_success_updates_signature_immedi
     時点ではまだファイルが増えていないため変化なし、というシナリオを正しく再現するため）。
     """
     fake_agent = _FakeAgent(answer="回答")
-    monkeypatch.setattr(rag_chain, "build_agent", lambda thread_id=None: fake_agent)
+    monkeypatch.setattr(rag_chain, "build_agent", lambda thread_id=None, chat_model=None: fake_agent)
 
     saved_path = Path("/tmp/data/conversations/t/x.md")
     state = {"file_saved": False}
@@ -1663,7 +1663,7 @@ def test_post_chat_add_single_conversation_file_status_failed_shows_no_error_and
     シグネチャを更新しないことで、次回のトップレベルの軽量チェックが引き続き
     「未反映の変更あり」と判定し、通常の全件差分同期（sync_data_dir）で再試行される。"""
     fake_agent = _FakeAgent(answer="回答")
-    monkeypatch.setattr(rag_chain, "build_agent", lambda thread_id=None: fake_agent)
+    monkeypatch.setattr(rag_chain, "build_agent", lambda thread_id=None, chat_model=None: fake_agent)
 
     saved_path = Path("/tmp/data/conversations/t/x.md")
     state = {"file_saved": False}
@@ -1709,7 +1709,7 @@ def test_post_chat_add_single_conversation_file_failed_shows_warning_immediately
     """異常系: add_single_conversation_file が"failed"を返した場合、次のスクリプト再実行
     （rerun）を待たずに、この同じturn内でfailed_sync_filesが更新され警告バナーが表示される。"""
     fake_agent = _FakeAgent(answer="回答")
-    monkeypatch.setattr(rag_chain, "build_agent", lambda thread_id=None: fake_agent)
+    monkeypatch.setattr(rag_chain, "build_agent", lambda thread_id=None, chat_model=None: fake_agent)
 
     saved_path = Path("/tmp/data/conversations/t/x.md")
     monkeypatch.setattr(memory, "save_conversation", lambda *a, **k: saved_path)
@@ -1732,7 +1732,7 @@ def test_post_chat_add_single_conversation_file_failed_merges_without_duplicate_
     会話ログの単一ファイル同期も失敗した場合、failed_sync_filesは重複なくマージされ、
     警告バナーも新規に並ばず既存のプレースホルダーが更新される（1個のまま）。"""
     fake_agent = _FakeAgent(answer="回答")
-    monkeypatch.setattr(rag_chain, "build_agent", lambda thread_id=None: fake_agent)
+    monkeypatch.setattr(rag_chain, "build_agent", lambda thread_id=None, chat_model=None: fake_agent)
 
     saved_path = Path("/tmp/data/conversations/t/x.md")
     monkeypatch.setattr(memory, "save_conversation", lambda *a, **k: saved_path)
@@ -1768,7 +1768,7 @@ def test_post_chat_add_single_conversation_file_failed_uses_path_relative_to_dat
     絶対パスではなくDATA_DIRからの相対パス文字列が使われる（sync_data_dirの失敗ファイル表記と
     形式を揃えるため）。"""
     fake_agent = _FakeAgent(answer="回答")
-    monkeypatch.setattr(rag_chain, "build_agent", lambda thread_id=None: fake_agent)
+    monkeypatch.setattr(rag_chain, "build_agent", lambda thread_id=None, chat_model=None: fake_agent)
 
     data_dir = tmp_path / "data"
     monkeypatch.setattr(ingest, "DATA_DIR", data_dir)
@@ -1792,7 +1792,7 @@ def test_post_chat_add_single_conversation_file_exception_shows_error_and_skips_
     """異常系: add_single_conversation_file が例外を送出した場合（ロックタイムアウト等）、
     st.errorが表示され、シグネチャも更新されない。チャット応答自体はクラッシュしない。"""
     fake_agent = _FakeAgent(answer="回答")
-    monkeypatch.setattr(rag_chain, "build_agent", lambda thread_id=None: fake_agent)
+    monkeypatch.setattr(rag_chain, "build_agent", lambda thread_id=None, chat_model=None: fake_agent)
 
     saved_path = Path("/tmp/data/conversations/t/x.md")
     state = {"file_saved": False}
@@ -1837,7 +1837,7 @@ def test_post_chat_saves_conversation_with_is_fallback_true_when_no_sources(monk
     """正常系: retrieve_contextが関連文書を1件も見つけられず（sourcesが空）
     一般知識で回答した場合、save_conversationはis_fallback=Trueで呼ばれる。"""
     fake_agent = _FakeAgentWithSources(answer="一般知識による回答", artifact=[])
-    monkeypatch.setattr(rag_chain, "build_agent", lambda thread_id=None: fake_agent)
+    monkeypatch.setattr(rag_chain, "build_agent", lambda thread_id=None, chat_model=None: fake_agent)
 
     save_calls = []
     monkeypatch.setattr(memory, "save_conversation", lambda *a, **k: save_calls.append((a, k)) or Path("/tmp/x.md"))
@@ -1857,7 +1857,7 @@ def test_post_chat_saves_conversation_with_is_fallback_false_when_sources_presen
     """正常系: retrieve_contextが関連文書を見つけた（sourcesが非空）場合、
     save_conversationはis_fallback=Falseで呼ばれる。"""
     fake_agent = _FakeAgentWithSources(answer="文書に基づく回答", artifact=[_FakeSourceDoc()])
-    monkeypatch.setattr(rag_chain, "build_agent", lambda thread_id=None: fake_agent)
+    monkeypatch.setattr(rag_chain, "build_agent", lambda thread_id=None, chat_model=None: fake_agent)
 
     save_calls = []
     monkeypatch.setattr(memory, "save_conversation", lambda *a, **k: save_calls.append((a, k)) or Path("/tmp/x.md"))
@@ -1876,7 +1876,7 @@ def test_post_chat_save_conversation_not_called_when_auto_save_memory_disabled(m
     """境界値: 「今の会話を記憶として保存する」トグルOFFの場合は
     save_conversation が呼ばれず、それに伴う add_single_conversation_file 呼び出しも発生しない。"""
     fake_agent = _FakeAgent(answer="回答")
-    monkeypatch.setattr(rag_chain, "build_agent", lambda thread_id=None: fake_agent)
+    monkeypatch.setattr(rag_chain, "build_agent", lambda thread_id=None, chat_model=None: fake_agent)
 
     save_calls = []
     monkeypatch.setattr(memory, "save_conversation", lambda *a, **k: save_calls.append(a) or Path("/tmp/x.md"))
@@ -2905,7 +2905,7 @@ def test_selecting_past_thread_restores_history_and_rebuilds_agent(monkeypatch):
 
     built_thread_ids = []
 
-    def fake_build_agent(thread_id=None):
+    def fake_build_agent(thread_id=None, chat_model=None):
         built_thread_ids.append(thread_id)
         return _FakeAgent()
 
@@ -2955,7 +2955,7 @@ def test_selecting_currently_active_thread_again_does_not_rebuild_agent(monkeypa
 
     built_thread_ids = []
 
-    def fake_build_agent(thread_id=None):
+    def fake_build_agent(thread_id=None, chat_model=None):
         built_thread_ids.append(thread_id)
         return _FakeAgent()
 
@@ -3010,7 +3010,7 @@ def test_start_new_chat_resets_thread_selector_and_does_not_pull_back_to_old_thr
         return f"new-thread-{id_counter['n']}"
 
     monkeypatch.setattr(memory, "new_thread_id", fake_new_thread_id)
-    monkeypatch.setattr(rag_chain, "build_agent", lambda thread_id=None: _FakeAgent())
+    monkeypatch.setattr(rag_chain, "build_agent", lambda thread_id=None, chat_model=None: _FakeAgent())
 
     at = _run_app()
     at = at.sidebar.selectbox[0].select("thread-past").run()
@@ -3776,7 +3776,7 @@ def test_build_agent_safely_returns_agent_on_success(monkeypatch):
     import app
 
     fake_agent = _FakeAgent()
-    monkeypatch.setattr(app, "build_agent", lambda thread_id: fake_agent)
+    monkeypatch.setattr(app, "build_agent", lambda thread_id, chat_model=None: fake_agent)
 
     result = app._build_agent_safely("thread-x")
 
@@ -3788,7 +3788,7 @@ def test_build_agent_safely_returns_none_and_does_not_raise_on_failure(monkeypat
     そのまま送出せずNoneを返す（st.error呼び出しの有無はAppTest経由のテストで確認する）。"""
     import app
 
-    def failing_build_agent(thread_id):
+    def failing_build_agent(thread_id, chat_model=None):
         raise RuntimeError("boom")
 
     monkeypatch.setattr(app, "build_agent", failing_build_agent)
@@ -3803,7 +3803,7 @@ def test_startup_build_agent_failure_shows_error_and_agent_is_none(monkeypatch):
     st.errorのみが表示されクラッシュせず、st.session_state.agentはNoneのまま
     後続処理（メッセージ初期化等）が継続される。"""
 
-    def failing_build_agent(thread_id=None):
+    def failing_build_agent(thread_id=None, chat_model=None):
         raise RuntimeError("agent build boom")
 
     monkeypatch.setattr(rag_chain, "build_agent", failing_build_agent)
@@ -3834,7 +3834,7 @@ def test_start_new_chat_build_agent_failure_sets_agent_none(monkeypatch):
     at = _run_app()
     assert at.session_state["agent"] is not None
 
-    def failing_build_agent(thread_id=None):
+    def failing_build_agent(thread_id=None, chat_model=None):
         raise RuntimeError("new chat agent boom")
 
     monkeypatch.setattr(rag_chain, "build_agent", failing_build_agent)
@@ -3885,7 +3885,7 @@ def test_switch_thread_build_agent_failure_sets_agent_none(monkeypatch):
 
     at = _run_app()
 
-    def failing_build_agent(thread_id=None):
+    def failing_build_agent(thread_id=None, chat_model=None):
         raise RuntimeError("switch thread agent boom")
 
     monkeypatch.setattr(rag_chain, "build_agent", failing_build_agent)
@@ -3910,7 +3910,7 @@ def test_chat_with_none_agent_shows_error_and_stops_without_crash(monkeypatch):
     クラッシュすることもなく、st.errorを表示してst.stop()で処理を打ち切る
     （会話履歴への追加やsave_conversationも行われない）。"""
 
-    def failing_build_agent(thread_id=None):
+    def failing_build_agent(thread_id=None, chat_model=None):
         raise RuntimeError("boom")
 
     monkeypatch.setattr(rag_chain, "build_agent", failing_build_agent)
@@ -4096,7 +4096,7 @@ def test_export_download_button_disabled_when_no_messages():
 def test_export_download_button_enabled_after_chat(monkeypatch):
     """正常系: チャットのやり取りが発生すると、エクスポートボタンが有効化される。"""
     fake_agent = _FakeAgent(answer="これが回答です")
-    monkeypatch.setattr(rag_chain, "build_agent", lambda thread_id=None: fake_agent)
+    monkeypatch.setattr(rag_chain, "build_agent", lambda thread_id=None, chat_model=None: fake_agent)
 
     at = _run_app()
     at.chat_input[0].set_value("質問です").run()
@@ -4248,7 +4248,7 @@ def test_sources_expander_persists_after_next_turn_rerun(monkeypatch):
             ("2ターン目の回答", []),
         ]
     )
-    monkeypatch.setattr(rag_chain, "build_agent", lambda thread_id=None: fake_agent)
+    monkeypatch.setattr(rag_chain, "build_agent", lambda thread_id=None, chat_model=None: fake_agent)
 
     at = _run_app()
     at = at.chat_input[0].set_value("1ターン目の質問").run()
@@ -4278,7 +4278,7 @@ def test_sources_expander_not_shown_when_turn_has_no_sources(monkeypatch):
     """正常系: sourcesが無い（一般知識フォールバック等でsourcesが空の）ターンでは、
     回答直後・再描画のいずれのタイミングでもexpanderが表示されない。"""
     fake_agent = _FakeAgent(answer="一般知識による回答（根拠文書なし）")
-    monkeypatch.setattr(rag_chain, "build_agent", lambda thread_id=None: fake_agent)
+    monkeypatch.setattr(rag_chain, "build_agent", lambda thread_id=None, chat_model=None: fake_agent)
 
     at = _run_app()
     at = at.chat_input[0].set_value("質問です").run()
@@ -4313,7 +4313,7 @@ def test_sources_do_not_mix_across_multiple_turns(monkeypatch):
             ("ターン3の回答", [doc3]),
         ]
     )
-    monkeypatch.setattr(rag_chain, "build_agent", lambda thread_id=None: fake_agent)
+    monkeypatch.setattr(rag_chain, "build_agent", lambda thread_id=None, chat_model=None: fake_agent)
 
     at = _run_app()
     at = at.chat_input[0].set_value("質問1").run()
@@ -4439,7 +4439,7 @@ def test_answer_badge_shows_document_based_when_sources_present(monkeypatch):
     """正常系: sourcesが非空の回答には「🔍 ドキュメントに基づく回答」バッジが表示され、
     「🧠 一般知識による回答」バッジは表示されない。"""
     fake_agent = _FakeAgentWithSources(answer="文書に基づく回答", artifact=[_FakeSourceDoc()])
-    monkeypatch.setattr(rag_chain, "build_agent", lambda thread_id=None: fake_agent)
+    monkeypatch.setattr(rag_chain, "build_agent", lambda thread_id=None, chat_model=None: fake_agent)
 
     at = _run_app()
     at.chat_input[0].set_value("質問です").run()
@@ -4454,7 +4454,7 @@ def test_answer_badge_shows_general_knowledge_when_no_sources(monkeypatch):
     """正常系: sourcesが空の回答には「🧠 一般知識による回答（ドキュメントに該当情報なし）」
     バッジが表示され、「🔍 ドキュメントに基づく回答」バッジは表示されない。"""
     fake_agent = _FakeAgent(answer="一般知識のみによる回答")
-    monkeypatch.setattr(rag_chain, "build_agent", lambda thread_id=None: fake_agent)
+    monkeypatch.setattr(rag_chain, "build_agent", lambda thread_id=None, chat_model=None: fake_agent)
 
     at = _run_app()
     at.chat_input[0].set_value("質問です").run()
@@ -4476,7 +4476,7 @@ def test_answer_badge_persists_after_next_turn_rerun(monkeypatch):
             ("2ターン目の回答", []),
         ]
     )
-    monkeypatch.setattr(rag_chain, "build_agent", lambda thread_id=None: fake_agent)
+    monkeypatch.setattr(rag_chain, "build_agent", lambda thread_id=None, chat_model=None: fake_agent)
 
     at = _run_app()
     at = at.chat_input[0].set_value("1ターン目の質問").run()
@@ -4751,7 +4751,7 @@ def test_empty_state_guidance_disappears_on_rerun_after_first_question(monkeypat
     monkeypatch.setattr(ingest, "list_indexed_files", lambda: [{"name": "dummy.txt", "chunk_count": 1}])
     monkeypatch.setattr(memory, "conversation_count", lambda thread_id=None: 0)
     fake_agent = _FakeAgent(answer="回答です")
-    monkeypatch.setattr(rag_chain, "build_agent", lambda thread_id=None: fake_agent)
+    monkeypatch.setattr(rag_chain, "build_agent", lambda thread_id=None, chat_model=None: fake_agent)
 
     at = _run_app()
     assert len(at.info) == 1  # 質問前は初回訪問ガイダンスが出ている
@@ -4838,7 +4838,7 @@ def test_regenerate_click_replaces_answer_without_duplicating_history_and_skips_
     置き換わり、messagesの件数は変わらない。エージェントに渡す履歴にも質問が重複しない。
     再生成時はナレッジ化（save_conversation）をスキップする。"""
     fake_agent = _FakeAgent(answer="新しい回答")
-    monkeypatch.setattr(rag_chain, "build_agent", lambda thread_id=None: fake_agent)
+    monkeypatch.setattr(rag_chain, "build_agent", lambda thread_id=None, chat_model=None: fake_agent)
     save_calls = []
     monkeypatch.setattr(memory, "save_conversation", lambda *a, **k: save_calls.append(a))
 
@@ -4870,7 +4870,7 @@ def test_regenerate_click_clears_previous_feedback_recorded_state(monkeypatch):
     """正常系: 再生成すると、古い回答に対して記録済みだったフィードバック状態はクリアされ、
     新しい回答に対して改めて👍/👎を押せるようになる。"""
     fake_agent = _FakeAgent(answer="新しい回答")
-    monkeypatch.setattr(rag_chain, "build_agent", lambda thread_id=None: fake_agent)
+    monkeypatch.setattr(rag_chain, "build_agent", lambda thread_id=None, chat_model=None: fake_agent)
 
     at = _run_app()
     at.session_state["messages"] = [
@@ -4891,7 +4891,7 @@ def test_regenerate_button_shown_immediately_after_answer_generated(monkeypatch)
     """正常系: 質問直後にストリーミング表示された最新回答にも、次のrerunを待たず
     その場で🔄再生成ボタンが表示される。"""
     fake_agent = _FakeAgent(answer="最初の回答")
-    monkeypatch.setattr(rag_chain, "build_agent", lambda thread_id=None: fake_agent)
+    monkeypatch.setattr(rag_chain, "build_agent", lambda thread_id=None, chat_model=None: fake_agent)
 
     at = _run_app()
     at = at.chat_input[0].set_value("質問です").run()
@@ -4905,7 +4905,7 @@ def test_regenerate_button_shown_immediately_after_regenerate_click(monkeypatch)
     """正常系: 🔄再生成ボタン押下による再生成直後にも、次のrerunを待たず
     その場で新しい回答に対する🔄再生成ボタンが表示される。"""
     fake_agent = _FakeAgent(answer="新しい回答")
-    monkeypatch.setattr(rag_chain, "build_agent", lambda thread_id=None: fake_agent)
+    monkeypatch.setattr(rag_chain, "build_agent", lambda thread_id=None, chat_model=None: fake_agent)
 
     at = _run_app()
     at.session_state["messages"] = [
@@ -4949,7 +4949,7 @@ def test_regenerate_failure_restores_original_answer(monkeypatch):
     復元済みの元の回答がその場で表示される（rerunしないとエラー表示のまま残り、
     無関係な次の操作まで元の回答が画面に出てこない）。"""
     fake_agent = _FakeAgent(exc=RuntimeError("stream broken"))
-    monkeypatch.setattr(rag_chain, "build_agent", lambda thread_id=None: fake_agent)
+    monkeypatch.setattr(rag_chain, "build_agent", lambda thread_id=None, chat_model=None: fake_agent)
     save_calls = []
     monkeypatch.setattr(memory, "save_conversation", lambda *a, **k: save_calls.append(a))
 
@@ -4982,7 +4982,7 @@ def test_regenerate_failure_shows_error_and_calls_rerun_once(monkeypatch):
     import streamlit as st
 
     fake_agent = _FakeAgent(exc=RuntimeError("stream broken"))
-    monkeypatch.setattr(rag_chain, "build_agent", lambda thread_id=None: fake_agent)
+    monkeypatch.setattr(rag_chain, "build_agent", lambda thread_id=None, chat_model=None: fake_agent)
     rerun_calls = []
     monkeypatch.setattr(st, "rerun", lambda *a, **k: rerun_calls.append(True))
 
@@ -4999,3 +4999,221 @@ def test_regenerate_failure_shows_error_and_calls_rerun_once(monkeypatch):
     messages = at.session_state["messages"]
     assert len(messages) == 2
     assert messages[1].content == "元の回答"
+
+
+# --- 12. モデル切替UI（_render_model_switcher、Issue #236） ---
+#
+# 入力欄直上のポップオーバーからOllama/外部API接続済みモデルを切り替えられる機能。
+# setup.list_available_models() が返す一覧をそのままselectboxの選択肢にするため、
+# ここでは主に setup.list_available_models() の戻り値を monkeypatch で制御し、
+# 実際のOllamaサーバー・課金対象APIへは一切到達しないようにする。
+#
+# 現在アクティブなモデル（setup.CURRENT_PROVIDER/CURRENT_MODEL_NAME、起動直後は
+# session_state.selected_provider/selected_model_nameの初期値になる）が
+# list_available_models() の返す選択肢に含まれていない場合、selectboxはindex=0
+# （先頭の選択肢）をデフォルト値として扱うため、_render_model_switcher()が
+# それを「ユーザーによる選択変更」と誤認して意図せずモデルを切り替えてしまう。
+# そのため各テストでは CURRENT_PROVIDER/CURRENT_MODEL_NAME を list_available_models()
+# の戻り値のいずれかと一致させ、この副作用を避けている。
+
+
+def _model_switcher_selectbox(at):
+    return next(sb for sb in at.selectbox if sb.label == "使用するモデル")
+
+
+def test_model_switcher_shows_only_ollama_models_when_no_api_keys(monkeypatch):
+    """正常系: APIキー未設定時、モデル切替の選択肢にはOllamaのpull済みモデルのみが並ぶ。"""
+    import setup
+
+    monkeypatch.setattr(
+        setup,
+        "list_available_models",
+        lambda: [
+            {"provider": "ollama", "model": "llama3.1"},
+            {"provider": "ollama", "model": "mistral"},
+        ],
+    )
+    monkeypatch.setattr(setup, "CURRENT_PROVIDER", "ollama")
+    monkeypatch.setattr(setup, "CURRENT_MODEL_NAME", "llama3.1")
+
+    at = _run_app()
+
+    assert at.exception == []
+    selectbox = _model_switcher_selectbox(at)
+    assert selectbox.options == ["Ollama: llama3.1", "Ollama: mistral"]
+
+
+def test_model_switcher_hidden_when_no_models_available(monkeypatch):
+    """境界値: list_available_models()が空リスト（Ollama未pull・APIキーも未設定）の場合、
+    モデル切替の選択肢自体が描画されない。"""
+    import setup
+
+    monkeypatch.setattr(setup, "list_available_models", lambda: [])
+
+    at = _run_app()
+
+    assert at.exception == []
+    assert not any(sb.label == "使用するモデル" for sb in at.selectbox)
+
+
+def test_model_switcher_adds_anthropic_option_when_key_set(monkeypatch):
+    """正常系: ANTHROPIC_API_KEYが設定されている場合、Anthropicの選択肢が追加される。"""
+    import setup
+
+    monkeypatch.setattr(
+        setup,
+        "list_available_models",
+        lambda: [
+            {"provider": "ollama", "model": "llama3.1"},
+            {"provider": "anthropic", "model": "claude-sonnet-5"},
+        ],
+    )
+    monkeypatch.setattr(setup, "CURRENT_PROVIDER", "ollama")
+    monkeypatch.setattr(setup, "CURRENT_MODEL_NAME", "llama3.1")
+
+    at = _run_app()
+
+    selectbox = _model_switcher_selectbox(at)
+    assert "Anthropic: claude-sonnet-5" in selectbox.options
+
+
+def test_model_switcher_adds_openai_option_when_key_set(monkeypatch):
+    """正常系: OPENAI_API_KEYが設定されている場合、OpenAIの選択肢が追加される。"""
+    import setup
+
+    monkeypatch.setattr(
+        setup,
+        "list_available_models",
+        lambda: [
+            {"provider": "ollama", "model": "llama3.1"},
+            {"provider": "openai", "model": "gpt-5-chat-latest"},
+        ],
+    )
+    monkeypatch.setattr(setup, "CURRENT_PROVIDER", "ollama")
+    monkeypatch.setattr(setup, "CURRENT_MODEL_NAME", "llama3.1")
+
+    at = _run_app()
+
+    selectbox = _model_switcher_selectbox(at)
+    assert "OpenAI: gpt-5-chat-latest" in selectbox.options
+
+
+def test_selecting_new_model_in_switcher_updates_session_state_sidebar_and_agent(monkeypatch):
+    """正常系: ポップオーバーで別モデルを選択すると、session_stateのプロバイダ/モデル名/
+    chat_modelが更新され、サイドバーの「使用中のモデル」表示も追従し、エージェントが
+    新しいchat_modelで再構築される。"""
+    import setup
+
+    monkeypatch.setattr(
+        setup,
+        "list_available_models",
+        lambda: [
+            {"provider": "ollama", "model": "llama3.1"},
+            {"provider": "anthropic", "model": "claude-sonnet-5"},
+        ],
+    )
+    monkeypatch.setattr(setup, "CURRENT_PROVIDER", "ollama")
+    monkeypatch.setattr(setup, "CURRENT_MODEL_NAME", "llama3.1")
+
+    build_chat_model_calls = []
+    new_chat_model = object()
+
+    def _fake_build_chat_model(provider, model_name):
+        build_chat_model_calls.append((provider, model_name))
+        return new_chat_model
+
+    monkeypatch.setattr(setup, "build_chat_model", _fake_build_chat_model)
+
+    build_agent_calls = []
+
+    def _fake_build_agent(thread_id=None, chat_model=None):
+        build_agent_calls.append(chat_model)
+        return _FakeAgent()
+
+    monkeypatch.setattr(rag_chain, "build_agent", _fake_build_agent)
+
+    at = _run_app()
+    assert build_agent_calls == [setup.model]
+
+    selectbox = _model_switcher_selectbox(at)
+    at2 = selectbox.select("Anthropic: claude-sonnet-5").run()
+
+    assert at2.exception == []
+    assert build_chat_model_calls == [("anthropic", "claude-sonnet-5")]
+    assert at2.session_state["selected_provider"] == "anthropic"
+    assert at2.session_state["selected_model_name"] == "claude-sonnet-5"
+    assert at2.session_state["chat_model"] is new_chat_model
+    assert at2.session_state["model_manually_selected"] is True
+    # 選択変更でエージェントも再構築され、新しいchat_modelが渡される
+    assert build_agent_calls == [setup.model, new_chat_model]
+
+    first_caption = at2.sidebar.caption[0].value
+    assert "Anthropic (claude-sonnet-5)" in first_caption
+
+
+def test_reselecting_same_model_does_not_rebuild_agent(monkeypatch):
+    """境界値: 現在選択中と同じモデルを選び直しても、chat_model構築・エージェント再構築は
+    発生しない（選択値に変化が無いため）。"""
+    import setup
+
+    monkeypatch.setattr(
+        setup,
+        "list_available_models",
+        lambda: [{"provider": "ollama", "model": "llama3.1"}],
+    )
+    monkeypatch.setattr(setup, "CURRENT_PROVIDER", "ollama")
+    monkeypatch.setattr(setup, "CURRENT_MODEL_NAME", "llama3.1")
+
+    build_chat_model_calls = []
+    monkeypatch.setattr(
+        setup,
+        "build_chat_model",
+        lambda provider, model_name: build_chat_model_calls.append((provider, model_name)),
+    )
+    build_agent_calls = []
+
+    def _fake_build_agent(thread_id=None, chat_model=None):
+        build_agent_calls.append(chat_model)
+        return _FakeAgent()
+
+    monkeypatch.setattr(rag_chain, "build_agent", _fake_build_agent)
+
+    at = _run_app()
+    selectbox = _model_switcher_selectbox(at)
+    at2 = selectbox.select("Ollama: llama3.1").run()
+
+    assert at2.exception == []
+    assert build_chat_model_calls == []
+    assert build_agent_calls == [setup.model]
+    assert "model_manually_selected" not in at2.session_state
+
+
+def test_manual_model_selection_suppresses_provider_fallback_warning(monkeypatch):
+    """正常系: 有料APIへ自動フォールバック中でも、ユーザーが手動でモデルを選択した後は
+    _show_provider_fallback_warning()による警告バナーが表示されなくなる。"""
+    import setup
+
+    monkeypatch.setattr(setup, "CURRENT_PROVIDER", "anthropic")
+    monkeypatch.setattr(setup, "CURRENT_MODEL_NAME", "claude-sonnet-5")
+    monkeypatch.setattr(setup, "CURRENT_PROVIDER_FALLBACK_REASON", "Ollamaに接続できません。")
+    monkeypatch.setattr(
+        setup,
+        "list_available_models",
+        lambda: [
+            {"provider": "anthropic", "model": "claude-sonnet-5"},
+            {"provider": "openai", "model": "gpt-5-chat-latest"},
+        ],
+    )
+    monkeypatch.setattr(setup, "build_chat_model", lambda provider, model_name: object())
+
+    at = _run_app()
+    assert len(at.sidebar.warning) == 1
+
+    selectbox = _model_switcher_selectbox(at)
+    at2 = selectbox.select("OpenAI: gpt-5-chat-latest").run()
+
+    assert at2.exception == []
+    assert at2.session_state["model_manually_selected"] is True
+    # 依然として有料API（OpenAI）を使用中だが、手動選択後は警告を出さない
+    assert setup.CURRENT_PROVIDER != "ollama"
+    assert len(at2.sidebar.warning) == 0
