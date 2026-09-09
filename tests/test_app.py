@@ -5281,3 +5281,127 @@ def test_manual_model_selection_suppresses_provider_fallback_warning(monkeypatch
     # 依然として有料API（OpenAI）を使用中だが、手動選択後は警告を出さない
     assert setup.CURRENT_PROVIDER != "ollama"
     assert len(at2.sidebar.warning) == 0
+
+
+# --- 13. 有料APIフォールバック時のトークン使用量・概算コスト表示 ---
+
+
+class _FakeAgentWithUsage:
+    """usage_metadata付きのAIMessageChunkを返すフェイクエージェント。
+
+    実際のAnthropic/OpenAIストリーミング実装と同様、usage_metadataは
+    最後のチャンクにのみ乗せる（他のチャンクはNoneのまま）。
+    """
+
+    def __init__(self, answer, input_tokens, output_tokens):
+        self.answer = answer
+        self.input_tokens = input_tokens
+        self.output_tokens = output_tokens
+
+    def stream(self, payload, stream_mode="messages"):
+        from langchain_core.messages import AIMessageChunk
+
+        yield AIMessageChunk(content=self.answer[:1]), {}
+        yield (
+            AIMessageChunk(
+                content=self.answer[1:],
+                usage_metadata={
+                    "input_tokens": self.input_tokens,
+                    "output_tokens": self.output_tokens,
+                    "total_tokens": self.input_tokens + self.output_tokens,
+                },
+            ),
+            {},
+        )
+
+
+def _usage_captions(at):
+    return [c.value for c in at.caption if "トークン使用量" in c.value]
+
+
+def test_token_usage_note_hidden_when_ollama(monkeypatch):
+    """正常系: Ollama（無料）利用中は、チャット後もトークン使用量の表示は出さない。"""
+    import setup
+
+    monkeypatch.setattr(setup, "CURRENT_PROVIDER", "ollama")
+    monkeypatch.setattr(rag_chain, "build_agent", lambda thread_id=None, chat_model=None: _FakeAgent())
+
+    at = _run_app()
+    at = at.chat_input[0].set_value("質問です").run()
+
+    assert at.exception == []
+    assert _usage_captions(at) == []
+
+
+def test_token_usage_note_hidden_before_first_paid_api_response(monkeypatch):
+    """境界値: 有料API利用中でも、まだ1回もレスポンスが無い（累積0）場合は表示しない。"""
+    import setup
+
+    monkeypatch.setattr(setup, "CURRENT_PROVIDER", "anthropic")
+
+    at = _run_app()
+
+    assert at.exception == []
+    assert _usage_captions(at) == []
+
+
+def test_token_usage_note_shown_after_paid_api_response(monkeypatch):
+    """正常系: 有料API利用中にチャットが1往復すると、回答の下に累積トークン数と概算コストが表示される。"""
+    import setup
+
+    monkeypatch.setattr(setup, "CURRENT_PROVIDER", "anthropic")
+    monkeypatch.setattr(
+        rag_chain,
+        "build_agent",
+        lambda thread_id=None, chat_model=None: _FakeAgentWithUsage("回答です", 1000, 500),
+    )
+
+    at = _run_app()
+    at = at.chat_input[0].set_value("質問です").run()
+
+    assert at.exception == []
+    captions = _usage_captions(at)
+    assert len(captions) == 1
+    assert "入力1,000" in captions[0]
+    assert "出力500" in captions[0]
+    assert "$" in captions[0]
+    assert at.session_state["token_usage"] == {"input_tokens": 1000, "output_tokens": 500}
+
+
+def test_token_usage_accumulates_across_multiple_turns(monkeypatch):
+    """正常系: 複数ターンにわたって、トークン使用量がセッション内で加算され続ける。"""
+    import setup
+
+    monkeypatch.setattr(setup, "CURRENT_PROVIDER", "openai")
+    monkeypatch.setattr(
+        rag_chain,
+        "build_agent",
+        lambda thread_id=None, chat_model=None: _FakeAgentWithUsage("回答です", 100, 50),
+    )
+
+    at = _run_app()
+    at = at.chat_input[0].set_value("1回目の質問です").run()
+    at = at.chat_input[0].set_value("2回目の質問です").run()
+
+    assert at.exception == []
+    assert at.session_state["token_usage"] == {"input_tokens": 200, "output_tokens": 100}
+
+
+def test_token_usage_note_shown_only_once_after_multiple_turns(monkeypatch):
+    """境界値: 複数ターンの会話でも、トークン使用量の表示は最新の回答の下にのみ出て
+    重複表示されない（セッション全体の累積値のため、過去の各回答ごとに表示すると冗長になる）。"""
+    import setup
+
+    monkeypatch.setattr(setup, "CURRENT_PROVIDER", "anthropic")
+    monkeypatch.setattr(
+        rag_chain,
+        "build_agent",
+        lambda thread_id=None, chat_model=None: _FakeAgentWithUsage("回答です", 100, 50),
+    )
+
+    at = _run_app()
+    at = at.chat_input[0].set_value("1回目の質問です").run()
+    at = at.chat_input[0].set_value("2回目の質問です").run()
+
+    assert at.exception == []
+    assert len(_usage_captions(at)) == 1

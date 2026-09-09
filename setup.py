@@ -46,6 +46,13 @@ OLLAMA_NUM_CTX = int(os.environ.get("OLLAMA_NUM_CTX", "8192"))
 ANTHROPIC_MODEL = "claude-sonnet-5"
 OPENAI_MODEL = "gpt-5-chat-latest"
 
+# 有料API利用時の概算コスト表示用の料金表（1Mトークンあたりのドル単価）。
+# 各社公開の料金ページに記載があるであろう一般的な水準感の値を仮定した概算であり、
+# 正確な最新単価ではない（金額の桁感が伝わればよく、正確な請求額の算出には使わない）。
+ANTHROPIC_PRICING = {"input_per_million_usd": 3.0, "output_per_million_usd": 15.0}
+OPENAI_PRICING = {"input_per_million_usd": 5.0, "output_per_million_usd": 15.0}
+PROVIDER_PRICING = {"anthropic": ANTHROPIC_PRICING, "openai": OPENAI_PRICING}
+
 # 現在実際に使用しているプロバイダ名（"ollama" / "anthropic" / "openai"）。
 # _build_model() 実行時に確定させ、app.py 側から参照してエラーメッセージの出し分けに使う。
 CURRENT_PROVIDER: str | None = None
@@ -203,6 +210,20 @@ def model_label(provider: str | None, model_name: str | None) -> str:
     """「プロバイダ名 (モデル名)」形式の表示ラベルを組み立てる（例: "Ollama (llama3.1)"）。"""
     provider_label = PROVIDER_LABELS.get(provider, provider or "不明")
     return f"{provider_label} ({model_name})"
+
+
+def estimate_cost_usd(provider: str | None, input_tokens: int, output_tokens: int) -> float | None:
+    """トークン使用量からの概算コスト（USD）を返す。
+
+    料金表を持たないプロバイダ（Ollama等）はNoneを返し、呼び出し側で金額表示を省略できるようにする。
+    """
+    pricing = PROVIDER_PRICING.get(provider)
+    if pricing is None:
+        return None
+    return (
+        input_tokens * pricing["input_per_million_usd"] / 1_000_000
+        + output_tokens * pricing["output_per_million_usd"] / 1_000_000
+    )
 
 
 def current_model_label() -> str:
