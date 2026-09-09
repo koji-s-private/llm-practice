@@ -128,13 +128,17 @@ def _list_drive_files(service, folder_id: str) -> list[dict]:
     return files
 
 
-def _dest_path_for(drive_file: dict) -> Path | None:
+def _dest_path_for(drive_file: dict, *, disambiguate: bool = False) -> Path | None:
     """Driveファイル1件のローカル保存先パスを決める。対応拡張子でない場合はNoneを返す。
 
     ingest.safe_upload_dest()と同様、Drive側のファイル名はディレクトリ部分を
     除いた素の名前のみを使い、resolve()後にGOOGLE_DRIVE_DIR配下から外れていないかも
     確認する（`../`によるパストラバーサルや絶対パス文字列によるDrive側からの
     任意パス書き込みを防ぐため）。外れる場合はNoneを返す。
+
+    disambiguate=Trueの場合、Google Drive上では同一フォルダ内に同名ファイルが
+    複数存在し得る（ファイル名だけではローカル保存先が一意に決まらない）ため、
+    拡張子の直前にDriveファイルID先頭8文字を挿入して一意化する。
     """
     mime_type = drive_file["mimeType"]
     name = drive_file["name"]
@@ -146,6 +150,10 @@ def _dest_path_for(drive_file: dict) -> Path | None:
         if Path(name).suffix.lower() not in ingest.LOADERS:
             return None
         safe_name = Path(name).name
+
+    if disambiguate:
+        stem, suffix = Path(safe_name).stem, Path(safe_name).suffix
+        safe_name = f"{stem}_{drive_file['id'][:8]}{suffix}"
 
     dest = (GOOGLE_DRIVE_DIR / safe_name).resolve()
     if dest.parent != GOOGLE_DRIVE_DIR.resolve():
@@ -214,11 +222,33 @@ def sync_google_drive_files(verbose: bool = True) -> dict:
     downloaded_names: set[str] = set()
     failed_names: set[str] = set()
 
-    for drive_file in drive_files:
+    # 同一フォルダ内の同名ファイル（Drive側では許容される）が同じdest_pathに
+    # 上書きダウンロードされて片方が消えることのないよう、先に衝突を検出しておく。
+    provisional = [(drive_file, _dest_path_for(drive_file)) for drive_file in drive_files]
+    name_counts: dict[str, int] = {}
+    for _, provisional_dest in provisional:
+        if provisional_dest is not None:
+            name_counts[provisional_dest.name] = name_counts.get(provisional_dest.name, 0) + 1
+    duplicate_names = {name for name, count in name_counts.items() if count > 1}
+    if duplicate_names:
+        logger.warning(
+            "同名ファイルが複数見つかったため識別子を付与しました: %s",
+            ", ".join(sorted(duplicate_names)),
+        )
+
+    for drive_file, provisional_dest in provisional:
         name = drive_file["name"]
-        dest_path = _dest_path_for(drive_file)
-        if dest_path is None:
+        if provisional_dest is None:
             logger.warning("%s: 未対応の拡張子のためスキップします。", name)
+            result["skipped"].append(name)
+            continue
+
+        dest_path = (
+            _dest_path_for(drive_file, disambiguate=True)
+            if provisional_dest.name in duplicate_names
+            else provisional_dest
+        )
+        if dest_path is None:
             result["skipped"].append(name)
             continue
 
