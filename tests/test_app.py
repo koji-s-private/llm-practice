@@ -5454,9 +5454,7 @@ def test_token_usage_note_tolerates_partial_usage_metadata(monkeypatch):
     monkeypatch.setattr(
         rag_chain,
         "build_agent",
-        lambda thread_id=None, chat_model=None: _FakeAgentWithPartialUsage(
-            "回答です", {"input_tokens": 100}
-        ),
+        lambda thread_id=None, chat_model=None: _FakeAgentWithPartialUsage("回答です", {"input_tokens": 100}),
     )
 
     at = _run_app()
