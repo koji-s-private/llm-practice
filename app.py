@@ -837,6 +837,9 @@ with st.sidebar:
                 placeholder="スレッドを選択...",
                 key=_thread_selector_key(st.session_state.thread_id, thread_labels),
                 label_visibility="collapsed",
+                # ネイティブのタイプアヘッド検索は該当なし時に英語"No results"を表示してしまい
+                # 上のtext_inputによる日本語検索と機能も重複するため無効化する。
+                filter_mode=None,
             )
             # 選択値が現在表示中のスレッドと異なる場合のみ切り替える。同じ場合はスキップし、
             # 選択操作以外の理由での再実行（他のウィジェット操作等）で毎回再構築されないようにする。
