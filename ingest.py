@@ -9,6 +9,10 @@ Chroma ベクトルDBに同期するモジュール。
 追加・変更されたファイルのみ差分で取り込み、data/ から削除されたファイルは
 ベクトルDBからも自動的に削除する（DBとdata/フォルダの内容がズレないようにするため）。
 判定には chroma_db/manifest.json にファイル名・更新日時・サイズ・チャンクIDを記録している。
+manifest.jsonのトップレベルには埋め込みモデル名（rag_chain.EMBEDDING_MODEL_NAME）も
+記録しており、アプリのアップデートでモデルが変更された場合に既存インデックスとの
+不一致を検知して警告する（_ensure_embedding_model_recorded()参照。ファイルの変更検知とは
+別軸のチェックで、mtime/sizeが同じファイルの再埋め込みは自動では行わない）。
 
 sync_data_dir()はdata/配下を都度全件列挙して差分を検出するため、data/内のファイル数に
 比例して処理コストが増える。チャット1往復ごとに会話ログが1ファイルずつ追加される
@@ -56,7 +60,7 @@ from langchain_core.documents import Document
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 
 from memory import THREAD_TITLE_FILENAME
-from rag_chain import CHUNK_SIZE, COLLECTION_NAME, GLOBAL_THREAD_ID, PERSIST_DIR, get_vectorstore
+from rag_chain import CHUNK_SIZE, COLLECTION_NAME, EMBEDDING_MODEL_NAME, GLOBAL_THREAD_ID, PERSIST_DIR, get_vectorstore
 
 try:
     from langchain_docling import DoclingLoader
@@ -91,6 +95,10 @@ SYNC_LOCK_TIMEOUT_SECONDS = 60
 
 # 進捗コールバック: (現在の処理番号（1始まり）, 総ファイル数, 処理中のファイル名) を通知する。
 ProgressCallback = Callable[[int, int, str], None]
+
+# manifest.jsonのトップレベルに埋め込みモデル名を記録するための予約キー。
+# 他のキーはすべて相対パス（ファイル名）のため、実在パスと衝突しない先頭"_"で区別する。
+MANIFEST_EMBEDDING_MODEL_KEY = "_embedding_model"
 
 
 class _ExcelLoader:
@@ -446,6 +454,53 @@ def _fingerprint(path: Path) -> dict:
     return {"mtime": stat.st_mtime, "size": stat.st_size}
 
 
+def _manifest_file_entries(manifest: dict) -> dict:
+    """manifest辞書からファイルごとのエントリだけを取り出す（MANIFEST_EMBEDDING_MODEL_KEY等、トップレベルのメタデータキーを除く）。"""
+    return {name: entry for name, entry in manifest.items() if name != MANIFEST_EMBEDDING_MODEL_KEY}
+
+
+def _embedding_model_mismatch(manifest: dict) -> tuple[str, str] | None:
+    """記録済みの埋め込みモデル名が現在のEMBEDDING_MODEL_NAMEと異なる場合、(記録済み, 現在)を返す。
+
+    未記録（本チェック導入前の古いmanifest、または初回同期前）の場合はNoneを返す。
+    """
+    recorded_model = manifest.get(MANIFEST_EMBEDDING_MODEL_KEY)
+    if recorded_model is None or recorded_model == EMBEDDING_MODEL_NAME:
+        return None
+    return recorded_model, EMBEDDING_MODEL_NAME
+
+
+def check_embedding_model_mismatch() -> tuple[str, str] | None:
+    """保存済みmanifestの埋め込みモデル記録と現在のEMBEDDING_MODEL_NAMEを比較する。
+
+    同期処理を伴わず軽量に確認したい呼び出し元（app.pyの起動時バナー表示など）向け。
+    不一致の場合は(記録済みモデル名, 現在のモデル名)を返し、一致・未記録の場合はNoneを返す。
+    """
+    return _embedding_model_mismatch(_load_manifest())
+
+
+def _ensure_embedding_model_recorded(manifest: dict) -> None:
+    """manifestに埋め込みモデル名を記録し、記録済みと異なる場合は警告ログを出す。
+
+    Chromaの同一コレクション内で異なる埋め込みモデルのベクトルが混在すると類似度計算が
+    信頼できなくなるが、全件の再埋め込みは自動では行わない（データ量次第で時間がかかるため）。
+    不一致を検知した場合でも記録は上書きしない（`rm -rf chroma_db && python ingest.py` で
+    manifestごと再構築されるまで、以降の同期のたびに警告し続けるため）。
+    """
+    mismatch = _embedding_model_mismatch(manifest)
+    if mismatch is not None:
+        recorded_model, current_model = mismatch
+        logger.warning(
+            "埋め込みモデルが変更されています（記録済み: %s → 現在: %s）。"
+            "既存のベクトルインデックスは旧モデルのまま残っているため、検索結果の精度が劣化している"
+            "可能性があります。`rm -rf chroma_db && python ingest.py` を実行し、インデックスを"
+            "再構築することを推奨します。",
+            recorded_model,
+            current_model,
+        )
+    manifest.setdefault(MANIFEST_EMBEDDING_MODEL_KEY, EMBEDDING_MODEL_NAME)
+
+
 def _load_pdf(path: Path, verbose: bool = True) -> list:
     """PDFを読み込む（PyMuPDFで高速抽出 → 必要な場合のみDoclingでフォールバック）。"""
     try:
@@ -691,6 +746,7 @@ def _add_single_conversation_file_locked(path: Path) -> str:
     """add_single_conversation_file()の本体（呼び出し元がファイルロックを取得済みであることが前提）。"""
     vector_store = get_vectorstore()
     manifest = _load_manifest()
+    _ensure_embedding_model_recorded(manifest)
     splitter = RecursiveCharacterTextSplitter(chunk_size=CHUNK_SIZE, chunk_overlap=200)
 
     name = str(path.relative_to(DATA_DIR))
@@ -810,6 +866,7 @@ def _sync_data_dir_locked(verbose: bool, on_progress: ProgressCallback | None = 
     """sync_data_dir()の本体（呼び出し元がファイルロックを取得済みであることが前提）。"""
     vector_store = get_vectorstore()
     manifest = _load_manifest()
+    _ensure_embedding_model_recorded(manifest)
     splitter = RecursiveCharacterTextSplitter(chunk_size=CHUNK_SIZE, chunk_overlap=200)
 
     # data/ 直下だけでなく、data/conversations/ などのサブフォルダも再帰的に走査する
@@ -827,7 +884,7 @@ def _sync_data_dir_locked(verbose: bool, on_progress: ProgressCallback | None = 
         if status in ("added", "updated", "failed"):
             result[status].append(name)
 
-    for name in list(manifest.keys()):
+    for name in list(_manifest_file_entries(manifest).keys()):
         if name not in current_files:
             entry = manifest[name]
             # manifestエントリごと消すと再試行の機会を失うため、保留中の旧チャンクも
@@ -873,7 +930,7 @@ def list_indexed_files() -> list[dict]:
     manifest = _load_manifest()
     return [
         {"name": name, "chunk_count": len(entry["chunk_ids"])}
-        for name, entry in sorted(manifest.items())
+        for name, entry in sorted(_manifest_file_entries(manifest).items())
         if Path(name).parts[0] != CONVERSATIONS_DIRNAME and "chunk_ids" in entry
     ]
 
@@ -914,11 +971,12 @@ def _dir_size_mb(path: Path) -> float:
 def print_status() -> None:
     """ベクトルDBの現在の状態を表示する（`python ingest.py --status`）。"""
     manifest = _load_manifest()
+    file_entries = _manifest_file_entries(manifest)
 
     print(f"DB保存先     : {PERSIST_DIR}")
     print(f"コレクション名: {COLLECTION_NAME}")
 
-    if not PERSIST_DIR.exists() or not manifest:
+    if not PERSIST_DIR.exists() or not file_entries:
         print("インデックス済みのファイルはまだありません。")
         print("`streamlit run app.py` を起動するか `python ingest.py` を実行してください。")
         return
@@ -927,14 +985,23 @@ def print_status() -> None:
         vector_store = get_vectorstore()
         chunk_count = vector_store._collection.count()
     except Exception:
-        chunk_count = sum(len(v.get("chunk_ids", [])) for v in manifest.values())
+        chunk_count = sum(len(v.get("chunk_ids", [])) for v in file_entries.values())
 
-    print(f"インデックス済みファイル数: {len(manifest)}件")
+    print(f"インデックス済みファイル数: {len(file_entries)}件")
     print(f"チャンク数（ベクトル数）  : {chunk_count}件")
     print(f"DBフォルダのサイズ       : {_dir_size_mb(PERSIST_DIR):.1f} MB")
     print("\nファイル別チャンク数:")
-    for name, entry in sorted(manifest.items()):
+    for name, entry in sorted(file_entries.items()):
         print(f"  - {name}: {len(entry.get('chunk_ids', []))}チャンク")
+
+    mismatch = _embedding_model_mismatch(manifest)
+    if mismatch is not None:
+        recorded_model, current_model = mismatch
+        print(f"\n警告: 埋め込みモデルが変更されています（記録済み: {recorded_model} → 現在: {current_model}）。")
+        print(
+            "既存のインデックスは旧モデルのベクトルのままです。"
+            "`rm -rf chroma_db && python ingest.py` で再構築してください。"
+        )
 
 
 def main():

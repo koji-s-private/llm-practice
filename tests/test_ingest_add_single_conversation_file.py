@@ -62,7 +62,9 @@ def _write(data_dir, rel_path, text):
 
 
 def _on_disk_manifest():
-    return json.loads(ingest.MANIFEST_PATH.read_text(encoding="utf-8"))
+    """manifest.jsonの内容を、ファイルごとのエントリのみに絞って返す（_embedding_modelは除く）。"""
+    manifest = json.loads(ingest.MANIFEST_PATH.read_text(encoding="utf-8"))
+    return ingest._manifest_file_entries(manifest)
 
 
 def _conversation_content(is_fallback=False):

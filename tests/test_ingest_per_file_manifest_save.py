@@ -62,7 +62,9 @@ def _write(data_dir, rel_path, text):
 
 
 def _on_disk_manifest():
-    return json.loads(ingest.MANIFEST_PATH.read_text(encoding="utf-8"))
+    """manifest.jsonの内容を、ファイルごとのエントリのみに絞って返す（_embedding_modelは除く）。"""
+    manifest = json.loads(ingest.MANIFEST_PATH.read_text(encoding="utf-8"))
+    return ingest._manifest_file_entries(manifest)
 
 
 # --- 正常系: 複数ファイル同期時、manifestに全ファイルの情報が記録される ---
@@ -97,7 +99,9 @@ def test_manifest_is_saved_incrementally_once_per_file_not_only_at_the_end(fake_
 
     def spy_save_manifest(manifest):
         real_save_manifest(manifest)
-        snapshot_sizes.append(len(manifest))
+        # _embedding_modelはファイル処理の前に一度だけ挿入され、以降の件数推移とは無関係な
+        # メタデータのため、ファイルエントリの件数だけで単調増加を判定する。
+        snapshot_sizes.append(len(ingest._manifest_file_entries(manifest)))
 
     monkeypatch.setattr(ingest, "_save_manifest", spy_save_manifest)
 

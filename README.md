@@ -332,6 +332,10 @@ LangChainは1.0でメジャーアップデートされており、旧来の `Ret
 
 - **埋め込み（検索用）**: HuggingFaceのローカルモデル（`intfloat/multilingual-e5-base`、日本語を含む多言語対応）を使用。
   APIキー不要・無料・オフラインで動作し、埋め込みのたびに課金が発生しません。
+  アプリのアップデートでこのモデル自体が変更された場合、`data/`側のファイルが変わっていなくても
+  既存のベクトルは旧モデルのまま残り検索精度が劣化するため、起動時・`python ingest.py --status`実行時に
+  警告が表示されます（詳細は下記トラブルシューティング参照）。`rm -rf chroma_db && python ingest.py`で
+  再インデックスしてください。
 - **回答生成・検索判断**: `setup.py` が 1) Ollama（ローカルで起動していれば最優先・無料） 2) `ANTHROPIC_API_KEY`
   （Claude, claude-sonnet-5） 3) `OPENAI_API_KEY`（OpenAI, gpt-5-chat-latest）の順に自動フォールバックします。
   このモデルを `create_agent` に渡すことで、質問に応じて検索ツール（`retrieve_context`）を
@@ -567,6 +571,7 @@ API変更が頻繁なので、動作がおかしくなったときはまずこ�
 | Ollamaを入れたのに課金APIが使われる | `ollama serve` が起動しているか確認（`ollama list` でエラーが出ないか）。`.env`に`DISABLE_OLLAMA=true`が残っていないかも確認 |
 | `.venv`を有効化したのに `ModuleNotFoundError` や pyenv側のパッケージが読まれる | `which python`と`which streamlit`を比較。`python`は`.venv/bin/python`なのに`streamlit`だけpyenvのshimを指している場合、`streamlit run app.py`ではなく`python -m streamlit run app.py`を使う |
 | アップデート後、以前は答えられていた内容に急に答えられなくなった | 会話スレッド分離機能の追加などでDBの内部構造が変わった可能性。上記「DBをリセットしたい場合」で `chroma_db` を作り直す |
+| 起動時・`python ingest.py --status`実行時に「埋め込みモデルが変更されています」という警告が出る | アプリのアップデートで埋め込みモデル（`rag_chain.py`の`EMBEDDING_MODEL_NAME`）が変わったが、既存の`chroma_db/`は旧モデルのベクトルのまま残っている状態。同一コレクション内に新旧モデルのベクトルが混在すると類似度計算が不正確になり検索精度が劣化するため、上記「DBをリセットしたい場合」の手順で`rm -rf chroma_db && python ingest.py`を実行し、全ファイルを新モデルで再インデックスする |
 
 ### 課金について
 
