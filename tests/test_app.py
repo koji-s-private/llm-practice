@@ -13,6 +13,8 @@ app.py が直接 import している以下のシンボルを monkeypatch で軽�
 - `ingest.data_dir_signature`（トップレベルで毎回呼ばれる軽量な
   変更検知。デフォルトでは実ファイルシステムを見るため、シグネチャの変化を
   意図的に起こしたいテストではmonkeypatchで差し替える）
+- `ingest.check_embedding_model_mismatch`（起動時の埋め込みモデル変更検知バナー用。
+  デフォルトではNone＝不一致なしを返す）
 - `rag_chain.build_agent`（フェイクエージェントを返す。`.invoke()` の成功/失敗を
   テストごとに切り替える）
 - `memory.new_thread_id` / `memory.conversation_count` / `memory.save_conversation` /
@@ -153,6 +155,7 @@ def _patch_light_dependencies(monkeypatch):
     """
     monkeypatch.setattr(ingest, "sync_data_dir", _ok_sync)
     monkeypatch.setattr(ingest, "add_single_conversation_file", lambda path: "added")
+    monkeypatch.setattr(ingest, "check_embedding_model_mismatch", lambda: None)
     monkeypatch.setattr(rag_chain, "build_agent", lambda thread_id=None, chat_model=None: _FakeAgent())
     monkeypatch.setattr(memory, "new_thread_id", lambda: "thread-test")
     monkeypatch.setattr(memory, "conversation_count", lambda thread_id: 0)
@@ -272,6 +275,33 @@ def test_startup_sync_with_failed_files_shows_warning_and_toast(monkeypatch):
     assert "broken.txt" in at.warning[0].value
     # 失敗があってもエージェント構築（後続処理）は継続される
     assert "agent" in at.session_state
+
+
+# --- 1b. 埋め込みモデル変更検知バナー（_show_embedding_model_mismatch_warning） ---
+
+
+def test_no_embedding_model_mismatch_shows_no_warning():
+    """正常系: check_embedding_model_mismatch()がNoneを返す場合、警告は表示されない。"""
+    at = _run_app()
+
+    assert at.exception == []
+    assert at.warning == []
+
+
+def test_embedding_model_mismatch_shows_warning_banner(monkeypatch):
+    """異常系: 記録済みモデルと現在のモデルが異なる場合、起動時に警告バナーを表示する。"""
+    monkeypatch.setattr(
+        ingest,
+        "check_embedding_model_mismatch",
+        lambda: ("sentence-transformers/all-mpnet-base-v2", "intfloat/multilingual-e5-base"),
+    )
+
+    at = _run_app()
+
+    assert at.exception == []
+    assert len(at.warning) == 1
+    assert "sentence-transformers/all-mpnet-base-v2" in at.warning[0].value
+    assert "intfloat/multilingual-e5-base" in at.warning[0].value
 
 
 def test_resync_button_failure_shows_error(monkeypatch):

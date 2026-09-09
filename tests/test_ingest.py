@@ -113,7 +113,7 @@ def test_removed_file_is_deleted_from_store_and_manifest(fake_env):
     assert result == {"added": [], "updated": [], "removed": ["a.txt"], "failed": []}
     assert store.docs_by_id == {}
     manifest = json.loads(ingest.MANIFEST_PATH.read_text(encoding="utf-8"))
-    assert manifest == {}
+    assert ingest._manifest_file_entries(manifest) == {}
 
 
 def test_thread_title_file_is_excluded_from_sync(fake_env):

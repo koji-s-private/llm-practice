@@ -51,6 +51,7 @@ from history_utils import _windowed_history as _windowed_history
 from ingest import (
     DATA_DIR,
     add_single_conversation_file,
+    check_embedding_model_mismatch,
     data_dir_signature,
     delete_indexed_file,
     delete_indexed_files,
@@ -212,6 +213,24 @@ def _show_failed_sync_files_warning(container: DeltaGenerator | None = None) -> 
         "以下のファイルは読み込みに失敗したため、DBへの反映がスキップされています"
         "（破損・パスワード付き・不正なエンコーディング等の可能性があります）。"
         "data/ から修正・削除すると自動的に再試行されます:\n" + "\n".join(f"- {name}" for name in failed)
+    )
+
+
+def _show_embedding_model_mismatch_warning() -> None:
+    """アプリのアップデートで埋め込みモデルが変わったのに未再構築の場合、起動時に警告バナーを表示する。
+
+    check_embedding_model_mismatch()はmanifest.jsonを読むだけの軽量な確認のため、
+    毎回のスクリプト実行で呼び出しても問題ない。
+    """
+    mismatch = check_embedding_model_mismatch()
+    if mismatch is None:
+        return
+    recorded_model, current_model = mismatch
+    st.warning(
+        f"埋め込みモデルが変更されています（記録済み: {recorded_model} → 現在: {current_model}）。"
+        "既存のインデックスは旧モデルのベクトルのままのため、検索精度が劣化している可能性があります。"
+        "ターミナルで `rm -rf chroma_db && python ingest.py` を実行し、インデックスを再構築してください。",
+        icon="⚠️",
     )
 
 
@@ -735,6 +754,8 @@ if "chat_model" not in st.session_state:
 current_data_dir_signature = data_dir_signature()
 if st.session_state.get("data_dir_signature") != current_data_dir_signature:
     _sync_and_report("data/ をベクトルDBに同期中...")
+
+_show_embedding_model_mismatch_warning()
 
 # 前回までの同期で読み込みに失敗したファイルが残っている場合、このスクリプト実行でも
 # 警告を表示し続ける（同期が呼ばれなかった場合でも、直前の失敗状態を毎回描画するため）。
