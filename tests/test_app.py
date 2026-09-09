@@ -2629,6 +2629,40 @@ def test_thread_search_input_whitespace_only_keyword_shows_all_threads(monkeypat
     assert len(at.sidebar.selectbox[0].options) == 2
 
 
+def test_past_threads_selectbox_disables_native_typeahead_filter_mode(monkeypatch):
+    """正常系: 過去スレッドselectboxはネイティブのタイプアヘッド検索（fuzzy検索）が
+    無効化されている（filter_mode=None）。有効なままだと該当なし時に英語の
+    "No results" が表示されてしまうため、それを防ぐ設定が維持されていることを保証する。"""
+    from datetime import datetime
+
+    from streamlit.proto.SelectWidgetFilterMode_pb2 import SelectWidgetFilterMode
+
+    monkeypatch.setattr(
+        memory,
+        "list_threads",
+        lambda: [
+            {
+                "thread_id": "thread-a",
+                "created_at": datetime(2024, 1, 1, 9, 0),
+                "first_question": "質問A",
+                "count": 2,
+            },
+            {
+                "thread_id": "thread-b",
+                "created_at": datetime(2024, 1, 2, 9, 0),
+                "first_question": "質問B",
+                "count": 1,
+            },
+        ],
+    )
+
+    at = _run_app()
+
+    assert at.exception == []
+    assert len(at.sidebar.selectbox) == 1
+    assert at.sidebar.selectbox[0].proto.filter_mode == SelectWidgetFilterMode.FILTER_MODE_NONE
+
+
 def test_past_thread_label_uses_saved_title_when_set(monkeypatch):
     """正常系: タイトルが設定済みのスレッドは、自動生成ラベルの代わりにタイトルを主表示にする。"""
     from datetime import datetime
