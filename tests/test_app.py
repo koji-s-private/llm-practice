@@ -5405,3 +5405,84 @@ def test_token_usage_note_shown_only_once_after_multiple_turns(monkeypatch):
 
     assert at.exception == []
     assert len(_usage_captions(at)) == 1
+
+
+class _RawChunkWithPartialUsage:
+    """usage_metadataの一部キーが欠けた想定外のチャンクを模したフェイクオブジェクト。
+
+    実際のLangChainのAIMessageChunkはpydanticでバリデーションされ、
+    usage_metadataを持つ場合は全キーが必須のため通常発生しないが、
+    app.py側の防御的な実装（dict.get()によるNoneフォールバック）を検証するために使う。
+    """
+
+    def __init__(self, text, usage_metadata):
+        self.text = text
+        self.usage_metadata = usage_metadata
+
+
+class _FakeAgentWithPartialUsage:
+    def __init__(self, answer, usage_metadata):
+        self.answer = answer
+        self.usage_metadata = usage_metadata
+
+    def stream(self, payload, stream_mode="messages"):
+        yield _RawChunkWithPartialUsage(self.answer, self.usage_metadata), {}
+
+
+def test_token_usage_not_accumulated_when_response_has_no_usage_metadata(monkeypatch):
+    """異常系: 有料API利用中でも、レスポンスにusage_metadataが一切含まれない場合は
+    エラーにならず、累積値も表示も変化しない。"""
+    import setup
+
+    monkeypatch.setattr(setup, "CURRENT_PROVIDER", "anthropic")
+    monkeypatch.setattr(rag_chain, "build_agent", lambda thread_id=None, chat_model=None: _FakeAgent())
+
+    at = _run_app()
+    at = at.chat_input[0].set_value("質問です").run()
+
+    assert at.exception == []
+    assert at.session_state["token_usage"] == {"input_tokens": 0, "output_tokens": 0}
+    assert _usage_captions(at) == []
+
+
+def test_token_usage_note_tolerates_partial_usage_metadata(monkeypatch):
+    """異常系: usage_metadataの一部キー（output_tokens）が欠けた想定外のチャンクでも、
+    例外にならずget()のNoneフォールバックで0として累積される。"""
+    import setup
+
+    monkeypatch.setattr(setup, "CURRENT_PROVIDER", "anthropic")
+    monkeypatch.setattr(
+        rag_chain,
+        "build_agent",
+        lambda thread_id=None, chat_model=None: _FakeAgentWithPartialUsage(
+            "回答です", {"input_tokens": 100}
+        ),
+    )
+
+    at = _run_app()
+    at = at.chat_input[0].set_value("質問です").run()
+
+    assert at.exception == []
+    assert at.session_state["token_usage"] == {"input_tokens": 100, "output_tokens": 0}
+
+
+def test_token_usage_note_formats_large_token_counts_with_comma_separators(monkeypatch):
+    """境界値: 極端に大きいトークン数でも例外にならず、桁区切りされた表示のまま壊れない。"""
+    import setup
+
+    monkeypatch.setattr(setup, "CURRENT_PROVIDER", "openai")
+    monkeypatch.setattr(
+        rag_chain,
+        "build_agent",
+        lambda thread_id=None, chat_model=None: _FakeAgentWithUsage("回答です", 12_345_678, 1),
+    )
+
+    at = _run_app()
+    at = at.chat_input[0].set_value("質問です").run()
+
+    assert at.exception == []
+    captions = _usage_captions(at)
+    assert len(captions) == 1
+    assert "入力12,345,678" in captions[0]
+    assert "出力1" in captions[0]
+    assert "$" in captions[0]

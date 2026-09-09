@@ -783,3 +783,15 @@ def test_estimate_cost_usd_returns_none_for_unknown_provider():
 def test_estimate_cost_usd_returns_none_for_none_provider():
     """境界値: providerがNone（想定外の状態）でもクラッシュせずNoneを返す。"""
     assert setup.estimate_cost_usd(None, 1000, 1000) is None
+
+
+def test_estimate_cost_usd_handles_very_large_token_counts():
+    """境界値: 極端に大きいトークン数でも例外にならず、桁の大きい概算コストを返す。"""
+    pricing = setup.ANTHROPIC_PRICING
+    input_tokens = 1_000_000_000
+    output_tokens = 1_000_000_000
+    expected = input_tokens * pricing["input_per_million_usd"] / 1_000_000 + (
+        output_tokens * pricing["output_per_million_usd"] / 1_000_000
+    )
+
+    assert setup.estimate_cost_usd("anthropic", input_tokens, output_tokens) == expected
