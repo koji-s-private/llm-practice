@@ -89,9 +89,7 @@ st.title("📖 Doclore")
 st.markdown("##### あなたの資料から、迷わず答えへ。")
 st.caption("data/ フォルダにファイルを置くと自動でDBに反映され、AIエージェントが検索しながら回答します。")
 
-# st.checkbox/st.button等のhelp=ツールチップは既定でウィンドウ幅基準のmax-widthを取るため、
-# サイドバーのような狭いコンテナ内では隣接要素に大きくかぶさって視認性を下げることがある。
-# サイドバー幅に収まる上限を明示し、背後の要素と区別しやすいよう影を強める。
+# サイドバーの狭い幅に収まるようhelp=ツールチップの幅上限と影を明示する。
 st.markdown(
     """
     <style>
@@ -421,14 +419,10 @@ def _render_indexed_file_list() -> None:
         pending_key = f"pending_delete_{name}"
         download_key = f"pending_download_{name}"
         select_key = f"selected_delete_{name}"
-        # チェックボックス・ダウンロード・削除を1行の狭い列に詰め込むと、列幅の
-        # 微調整では操作要素同士の重なりが解消しきれないため、ファイル名行と
-        # 操作行を分ける2段組みにし、操作行の3要素に均等かつ十分な幅を割り当てる。
+        # 操作要素同士の重なりを避けるため、ファイル名行と操作行の2段組みにする。
         st.markdown(f"📄 {name}　`{file_info['chunk_count']}チャンク`")
         col_select, col_download, col_delete = st.columns([1, 1, 1])
-        # ツールチップ文言にファイル名を含めると、ファイル名が長いほどツールチップ自体も
-        # 幅広・縦長になり、サイドバーの狭い幅の中で上下の行にかぶさりやすくなる。
-        # ファイル名は直上の行に既に表示済みで重複情報のため、固定の短い文言に留める。
+        # ツールチップ幅を一定に保つため、直上の行に表示済みのファイル名は含めず固定文言にする。
         col_select.checkbox("選択", key=select_key, label_visibility="visible", help="一括削除の対象として選択")
         if col_download.button("⬇️ ダウンロード", key=f"download_button_{name}", help="このファイルをダウンロード"):
             st.session_state[download_key] = True
