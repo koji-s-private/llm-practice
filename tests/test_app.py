@@ -2076,6 +2076,17 @@ def test_doclore_branding_title_and_tagline_are_displayed():
     assert any(m.value == "##### あなたの資料から、迷わず答えへ。" for m in at.markdown)
 
 
+def test_tooltip_style_limits_width_and_adds_shadow():
+    """境界値: ツールチップ(stTooltipContent)にmax-widthとbox-shadowを指定する
+    styleブロックが描画され、狭いサイドバー幅でも他要素にかぶさりにくくなっている。"""
+    at = _run_app()
+
+    style_blocks = [m.value for m in at.markdown if "stTooltipContent" in m.value]
+    assert len(style_blocks) == 1
+    assert "max-width: 240px" in style_blocks[0]
+    assert "box-shadow" in style_blocks[0]
+
+
 def test_sidebar_document_management_heading_has_folder_icon():
     """境界値: サイドバーの「ドキュメント管理」見出しに📂アイコンが付与され、
     かつ既存の見出しテキスト自体は変わっていない（絵文字の付け忘れ・文言の
@@ -3321,8 +3332,9 @@ def test_indexed_file_list_shows_files_with_chunk_counts(monkeypatch):
     markdown_values = [m.value for m in at.sidebar.markdown]
     assert any("a.pdf" in v and "3チャンク" in v for v in markdown_values)
     assert any("b.txt" in v and "1チャンク" in v for v in markdown_values)
-    delete_buttons = [b for b in at.sidebar.button if b.help == "a.pdf を削除"]
+    delete_buttons = [b for b in at.sidebar.button if b.key == "delete_button_a.pdf"]
     assert len(delete_buttons) == 1
+    assert delete_buttons[0].help == "このファイルを削除"
 
 
 def test_delete_button_click_shows_confirmation_prompt(monkeypatch):
