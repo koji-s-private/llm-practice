@@ -89,6 +89,21 @@ st.title("📖 Doclore")
 st.markdown("##### あなたの資料から、迷わず答えへ。")
 st.caption("data/ フォルダにファイルを置くと自動でDBに反映され、AIエージェントが検索しながら回答します。")
 
+# st.checkbox/st.button等のhelp=ツールチップは既定でウィンドウ幅基準のmax-widthを取るため、
+# サイドバーのような狭いコンテナ内では隣接要素に大きくかぶさって視認性を下げることがある。
+# サイドバー幅に収まる上限を明示し、背後の要素と区別しやすいよう影を強める。
+st.markdown(
+    """
+    <style>
+    [data-testid="stTooltipContent"] {
+        max-width: 240px;
+        box-shadow: 0 2px 8px rgba(0, 0, 0, 0.3);
+    }
+    </style>
+    """,
+    unsafe_allow_html=True,
+)
+
 
 def _sync_and_report(spinner_text: str, warning_slot: DeltaGenerator | None = None) -> None:
     """data/全体を差分同期し、結果をトースト・警告バナーに反映する。
@@ -411,11 +426,14 @@ def _render_indexed_file_list() -> None:
         # 操作行を分ける2段組みにし、操作行の3要素に均等かつ十分な幅を割り当てる。
         st.markdown(f"📄 {name}　`{file_info['chunk_count']}チャンク`")
         col_select, col_download, col_delete = st.columns([1, 1, 1])
-        col_select.checkbox("選択", key=select_key, label_visibility="visible", help=f"{name} を一括削除の対象に選択")
-        if col_download.button("⬇️ ダウンロード", key=f"download_button_{name}", help=f"{name} をダウンロード"):
+        # ツールチップ文言にファイル名を含めると、ファイル名が長いほどツールチップ自体も
+        # 幅広・縦長になり、サイドバーの狭い幅の中で上下の行にかぶさりやすくなる。
+        # ファイル名は直上の行に既に表示済みで重複情報のため、固定の短い文言に留める。
+        col_select.checkbox("選択", key=select_key, label_visibility="visible", help="一括削除の対象として選択")
+        if col_download.button("⬇️ ダウンロード", key=f"download_button_{name}", help="このファイルをダウンロード"):
             st.session_state[download_key] = True
             st.session_state.pop(pending_key, None)
-        if col_delete.button("🗑️ 削除", key=f"delete_button_{name}", help=f"{name} を削除"):
+        if col_delete.button("🗑️ 削除", key=f"delete_button_{name}", help="このファイルを削除"):
             # 一括削除の確認を表示中に個別削除の確認を開いた場合、両方の
             # 確認ダイアログが同時に出てしまうため、一括側は閉じる。
             st.session_state[pending_key] = True
