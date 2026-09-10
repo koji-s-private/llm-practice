@@ -572,6 +572,27 @@ def _render_answer_provenance(sources: list) -> None:
                 st.text(_format_snippet(doc.page_content))
 
 
+def _render_token_usage_note() -> None:
+    """有料API（Anthropic/OpenAI）利用中のみ、この会話でのトークン使用量・概算コストを回答の下に表示する。
+
+    Ollama（無料）利用中は不要な情報でUIを煩雑にしないため表示しない。累積値はセッション
+    全体（この会話スレッドの表示中）の合計であり過去分も含むため、回答生成直後にのみ
+    呼び出し、過去の各回答を再描画するたびに同じ合計値を重複表示しないようにする。
+    """
+    provider = st.session_state.selected_provider
+    if provider not in ("anthropic", "openai"):
+        return
+    usage = st.session_state.token_usage
+    if usage["input_tokens"] == 0 and usage["output_tokens"] == 0:
+        return
+    cost = setup.estimate_cost_usd(provider, usage["input_tokens"], usage["output_tokens"])
+    cost_text = f"（約${cost:.4f}相当）" if cost is not None else ""
+    st.caption(
+        f"💰 この会話のトークン使用量（概算）: 入力{usage['input_tokens']:,} / 出力{usage['output_tokens']:,}"
+        f"{cost_text}"
+    )
+
+
 def _copy_button_html(text: str) -> str:
     """回答コピーボタンのHTML/JSを組み立てる。
 
@@ -776,6 +797,12 @@ if "messages" not in st.session_state:
 
 if "auto_save_memory" not in st.session_state:
     st.session_state.auto_save_memory = True  # 会話の自動ナレッジ化（デフォルトON）
+
+if "token_usage" not in st.session_state:
+    # 有料API（Anthropic/OpenAI）フォールバック利用時の概算コスト表示用。
+    # セッション（この会話スレッドの表示中）を通じて累積し、スレッド切替時にリセットはしない
+    # （表示自体は_render_token_usage_note()側でプロバイダに応じて出し分ける）。
+    st.session_state.token_usage = {"input_tokens": 0, "output_tokens": 0}
 
 if "processed_upload_ids" not in st.session_state:
     # st.file_uploaderの値はファイルを明示的に取り除くかリロードするまで保持され続けるため、
@@ -1080,13 +1107,17 @@ if question:
             # 履歴側から1件除いた上でquestionを付け直す。
             history_for_agent = st.session_state.messages[:-1] if regenerating else st.session_state.messages
 
+            turn_usage = {"input_tokens": 0, "output_tokens": 0}
+
             def _stream_answer():
-                """agentのストリーミング出力を逐次yieldしつつ、参照元ドキュメントをsourcesへ蓄積する。
+                """agentのストリーミング出力を逐次yieldしつつ、参照元ドキュメント・トークン使用量を蓄積する。
 
                 ToolMessage（検索ツールの実行結果）は回答本文ではないため除外し、artifactだけを
                 sourcesに蓄積する。AIMessageChunk.content はプロバイダによって型が異なる
                 （str、またはAnthropicのcontent blocks list）ため、素朴なisinstance判定ではなく
                 text系ブロックを結合済みの .text プロパティでテキストを取り出す。
+                usage_metadataはLLM呼び出し1回につき最後のチャンクにのみ乗る（各社ストリーミング実装の
+                挙動）ため、単純に加算するだけで1ターン中の複数回のLLM呼び出し分を正しく積算できる。
                 """
                 first_token = True
                 seen_source_keys: set = set()
@@ -1107,6 +1138,10 @@ if question:
                                 seen_source_keys.add(key)
                                 sources.append(doc)
                         continue
+                    usage = getattr(chunk, "usage_metadata", None)
+                    if usage:
+                        turn_usage["input_tokens"] += usage.get("input_tokens") or 0
+                        turn_usage["output_tokens"] += usage.get("output_tokens") or 0
                     text = getattr(chunk, "text", "")
                     if text:
                         if first_token:
@@ -1128,6 +1163,9 @@ if question:
             # 生成が正常に完了したので、もう押しても意味のないキャンセルボタンを消す。
             cancel_placeholder.empty()
 
+            st.session_state.token_usage["input_tokens"] += turn_usage["input_tokens"]
+            st.session_state.token_usage["output_tokens"] += turn_usage["output_tokens"]
+
             _render_answer_provenance(sources)
             _render_copy_button(answer)
             # この時点ではまだmessagesに追加していないため、追加後にこのAIMessageが
@@ -1135,6 +1173,7 @@ if question:
             # 再生成時はHumanMessageを追加し直さないため+1しない。
             next_index = len(st.session_state.messages) if regenerating else len(st.session_state.messages) + 1
             _render_feedback_buttons(question, answer, next_index)
+            _render_token_usage_note()
             _render_regenerate_button(next_index)
         except Exception as e:
             status_placeholder.empty()

@@ -743,3 +743,55 @@ def test_model_label_none_provider_falls_back_to_fumei():
 def test_model_label_none_model_name_shows_none_literal():
     """境界値: model_nameがNoneの場合は例外を送出せず"None"という文字列がそのまま表示される。"""
     assert setup.model_label("ollama", None) == "Ollama (None)"
+
+
+# --- estimate_cost_usd()（有料APIフォールバック時の概算コスト表示） ---
+
+
+def test_estimate_cost_usd_anthropic_uses_pricing_table():
+    pricing = setup.ANTHROPIC_PRICING
+    expected = 1_000_000 * pricing["input_per_million_usd"] / 1_000_000 + (
+        1_000_000 * pricing["output_per_million_usd"] / 1_000_000
+    )
+
+    assert setup.estimate_cost_usd("anthropic", 1_000_000, 1_000_000) == expected
+
+
+def test_estimate_cost_usd_openai_uses_pricing_table():
+    pricing = setup.OPENAI_PRICING
+    expected = 500_000 * pricing["input_per_million_usd"] / 1_000_000 + (
+        200_000 * pricing["output_per_million_usd"] / 1_000_000
+    )
+
+    assert setup.estimate_cost_usd("openai", 500_000, 200_000) == expected
+
+
+def test_estimate_cost_usd_zero_tokens_is_zero():
+    assert setup.estimate_cost_usd("anthropic", 0, 0) == 0.0
+
+
+def test_estimate_cost_usd_returns_none_for_ollama():
+    """課金ガード対象外: 無料のOllamaには料金表が無く、金額表示を省略できるようNoneを返す。"""
+    assert setup.estimate_cost_usd("ollama", 1000, 1000) is None
+
+
+def test_estimate_cost_usd_returns_none_for_unknown_provider():
+    """境界値: 未知のプロバイダ文字列でもクラッシュせずNoneを返す。"""
+    assert setup.estimate_cost_usd("unknown-provider", 1000, 1000) is None
+
+
+def test_estimate_cost_usd_returns_none_for_none_provider():
+    """境界値: providerがNone（想定外の状態）でもクラッシュせずNoneを返す。"""
+    assert setup.estimate_cost_usd(None, 1000, 1000) is None
+
+
+def test_estimate_cost_usd_handles_very_large_token_counts():
+    """境界値: 極端に大きいトークン数でも例外にならず、桁の大きい概算コストを返す。"""
+    pricing = setup.ANTHROPIC_PRICING
+    input_tokens = 1_000_000_000
+    output_tokens = 1_000_000_000
+    expected = input_tokens * pricing["input_per_million_usd"] / 1_000_000 + (
+        output_tokens * pricing["output_per_million_usd"] / 1_000_000
+    )
+
+    assert setup.estimate_cost_usd("anthropic", input_tokens, output_tokens) == expected
