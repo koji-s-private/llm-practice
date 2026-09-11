@@ -39,7 +39,6 @@ _SOURCES_HEADER = "\n\n## 参照元\n\n"
 # save_conversation()が書き込む「質問文字数」「回答文字数」「参照元文字数」のメタデータ行。
 # 見出しの正規表現マッチではなく記録済みの文字数ぶんをそのまま切り出すことで、本文中に
 # "## 質問"/"## 回答"に類する文字列が偶然含まれていても正確に復元できる。
-# 参照元文字数の行が無いファイルは旧形式（sources未対応）として扱い、空リストにフォールバックする。
 _QUESTION_LENGTH_PATTERN = re.compile(r"^- 質問文字数: (\d+)$", re.MULTILINE)
 _ANSWER_LENGTH_PATTERN = re.compile(r"^- 回答文字数: (\d+)$", re.MULTILINE)
 _SOURCES_LENGTH_PATTERN = re.compile(r"^- 参照元文字数: (\d+)$", re.MULTILINE)
@@ -101,12 +100,10 @@ def save_conversation(
     メタデータ(is_fallback)に反映する。これにより、根拠のない回答が以降の検索結果に
     再ヒットして裏付けありのように扱われることを防ぐ（rag_chain.retrieve_context側で除外）。
 
-    sources: 回答の根拠として使われた langchain_core.documents.Document 互換のリスト
-    （.metadata / .page_content を持つオブジェクト）。指定しない/空の場合は参照元セクション
-    自体を書き込まず、load_conversation()側は旧形式ファイルと同じく空リストを返す。
+    sources: 回答の根拠として使われたDocument互換のリスト。指定しない/空の場合は
+    参照元セクションを書き込まず、load_conversation()側は空リストを返す。
 
-    戻り値: 保存したファイルのパス。呼び出し側が ingest.sync_data_dir() を呼べば
-    ベクトルDBに反映される。
+    戻り値: 保存したファイルのパス（ベクトルDB反映は呼び出し側がingest.sync_data_dir()で行う）。
     """
     thread_dir = CONVERSATIONS_DIR / _validate_thread_id(thread_id)
     thread_dir.mkdir(parents=True, exist_ok=True)

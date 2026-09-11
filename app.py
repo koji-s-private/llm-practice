@@ -106,13 +106,10 @@ st.markdown(
 def _sync_and_report(spinner_text: str, warning_slot: DeltaGenerator | None = None) -> None:
     """data/全体を差分同期し、結果をトースト・警告バナーに反映する。
 
-    warning_slot（トップレベルで確保済みのst.empty()）を渡すと、次のスクリプト再実行を
-    待たずに同じターン内で警告バナーへ即時反映できる（起動時の呼び出しではスロット確保前
-    のため渡さない）。
-
-    同期中は進捗バーで「何件中何件目のどのファイルを処理中か」を逐次表示する
-    （Doclingによるスキャン/図解PDFのOCR解析は1ファイルで数十秒以上かかることがあり、
-    固定文言のスピナーだけではフリーズと区別できないため）。
+    warning_slotを渡すと、次のスクリプト再実行を待たずに同じターン内で警告バナーへ
+    即時反映できる（起動時の呼び出しではスロット確保前のため渡さない）。
+    Doclingによる重いOCR解析は1ファイルで数十秒以上かかることがあるため、
+    固定文言のスピナーだけでなく進捗バーで処理中ファイルを逐次表示する。
     """
     progress_slot = st.empty()
 
@@ -150,10 +147,8 @@ def _sync_and_report(spinner_text: str, warning_slot: DeltaGenerator | None = No
 def _sync_google_drive_and_report(warning_slot: DeltaGenerator | None = None) -> None:
     """Google Driveの内容をdata/google_drive/にミラーし、続けてDBへ反映して結果を通知する。
 
-    GOOGLE_DRIVE_FOLDER_ID未設定時、sync_google_drive_files()は例外を出さず全キー空リストを
-    返す仕様のため（google_drive_sync.py参照）、それと「設定済みだが変更なし」を区別せず
-    未設定寄りの案内で共通化する（変更なしの場合に誤情報にはならないため実害は無い）。
-    認証情報ファイルが無い場合はRuntimeErrorが送出されるため、他の失敗と分けてエラー表示する。
+    GOOGLE_DRIVE_FOLDER_ID未設定時はsync_google_drive_files()が例外を出さず全キー空リストを
+    返す仕様のため、「未設定」と「設定済みだが変更なし」を区別せず同じ案内文で共通化する。
     """
     try:
         with st.spinner("Google Driveと同期中..."):
@@ -185,8 +180,8 @@ def _sync_saved_conversation(path: Path, warning_slot: DeltaGenerator | None = N
     """保存したばかりの会話ログ1件だけを、data/全件を走査せずその場で軽量にDB反映する。
 
     トップレベルの軽量シグネチャチェック（sync_data_dir）に任せると、data/配下の
-    ファイル数に比例して毎ターンの走査コストが増え続けるため、add_single_conversation_file()で
-    対象1件だけを処理する。失敗時はシグネチャを更新せず、次回の全件差分同期に再試行を委ねる。
+    ファイル数に比例して毎ターンの走査コストが増え続けるため避ける。失敗時はシグネチャを
+    更新せず、次回の全件差分同期に再試行を委ねる。
     """
     try:
         status = add_single_conversation_file(path)
@@ -213,8 +208,7 @@ def _show_failed_sync_files_warning(container: DeltaGenerator | None = None) -> 
     """読み込みに失敗したファイルの警告を、同期が成功するまで毎回のスクリプト実行で表示し続ける。
 
     st.warningはそのスクリプト実行の描画にしか残らないため、セッションに保持した
-    失敗ファイル一覧を毎回参照して描画する。containerを渡すとそのスロットへ上書き描画し、
-    失敗ファイルが0件になった場合はcontainer.empty()で古い警告をクリアする。
+    失敗ファイル一覧を毎回参照して描画する。containerを渡すとそのスロットへ上書き描画する。
     """
     target = container if container is not None else st
     failed = st.session_state.get("failed_sync_files")
@@ -250,9 +244,8 @@ def _show_embedding_model_mismatch_warning() -> None:
 def _format_invoke_error_message(e: Exception) -> str:
     """agent.invoke()/agent.stream()失敗時のエラーメッセージを、実際に使用中のプロバイダに応じて出し分ける。
 
-    setup.py の _build_model() はOllama→Anthropic→OpenAIの順にフォールバックするため、
-    setup.CURRENT_PROVIDER を見ずに固定メッセージにすると、実際とは異なるプロバイダの
-    トラブルシューティングにユーザーを誤誘導してしまう。
+    setup.CURRENT_PROVIDER を見ずに固定メッセージにすると、フォールバックで実際に
+    使われているプロバイダとは異なるトラブルシューティング内容を案内してしまうため。
     """
     if setup.CURRENT_PROVIDER == "ollama":
         message = str(e).lower()
@@ -277,8 +270,8 @@ def _format_invoke_error_message(e: Exception) -> str:
 def _show_provider_fallback_warning() -> None:
     """Ollama（無料・ローカル）が使えず有料APIに自動フォールバックした場合、起動直後に警告バナーを表示する。
 
-    ユーザーが自分の意思でUIから有料APIモデルへ切り替えた場合はこの限りではないため、
-    「一度も手動でモデルを切り替えていない（起動時の自動選択のまま）」場合にのみ表示する。
+    ユーザーが自分の意思でUIから有料APIモデルへ切り替えた場合は表示しない
+    （一度も手動でモデルを切り替えていない場合にのみ表示する）。
     """
     if st.session_state.get("model_manually_selected"):
         return
@@ -292,12 +285,7 @@ def _show_provider_fallback_warning() -> None:
 
 
 def _build_agent_safely(thread_id: str):
-    """build_agent()を例外から保護する共通ヘルパー。
-
-    現状のbuild_agent()はネットワーク呼び出しを伴わないため失敗しにくいが、
-    将来モデルの疎通確認などが追加された場合に備え、失敗してもアプリ全体を
-    クラッシュさせずエラー表示に留める。失敗時はNoneを返す。
-    """
+    """build_agent()を例外から保護する共通ヘルパー。失敗時はアプリを落とさずNoneを返す。"""
     try:
         return build_agent(thread_id, chat_model=st.session_state.get("chat_model"))
     except Exception as e:
@@ -344,9 +332,7 @@ def _thread_display_label(thread: dict) -> str:
     """過去スレッド選択UIに表示するラベルを作る。
 
     ユーザーがタイトルを設定済みなら、それを主表示にし自動生成ラベルを補助的に添える。
-    未設定の場合は従来通り _format_thread_label() の自動生成ラベルのみを使う。
-    タイトルが長いと自動ラベル側がselectboxの限られた幅で見えなくなるため、
-    自動ラベルと同様に上限文字数で切り詰める。
+    未設定の場合は _format_thread_label() の自動生成ラベルのみを使う。
     """
     title = load_thread_title(thread["thread_id"])
     auto_label = _format_thread_label(thread)
@@ -357,13 +343,11 @@ def _thread_display_label(thread: dict) -> str:
 
 
 def _thread_selector_key(thread_id: str, thread_labels: dict) -> str:
-    """過去スレッド選択selectboxのwidget keyを、現在アクティブなスレッドの表示ラベルを
-    含めて組み立てる。
+    """過去スレッド選択selectboxのwidget keyを組み立てる。
 
-    Streamlitのselectboxは、keyが変わらない限り選択中オプションの閉じた状態の表示文字列を
-    再計算しないことがあるため、ラベルの内容そのものをkeyに含めることで、タイトル保存直後の
-    ような「同じスレッドのままラベルだけが変わった」ケースでもウィジェットを再マウントさせ、
-    表示を最新化する。
+    Streamlitのselectboxはkeyが変わらない限り選択中オプションの表示文字列を再計算しないため、
+    ラベルの内容をkeyに含めることで「同じスレッドのままラベルだけ変わった」場合も
+    ウィジェットを再マウントさせ表示を最新化する。
     """
     return f"thread_selector_{thread_id}_{thread_labels.get(thread_id, '')}"
 
@@ -371,7 +355,7 @@ def _thread_selector_key(thread_id: str, thread_labels: dict) -> str:
 def _filter_threads(threads: list[dict], keyword: str) -> list[dict]:
     """スレッド一覧を、最初の質問文（first_question）に対するキーワードの部分一致で絞り込む。
 
-    大文字小文字は区別しない。keywordが空文字列（前後空白のみを含む）の場合は絞り込まず全件返す。
+    大文字小文字は区別しない。keywordが空文字列の場合は絞り込まず全件返す。
     """
     keyword = keyword.strip().lower()
     if not keyword:
@@ -400,13 +384,10 @@ def _conversation_to_markdown(messages: list, thread_id: str) -> str:
 def _render_indexed_file_list() -> None:
     """インデックス済みファイルの一覧を表示し、各ファイルのダウンロード・削除ボタンから個別に操作できるようにする。
 
-    誤操作でファイルを消してしまわないよう、削除は「削除ボタン→確認ボタン」の2段階にする。
-    確認待ちの状態はセッションに保持し、削除完了・キャンセルのいずれかで解除する。
-    ダウンロードも同様に2段階（ボタン→実際のdownload_button表示）にし、
-    ボタンを押したファイルのみを都度読み込むことで、一覧表示のたびに
-    全ファイルをメモリへ展開してしまうのを避ける。
-    各行のチェックボックスで複数選択し、一覧下部の「選択したファイルを削除」からまとめて
-    削除することもできる（個別の削除ボタンとは独立した経路で、同じ確認ステップを踏む）。
+    誤操作を防ぐため、削除・ダウンロードとも「ボタン→確認/実体表示」の2段階にする
+    （ダウンロードはボタンを押したファイルのみ都度読み込み、一覧表示のたびに全件を
+    メモリへ展開しないようにする）。各行のチェックボックスで複数選択し、一覧下部の
+    「選択したファイルを削除」からまとめて削除することもできる。
     """
     indexed_files = list_indexed_files()
     if not indexed_files:
@@ -440,8 +421,6 @@ def _render_indexed_file_list() -> None:
                 st.error(f"「{name}」の実体が見つかりません（削除済みの可能性があります）。")
                 st.session_state.pop(download_key, None)
             else:
-                # ファイル内容の読み込みはダウンロードボタン押下後にのみ行い、
-                # 一覧表示のたびに全ファイルをメモリへ載せないようにする。
                 mime_type, _ = mimetypes.guess_type(file_path.name)
                 col_download_action, col_download_close = st.columns([4, 1])
                 col_download_action.download_button(
@@ -480,9 +459,8 @@ def _render_indexed_file_list() -> None:
 def _render_bulk_delete_controls(indexed_files: list[dict]) -> None:
     """チェックボックスで選択されたファイルをまとめて削除するボタン・確認ステップを表示する。
 
-    確認待ちの対象ファイル名は押下時点でセッションに固定して保持する。確認表示中に
-    チェックボックスの選択状態が変わっても、確認メッセージと実際の削除対象がずれないようにするため。
-    個別削除の確認ダイアログと同時に表示されないよう、押下時に個別側の確認状態は解除する。
+    確認待ちの対象ファイル名は押下時点でセッションに固定し、確認表示中にチェックボックスの
+    選択状態が変わっても確認メッセージと実際の削除対象がずれないようにする。
     """
     pending_key = _PENDING_BULK_DELETE_KEY
     selected_names = [f["name"] for f in indexed_files if st.session_state.get(f"selected_delete_{f['name']}")]
@@ -498,9 +476,8 @@ def _render_bulk_delete_controls(indexed_files: list[dict]) -> None:
         help=help_text,
     ):
         st.session_state[pending_key] = selected_names
-        # 個別削除の確認と同時表示にならないよう、他のファイルの個別確認も含めて閉じておく。
-        # 一覧のループは本関数より先に実行済みのため、この場でクリアするだけでは古い状態の
-        # 個別確認が既に描画された後になってしまう。反映させるためrerunし直す。
+        # 個別削除の確認と同時表示にならないよう閉じる。一覧ループは本関数より先に
+        # 実行済みで、この場のクリアだけでは反映されないためrerunし直す。
         for f in indexed_files:
             st.session_state.pop(f"pending_delete_{f['name']}", None)
         st.rerun()
@@ -538,9 +515,8 @@ def _render_empty_state_guidance() -> None:
     """ドキュメント未登録・初回訪問のユーザー向けに、次に何をすればよいかの案内を表示する。
 
     「ドキュメントが0件」と「ドキュメントはあるが会話ログがまだ無い初回訪問」を区別する。
-    後者はconversation_count(thread_id=None)で全スレッド合計を見ることで、
-    「新しい会話を始める」で現在のスレッドだけが空になったケースを誤って
-    初回訪問と判定しないようにする。
+    後者はconversation_count(thread_id=None)で全スレッド合計を見ることで、「新しい会話を
+    始める」で現在のスレッドだけが空になったケースを初回訪問と誤判定しないようにする。
     """
     if not list_indexed_files():
         st.info(
@@ -559,19 +535,15 @@ def _render_empty_state_guidance() -> None:
 def _render_answer_provenance(sources: list) -> None:
     """回答がドキュメント根拠か一般知識かのバッジと、参照元expanderを回答直後・過去ターン再描画の両方で表示する。
 
-    sourcesが空か否かをそのまま判定に使う（save_conversation()のis_fallback判定と同じ考え方）ため、
-    additional_kwargs["sources"]としてメッセージ本体に保持済みのsourcesを渡せば、
-    再描画時も追加の状態を持たずに同じ判定結果を再現できる。
+    sourcesが空か否かをそのまま判定に使う（save_conversation()のis_fallback判定と同じ考え方）。
     """
     if not sources:
         st.caption("🧠 一般知識による回答（ドキュメントに該当情報なし）")
         return
     st.caption("🔍 ドキュメントに基づく回答")
-    # 件数をタイトルに出し、各項目を枠線付きcontainerで区切ることで、
-    # 狭い画面幅でも項目の境界が分かりやすくスクロール・タップしやすくする。
-    # 番号は回答本文にLLMが付ける引用番号（例: [1]）と一致させるため、rag_chain側で
-    # 割り当てたcitation_numberをそのまま使う。過去の会話ログから復元されたsources
-    # （citation_numberを持たない）向けに、位置ベースの連番へフォールバックする。
+    # 番号は回答本文中のLLMの引用番号（例: [1]）と一致させるため、rag_chain側で割り当てた
+    # citation_numberを使う。過去の会話ログから復元されたsources（citation_numberなし）は
+    # 位置ベースの連番にフォールバックする。
     with st.expander(f"参照した箇所を見る（{len(sources)}件）"):
         for position, doc in enumerate(sources, start=1):
             number = doc.metadata.get("citation_number", position)
@@ -587,9 +559,8 @@ def _render_answer_provenance(sources: list) -> None:
 def _render_token_usage_note() -> None:
     """有料API（Anthropic/OpenAI）利用中のみ、この会話でのトークン使用量・概算コストを回答の下に表示する。
 
-    Ollama（無料）利用中は不要な情報でUIを煩雑にしないため表示しない。累積値はセッション
-    全体（この会話スレッドの表示中）の合計であり過去分も含むため、回答生成直後にのみ
-    呼び出し、過去の各回答を再描画するたびに同じ合計値を重複表示しないようにする。
+    累積値はセッション全体（この会話スレッドの表示中）の合計であり過去分も含むため、
+    回答生成直後にのみ呼び出し、過去の各回答を再描画するたびに重複表示しないようにする。
     """
     provider = st.session_state.selected_provider
     if provider not in ("anthropic", "openai"):
@@ -608,13 +579,11 @@ def _render_token_usage_note() -> None:
 def _copy_button_html(text: str) -> str:
     """回答コピーボタンのHTML/JSを組み立てる。
 
-    st.markdown(unsafe_allow_html=True)はDOMPurifyがonclick等のイベント属性を
-    除去してしまいクリックが効かないため、独立したHTMLドキュメントとしてscriptを
-    実行できるst.components.v1.html（iframe埋め込み）向けに組み立てる。
-    json.dumpsでエスケープすることで、改行や引用符を含む回答文でも
-    安全にJS文字列リテラルへ埋め込める。ただしjson.dumpsは"/"をエスケープ
-    しないため、回答文に"</script>"が含まれるとscriptタグが分断されてしまう。
-    "</"を"<\\/"へ置換し、HTMLパーサーがscript終端と誤認しないようにする。
+    st.markdown(unsafe_allow_html=True)はDOMPurifyがonclick等のイベント属性を除去して
+    しまうため、独立したHTMLドキュメントとしてscriptを実行できる
+    st.components.v1.html（iframe埋め込み）向けに組み立てる。json.dumpsは"/"を
+    エスケープしないため、回答文に"</script>"が含まれるとscriptタグが分断される。
+    "</"を"<\\/"へ置換してHTMLパーサーがscript終端と誤認しないようにする。
     """
     encoded_text = json.dumps(text).replace("</", "<\\/")
     return f"""
@@ -654,8 +623,7 @@ def _feedback_widget_key(index: int, suffix: str) -> str:
     """フィードバックボタン群のwidget key・記録済みフラグ用のkeyを組み立てる。
 
     メッセージ自体に一意なIDが無いため、st.session_state.messages内での位置（index）を
-    識別子として使う。タイムスタンプ（秒精度）は同一スレッド内で複数ターンが同じ秒に
-    保存されると衝突しうるため使わない。
+    識別子として使う。
     """
     return f"feedback_{st.session_state.thread_id}_{index}_{suffix}"
 
@@ -688,9 +656,9 @@ def _render_regenerate_button(index: int) -> None:
     """直近のAI回答の下に🔄再生成ボタンを表示する（対象は最新の1件のみ、呼び出し側で判定済み）。
 
     押下時は対象のAIMessageをmessagesから取り除いた上でrerunし、以降の回答生成ブロックに
-    「直前のユーザー入力に対する再生成」として処理させる。取り除いた回答は退避しておき、
-    生成に失敗した場合に復元できるようにする。同じindexに対する既存のフィードバック記録は
-    古い回答のものなので、新しい回答に引き継がれないようここで消しておく。
+    「直前のユーザー入力に対する再生成」として処理させる。取り除いた回答は生成失敗時に
+    復元できるよう退避しておく。同じindexの既存フィードバック記録は古い回答のものなので、
+    新しい回答に引き継がれないよう消しておく。
     """
     if st.button("🔄 再生成", key=f"regenerate_{st.session_state.thread_id}_{index}", help="この回答を作り直す"):
         st.session_state.regenerate_original_message = st.session_state.messages.pop()
@@ -713,11 +681,9 @@ def _model_switcher_key(model: dict) -> tuple:
 def _render_model_switcher() -> None:
     """入力欄の直上に、使用するLLMモデルを切り替える小さなセレクターを表示する。
 
-    APIキー未設定のプロバイダはsetup.list_available_models()の時点で除外されているため、
-    ここでは一覧に出てきたものをそのままselectboxの選択肢にするだけでよい。
     現在のモデルが一覧に見つからない場合、selectboxをindex=Noneのプレースホルダー状態で
     表示する。indexを0番目にフォールバックさせると、ユーザーが何も操作していなくても
-    「選択が変わった」ように見えてしまい、意図しないモデル切替が起きるため。
+    「選択が変わった」ように見えて意図しないモデル切替が起きるため。
     """
     available_models = setup.list_available_models()
     if not available_models:
@@ -791,8 +757,7 @@ if st.session_state.get("data_dir_signature") != current_data_dir_signature:
 _show_embedding_model_mismatch_warning()
 
 # 前回までの同期で読み込みに失敗したファイルが残っている場合、このスクリプト実行でも
-# 警告を表示し続ける（同期が呼ばれなかった場合でも、直前の失敗状態を毎回描画するため）。
-# プレースホルダーとして確保しておくことで、この後の会話保存（_sync_saved_conversation）・
+# 警告を表示し続ける。プレースホルダーとして確保しておくことで、この後の会話保存・
 # 再同期ボタン・アップロード時（いずれも_sync_and_report経由）が同じターン中に成功/失敗
 # しても、新規要素を追加せずこのスロットへ上書きで即座に反映できる。
 failed_sync_warning_slot = st.empty()
@@ -822,10 +787,9 @@ if "processed_upload_ids" not in st.session_state:
     # ここに記録し、再実行のたびに重複保存・再インデックスされないようにする。
     st.session_state.processed_upload_ids = set()
 
-# 再生成中にキャンセル操作でスクリプトが打ち切られると、対象の回答が
-# regenerate_original_messageへ退避されたままmessagesから失われた状態で残ることがある。
-# 今回の実行が実際に再生成を行う場合（regenerating=True）以外はここで復元し、孤立させない。
-# サイドバーの会話エクスポート等がmessagesの件数を参照するため、その描画より前に行う。
+# 再生成中にキャンセル操作でスクリプトが打ち切られると、退避したregenerate_original_message
+# がmessagesに戻らないまま残ることがある。今回の実行が再生成本番（regenerating=True）で
+# ない限りここで復元し、サイドバーの会話エクスポート等より前に反映させる。
 if "regenerate_original_message" in st.session_state and not st.session_state.get("regenerating"):
     st.session_state.messages.append(st.session_state.pop("regenerate_original_message"))
 
@@ -1061,21 +1025,17 @@ for index, message in enumerate(st.session_state.messages):
 _render_empty_state_guidance()
 
 if st.session_state.messages and len(_windowed_history(st.session_state.messages)) < len(st.session_state.messages):
-    # LLMへの送信直前に行われるウィンドウイング（_windowed_history）と同じ判定を
-    # 表示側でも行う。Streamlitのチャット画面は常に最新メッセージへ自動スクロールするため、
-    # ユーザーが実際に着地する入力欄直上に表示し、静的な導入文（st.caption）と混同されない
-    # よう視覚的に区別できるst.infoを使う。
+    # LLMへの送信直前に行われるウィンドウイング（_windowed_history）と同じ判定を表示側でも行う。
+    # 常に自動スクロールされる入力欄直上に表示し、静的な導入文と混同されないようst.infoを使う。
     st.info("会話が長くなったため、古いやりとりの一部はAIの参照対象から外れています。")
 
 _render_model_switcher()
 
 user_input = st.chat_input("資料について気になることを聞いてみましょう")
 
-# 再生成ボタン押下時にセットされるフラグ。popで読み取りと同時に消しておくことで、
-# ストリーミング中にキャンセルボタンが押されて実行が中断された場合でも（Streamlitは
-# ウィジェット操作を検知すると実行中のスクリプトをその場で打ち切って再実行するため、
-# 下記のstate更新コードまで到達しない）、次の再実行で同じ再生成が自動的に繰り返されない
-# ようにする。
+# 再生成ボタン押下時にセットされるフラグ。popで読み取りと同時に消すことで、
+# ストリーミング中断時（Streamlitはウィジェット操作を検知すると実行中のスクリプトを
+# その場で打ち切って再実行する）にも同じ再生成が自動的に繰り返されないようにする。
 regenerating = st.session_state.pop("regenerating", False) and bool(st.session_state.messages)
 question = st.session_state.messages[-1].content if regenerating else user_input
 
@@ -1096,25 +1056,20 @@ if question:
             )
             st.stop()
         try:
-            # 検索中であることを示すプレースホルダー。最初の回答トークンが届いた時点で消す
-            # （ツール呼び出し中は回答本文のトークンが生成されないため、その間の待機を可視化する）。
+            # 検索中であることを示すプレースホルダー。ツール呼び出し中は回答本文のトークンが
+            # 生成されないため、最初のトークンが届くまでの待機を可視化する。
             status_placeholder = st.empty()
             status_placeholder.markdown("🔄 回答を再生成中..." if regenerating else "🔍 検索して回答を考え中...")
-            # ストリーミング中に押せるキャンセルボタン。Streamlitは、ウィジェット操作を
-            # 検知すると実行中のスクリプトを次のst.*呼び出し（＝このあとのループ内の
-            # answer_placeholder.markdown()等）のタイミングで自動的に中断・再実行する
-            # 仕組みを持つため、押されたことをここで能動的にチェックする必要はない。
-            # 中断されると以降のコード（履歴への追加やsave_conversation）は一切実行されず、
-            # 直前まで描画されていた部分的な回答も次の再実行で自然に消える。
+            # ストリーミング中に押せるキャンセルボタン。Streamlitはウィジェット操作を検知すると
+            # 実行中のスクリプトを自動的に中断・再実行するため、押されたことを能動的にチェック
+            # する必要はない。中断後は履歴追加やsave_conversation等も実行されない。
             cancel_placeholder = st.empty()
             cancel_placeholder.button("⏹️ キャンセル", key="cancel_generation")
-            # st.write_stream() が内部的に生成するプレースホルダーは呼び出し元から
-            # 参照できず、ストリーム途中で例外が起きた場合に描画済みの部分テキストを
-            # クリアできない。自前でプレースホルダーを持つことで、except節から
-            # 明示的にクリアできるようにする。
+            # st.write_stream()は内部プレースホルダーを呼び出し元から参照できず、
+            # 例外発生時に描画済みの部分テキストをクリアできないため自前で持つ。
             answer_placeholder = st.empty()
 
-            # 再生成時、st.session_state.messagesは既に対象の質問（HumanMessage）を末尾に
+            # 再生成時、st.session_state.messagesは対象の質問（HumanMessage）を末尾に
             # 含んでいる（回答だけがボタン押下時に取り除かれている）ため、二重に渡さないよう
             # 履歴側から1件除いた上でquestionを付け直す。
             history_for_agent = st.session_state.messages[:-1] if regenerating else st.session_state.messages
@@ -1126,10 +1081,9 @@ if question:
 
                 ToolMessage（検索ツールの実行結果）は回答本文ではないため除外し、artifactだけを
                 sourcesに蓄積する。AIMessageChunk.content はプロバイダによって型が異なる
-                （str、またはAnthropicのcontent blocks list）ため、素朴なisinstance判定ではなく
-                text系ブロックを結合済みの .text プロパティでテキストを取り出す。
-                usage_metadataはLLM呼び出し1回につき最後のチャンクにのみ乗る（各社ストリーミング実装の
-                挙動）ため、単純に加算するだけで1ターン中の複数回のLLM呼び出し分を正しく積算できる。
+                （str、またはAnthropicのcontent blocks list）ため、.text プロパティでテキストを取り出す。
+                usage_metadataはLLM呼び出し1回につき最後のチャンクにのみ乗るため、単純に加算するだけで
+                1ターン中の複数回のLLM呼び出し分を正しく積算できる。
                 """
                 first_token = True
                 seen_source_keys: set = set()
@@ -1139,7 +1093,7 @@ if question:
                 ):
                     if isinstance(chunk, ToolMessage):
                         if getattr(chunk, "artifact", None):
-                            # 1ターン中に複数回検索されて同じチャンクが重複ヒットすることがあるため、
+                            # 1ターン中に複数回検索されて同じチャンクが重複ヒットすることがあるため
                             # 既出チャンクを除外する。page_contentもキーに含めるのは、pageを持たない
                             # .txt/.md等ではsource/thread_idだけでは同一ファイル内の別チャンクを
                             # 区別できないため。
@@ -1208,11 +1162,9 @@ if question:
         )
         st.session_state.pop("regenerate_original_message", None)
 
-        # 会話を自動でナレッジ化（このスレッド専用でローカル保存し、全件走査するsync_data_dir()
-        # ではなく保存した1ファイルだけをその場でDB反映）。sourcesが空＝根拠なしの一般知識回答
-        # なのでis_fallbackとして記録し、以降の検索対象から除外できるようにする。
-        # 再生成時はナレッジ化をスキップする（同じ質問への回答が重複保存され続けるのを防ぐため。
-        # 置き換え後の最終的な回答はセッション内の会話履歴・エクスポートには反映される）。
+        # 会話を自動でナレッジ化する（保存した1ファイルだけをその場でDB反映）。sourcesが
+        # 空＝根拠なしの一般知識回答なのでis_fallbackとして記録し、以降の検索対象から除外する。
+        # 再生成時は同じ質問への回答が重複保存されるのを防ぐためスキップする。
         if st.session_state.auto_save_memory and not regenerating:
             saved_path = save_conversation(
                 question, answer, st.session_state.thread_id, is_fallback=not sources, sources=sources
