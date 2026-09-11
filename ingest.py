@@ -6,41 +6,36 @@ Chroma ベクトルDBに同期するモジュール。
   起動時に自動でDBを最新状態に同期する。
 - CLIとして: `python ingest.py` を手動実行しても同じ同期処理が走る。
 
-追加・変更されたファイルのみ差分で取り込み、data/ から削除されたファイルは
-ベクトルDBからも自動的に削除する（DBとdata/フォルダの内容がズレないようにするため）。
-判定には chroma_db/manifest.json にファイル名・更新日時・サイズ・チャンクIDを記録している。
-manifest.jsonのトップレベルには埋め込みモデル名（rag_chain.EMBEDDING_MODEL_NAME）も
-記録しており、アプリのアップデートでモデルが変更された場合に既存インデックスとの
-不一致を検知して警告する（_ensure_embedding_model_recorded()参照。ファイルの変更検知とは
-別軸のチェックで、mtime/sizeが同じファイルの再埋め込みは自動では行わない）。
+追加・変更されたファイルのみ差分で取り込み、data/ から削除されたファイルはベクトルDBからも
+自動的に削除する。判定には chroma_db/manifest.json にファイル名・更新日時・サイズ・
+チャンクIDを記録している。manifest.jsonのトップレベルには埋め込みモデル名
+（rag_chain.EMBEDDING_MODEL_NAME）も記録しており、アプリのアップデートでモデルが変更された
+場合に既存インデックスとの不一致を検知して警告する（_ensure_embedding_model_recorded()参照。
+mtime/sizeが同じファイルの再埋め込みは自動では行わない）。
 
-sync_data_dir()はdata/配下を都度全件列挙して差分を検出するため、data/内のファイル数に
-比例して処理コストが増える。チャット1往復ごとに会話ログが1ファイルずつ追加される
-app.pyの自動ナレッジ化のように「追加対象が1件だけと分かっている」場面向けに、
-全件列挙を行わない軽量版の add_single_conversation_file() も用意している。
+sync_data_dir()はdata/配下を都度全件列挙するため、ファイル数に比例して処理コストが増える。
+チャット1往復ごとに会話ログが1ファイルずつ追加されるapp.pyの自動ナレッジ化のように
+「追加対象が1件だけと分かっている」場面向けに、全件列挙を行わない軽量版の
+add_single_conversation_file() も用意している。
 
-sync_data_dir()は複数タブ（複数Streamlitセッション）や複数プロセスから同時に呼ばれても
-安全なよう、chroma_db/sync.lock を使ったファイルロックで処理全体を排他制御している
-（詳細は sync_data_dir() のdocstring参照）。
+sync_data_dir()は複数タブ・複数プロセスから同時に呼ばれても安全なよう、
+chroma_db/sync.lock を使ったファイルロックで処理全体を排他制御している。
 
-data/ 直下だけでなく、data/conversations/<thread_id>/ のようなサブフォルダも再帰的に走査する
-（app.py のファイルアップロード機能・会話自動保存機能で使用）。会話ログはそのスレッドIDを
-チャンクのメタデータ(thread_id)として付与し、rag_chain.build_agent(thread_id) が
-「共通ナレッジ＋そのスレッドの会話ログ」だけを検索できるようにしている
-（別スレッドの会話ログが回答に混ざらないようにするため）。同フォルダ内の title.txt
-（memory.save_thread_title()の保存先）は拡張子が.txtでも通常ドキュメントではないため、
+data/ 直下だけでなく、data/conversations/<thread_id>/ のようなサブフォルダも再帰的に走査する。
+会話ログはそのスレッドIDをチャンクのメタデータ(thread_id)として付与し、
+rag_chain.build_agent(thread_id) が「共通ナレッジ＋そのスレッドの会話ログ」だけを検索できる
+ようにしている（別スレッドの会話ログが回答に混ざらないようにするため）。同フォルダ内の
+title.txt（memory.save_thread_title()の保存先）は通常ドキュメントではないため、
 _is_indexable_file()で取り込み対象から除外している。
 
 PDFの読み込みは2段構成:
   1) PyMuPDF（高速）でまず抽出する。
   2) 抽出できた文字数が極端に少ない場合（図解・スキャンPDFの疑い）だけ、
      Docling（レイアウト認識・OCR内蔵、やや重い）で再解析する。
-通常のテキストPDFは1)だけで高速に処理され、図解・スキャンPDFのような
-「pypdf/PyMuPDFでは苦手なファイル」だけが2)のコストを払う仕組みにすることで、
-処理速度への影響を最小限にしている。Doclingが未インストールの場合は自動的に
-1)の結果のみを使う（インストールは任意）。
-1)のPyMuPDF抽出では、行政資料に多い罫線表の行・列対応を保つためextract_tables="markdown"
-を有効にし、表構造検出結果をMarkdown表として本文に追記している。
+「pypdf/PyMuPDFでは苦手なファイル」だけが2)のコストを払う仕組みにすることで、通常のテキスト
+PDFへの処理速度の影響を最小限にしている。Doclingが未インストールの場合は自動的に1)の結果の
+みを使う（インストールは任意）。1)では行政資料に多い罫線表の行・列対応を保つため
+extract_tables="markdown"を有効にし、表構造検出結果をMarkdown表として本文に追記している。
 """
 
 import argparse
@@ -276,9 +271,9 @@ def _detect_pdf_column_split(page) -> float | None:
     全ブロックのX方向の区間をマージし、ページ中央付近（30%〜70%）に十分な幅の
     空白帯（gutter）を挟んでちょうど2つの領域に分かれる場合のみ2カラムと判定する。
     見出し・罫線表のように段組みをまたいで幅広く広がるブロックが1つでもあると
-    区間が結合されて1領域になるため、単一カラムの文書や表・見出しを含むページを
-    誤って2カラムと判定しない（`get_text(sort=True)`のような全文ソートで見出し・表の
-    順序が崩れる副作用を避けつつ、2カラム崩れだけを検出するための保守的な閾値）。
+    区間が結合されて1領域になるため、単一カラム文書や表・見出しを含むページを
+    誤検出しない（`get_text(sort=True)`のような全文ソートによる順序崩れを避けつつ、
+    2カラム崩れだけを検出するための保守的な条件）。
     """
     blocks = [b for b in page.get_text("blocks") if b[4].strip()]
     if len(blocks) < 2:
@@ -506,10 +501,9 @@ def _load_pdf(path: Path, verbose: bool = True) -> list:
     try:
         fast_docs = PyMuPDFLoader(str(path), extract_tables=PDF_EXTRACT_TABLES_FORMAT).load()
     except Exception as e:
-        # PyMuPDF自体が例外を送出した場合（暗号化PDF・破損PDF・特殊なPDF構造など）。
-        # Doclingが利用可能なら、レイアウト認識・OCRで読める可能性があるためフォールバックする。
-        # Doclingが未インストール、またはDoclingも失敗した場合は元の例外をそのまま送出し、
-        # 呼び出し元（sync_data_dir）で "failed" として記録・次回リトライさせる。
+        # PyMuPDF自体が例外を送出した場合（暗号化PDF・破損PDF・特殊なPDF構造など）、Doclingが
+        # 利用可能ならレイアウト認識・OCRで読める可能性があるためフォールバックする。未インストール・
+        # Doclingも失敗の場合は元の例外を送出し、呼び出し元で"failed"として記録・次回リトライさせる。
         if not DOCLING_AVAILABLE:
             raise
         _log_progress(verbose, "    → PyMuPDFでの読み込みに失敗したため、Doclingでの再解析を試みます（%s）...", e)

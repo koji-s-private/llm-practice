@@ -131,14 +131,12 @@ def _list_drive_files(service, folder_id: str) -> list[dict]:
 def _dest_path_for(drive_file: dict, *, disambiguate: bool = False) -> Path | None:
     """Driveファイル1件のローカル保存先パスを決める。対応拡張子でない場合はNoneを返す。
 
-    ingest.safe_upload_dest()と同様、Drive側のファイル名はディレクトリ部分を
-    除いた素の名前のみを使い、resolve()後にGOOGLE_DRIVE_DIR配下から外れていないかも
-    確認する（`../`によるパストラバーサルや絶対パス文字列によるDrive側からの
-    任意パス書き込みを防ぐため）。外れる場合はNoneを返す。
+    ingest.safe_upload_dest()と同様、ファイル名はディレクトリ部分を除いた素の名前のみを
+    使い、resolve()後にGOOGLE_DRIVE_DIR配下から外れていないかも確認する（Drive側からの
+    パストラバーサルを防ぐため）。外れる場合はNoneを返す。
 
-    disambiguate=Trueの場合、Google Drive上では同一フォルダ内に同名ファイルが
-    複数存在し得る（ファイル名だけではローカル保存先が一意に決まらない）ため、
-    拡張子の直前にDriveファイルID先頭8文字を挿入して一意化する。
+    disambiguate=Trueの場合、Google Drive上では同一フォルダ内に同名ファイルが複数
+    存在し得るため、拡張子の直前にDriveファイルID先頭8文字を挿入して一意化する。
     """
     mime_type = drive_file["mimeType"]
     name = drive_file["name"]
@@ -195,14 +193,12 @@ def sync_google_drive_files(verbose: bool = True) -> dict:
     """data/google_drive/ をGoogle Driveの指定フォルダ（GOOGLE_DRIVE_FOLDER_ID）の内容にミラーする。
 
     戻り値: {"added": [...], "updated": [...], "removed": [...], "skipped": [...]}
-    ("updated"はローカルに同名ファイルが既にあった場合。内容が実際に変わったかどうかまでは
-    ここでは判定せず、後続の ingest.sync_data_dir() がmtime/sizeベースで最終判定する)
+    ("updated"はローカルに同名ファイルが既にあった場合。内容が実際に変わったかは
+    後続の ingest.sync_data_dir() がmtime/sizeベースで最終判定する)
 
-    GOOGLE_DRIVE_FOLDER_ID が未設定の場合は同期そのものをスキップし、警告ログを出して
-    全キー空リストを返す（認証・API呼び出しは一切行わない）。
-
-    1件のダウンロード・エクスポートに失敗した場合は、そのファイルの旧ローカルコピーを
-    誤って削除してしまわないよう「消えたファイル」の判定対象から除外し、次回同期時に再試行する。
+    GOOGLE_DRIVE_FOLDER_ID が未設定の場合は同期をスキップし、警告ログを出して全キー空リストを
+    返す（認証・API呼び出しは行わない）。ダウンロード・エクスポートに失敗したファイルは、
+    旧ローカルコピーを誤って削除しないよう「消えたファイル」の判定対象から除外する。
     """
     folder_id = os.environ.get("GOOGLE_DRIVE_FOLDER_ID")
     if not folder_id:

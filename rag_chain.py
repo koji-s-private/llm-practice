@@ -45,32 +45,28 @@ CHUNK_SIZE = 1000
 EMBEDDING_MODEL_NAME = "intfloat/multilingual-e5-base"
 
 # intfloat/multilingual-e5-* 系は、検索クエリ側に "query: "、文書側に "passage: " を
-# 先頭に付けて埋め込むことが前提の設計（付けないと本来の検索性能が出ない。公式モデルカード記載、
-# config_sentence_transformers.jsonにはprompts定義が無くREADMEにのみ明記されている）。
-# ドキュメント本文（page_content）自体には残したくない（画面表示・LLM採点にそのまま使われるため）
-# ので、_PrefixedEmbeddingsで埋め込み計算の直前にだけ付与する。EMBEDDING_MODEL_NAMEを
-# プレフィックス不要なモデルに戻す場合は、この2定数と_PrefixedEmbeddingsの利用も見直すこと。
+# 先頭に付けて埋め込むことが前提の設計（付けないと本来の検索性能が出ない。モデルカードのREADMEに
+# のみ明記）。ドキュメント本文（画面表示・LLM採点に使われる）には残したくないため、
+# _PrefixedEmbeddingsで埋め込み計算の直前にだけ付与する。プレフィックス不要なモデルに
+# 戻す場合は、この2定数と_PrefixedEmbeddingsの利用も見直すこと。
 EMBEDDING_QUERY_PREFIX = "query: "
 EMBEDDING_PASSAGE_PREFIX = "passage: "
 
 # 一次検索（ベクトル類似度）で候補として広めに拾ってくる件数。最終的な絞り込みは
 # 後段のLLM採点（_grade_relevance）に任せるため、ここは再現率重視で広めにとる。
-# scripts/evaluate_retrieval.pyのCANDIDATE_K/THRESHOLDグリッドサーチ（4/8/12を比較）で
-# 適合率・再現率のバランスを確認した上でこの値を採用している。埋め込みモデルを変更した
-# 場合は、この値も再度グリッドサーチで見直すのが望ましい。
+# scripts/evaluate_retrieval.pyのグリッドサーチ（4/8/12を比較）で適合率・再現率のバランスを
+# 確認した上で採用している。埋め込みモデルを変更した場合は再度見直すのが望ましい。
 CANDIDATE_K = 8
 
 # 一次検索の粗いフィルタ用のL2距離上限（明らかに無関係なものだけを間引き、最終判定は
-# LLM採点に任せる）。Chromaのデフォルト距離関数（hnswlibの"l2"）は平方根を取らない
-# 二乗ユークリッド距離であり、正規化済み埋め込み同士では 2 - 2cosθ に等しいため、
-# 理論上のレンジは0（完全一致）〜4（真逆）となる。取りこぼしリスクの小さい緩めの値として
-# 1.3を採用している（同上のグリッドサーチ参照）。
+# LLM採点に任せる）。Chromaのデフォルト距離関数（hnswlibの"l2"）は正規化済み埋め込み同士では
+# 2 - 2cosθ に等しく、理論上のレンジは0（完全一致）〜4（真逆）となる。取りこぼしリスクの
+# 小さい緩めの値として1.3を採用している（同上のグリッドサーチ参照）。
 RECALL_DISTANCE_THRESHOLD = 1.3
 
 # LLM採点（_grade_relevance）で「関連あり」と判定された文書のうち、実際にretrieve_contextが
-# 返す上限件数。narrowedは一次検索のスコア順に並んでおり、_grade_relevanceはその順序を
-# 保ったままインデックスを返すため、先頭N件が類似度上位N件になる。CANDIDATE_K件すべてが
-# 関連ありと判定された場合でも、会話履歴とは別にコンテキスト長を圧迫しないよう上限を設ける。
+# 返す上限件数。narrowedは一次検索のスコア順に並んでおり、先頭N件が類似度上位N件になる。
+# CANDIDATE_K件すべてが関連ありと判定された場合でもコンテキスト長を圧迫しないよう上限を設ける。
 MAX_RETRIEVED_DOCS = 4
 
 # retrieve_contextが返す1件あたりの本文の文字数上限。CHUNK_SIZE文字をそのまま含めると
@@ -156,14 +152,12 @@ def get_embeddings() -> Embeddings:
 def get_vectorstore() -> Chroma:
     """ローカル永続化されたChromaベクトルストアを返す（ingest.py と共通で使用）。
 
-    get_embeddings()と同様にlru_cacheでプロセス内に1つだけ保持する。永続化先・
-    コレクション名は固定のため、インスタンスを使い回しても読み書きの一貫性に問題はない。
+    get_embeddings()と同様にlru_cacheでプロセス内に1つだけ保持する。
 
     セキュリティ上の注意: 本実装はChromaDBをローカル永続化モード（persist_directory）
-    のみで使用し、HTTPサーバーAPI（/api/v2/...）を一切起動・公開していないため、
-    CVE-2026-45829 / PYSEC-2026-311（同APIのpre-authentication code injection脆弱性、
-    本記載時点で修正版未リリース）の攻撃経路は現状存在しない。将来サーバーモードに
-    変更する際は、この脆弱性の修正状況を必ず再確認すること。
+    のみで使用し、HTTPサーバーAPIを一切起動・公開していないため、CVE-2026-45829 / PYSEC-2026-311
+    （同APIのpre-authentication code injection脆弱性、本記載時点で修正版未リリース）の
+    攻撃経路は現状存在しない。将来サーバーモードに変更する際は修正状況を必ず再確認すること。
     """
     return Chroma(
         collection_name=COLLECTION_NAME,
@@ -253,10 +247,9 @@ def build_agent(thread_id: str = GLOBAL_THREAD_ID, chat_model=None):
         # スコアはChromaのL2距離（小さいほど類似、正規化済み埋め込みのため0〜2の範囲）。
         # RECALL_DISTANCE_THRESHOLD未満を「候補」として粗く間引くだけで、最終判定は_grade_relevanceに任せる。
         # is_fallback=Trueの会話ログ（一般知識フォールバック回答）は、根拠のない回答が
-        # 以降の検索で再ヒットしてドキュメントの裏付けがあるかのように扱われる
-        # （ハルシネーションの自己増幅）ことを防ぐため除外する。{"is_fallback": False}ではなく
-        # {"$ne": True}にするのは、フィルタ導入前の既存チャンク（メタデータ無し）を
-        # 誤って除外しないため。
+        # 以降の検索で再ヒットし裏付けありと誤って扱われる（ハルシネーションの自己増幅）ことを
+        # 防ぐため除外する。{"is_fallback": False}ではなく{"$ne": True}にするのは、
+        # フィルタ導入前の既存チャンク（メタデータ無し）を誤って除外しないため。
         candidates = vector_store.similarity_search_with_score(
             query,
             k=CANDIDATE_K,
@@ -288,11 +281,9 @@ def build_agent(thread_id: str = GLOBAL_THREAD_ID, chat_model=None):
                 citation_numbers[key] = len(citation_numbers) + 1
             doc.metadata["citation_number"] = citation_numbers[key]
 
-        # 先頭の[N]はcitation_numbersで管理する永続的な番号で、SYSTEM_PROMPTの指示に
-        # 従ってLLMが回答本文に付ける引用番号の元になる。app.py側の参照元一覧も
-        # 同じcitation_number（doc.metadata経由）を使って表示するため一致する。
-        # LLMに渡すcontentにはdistance_score/citation_numberを含めない
-        # （UI表示専用のためプロンプト内容を変えない。番号は先頭の[N]で既に示している）。
+        # 先頭の[N]はcitation_numbersで管理する永続的な番号で、LLMが回答本文に付ける引用番号の
+        # 元になる。app.py側の参照元一覧も同じcitation_number（doc.metadata経由）を使うため一致する。
+        # distance_score/citation_numberはUI表示専用のため、LLMに渡すcontentには含めない。
         serialized = "\n\n".join(
             f"[{doc.metadata['citation_number']}] Source: "
             f"{ ({k: v for k, v in doc.metadata.items() if k not in ('distance_score', 'citation_number')}) }\n"
