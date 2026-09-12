@@ -306,7 +306,7 @@ def test_embedding_model_mismatch_shows_warning_banner(monkeypatch):
 
 
 def test_resync_button_failure_shows_error(monkeypatch):
-    """異常系: サイドバーの「🔄 data/ を今すぐ反映」ボタン押下時の反映失敗もカバーされる。
+    """異常系: サイドバーの「🔄 ドキュメントを今すぐ反映」ボタン押下時の反映失敗もカバーされる。
 
     このボタンは `st.expander("今すぐ強制的に反映したい場合")` の中に
     移動したが、`AppTest`の`at.sidebar.button`はexpander内も含めてサイドバー配下の

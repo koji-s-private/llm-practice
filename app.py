@@ -949,12 +949,12 @@ with st.sidebar:
     # 同じサイズのまま中身だけ入れ替わる」ような極めて稀なケースを取りこぼす可能性がある。
     # 即時性・確実性が必要な場合のフォールバック手段として、目立たない場所に残しておく。
     with st.expander("今すぐ強制的に反映したい場合"):
-        if st.button("🔄 data/ を今すぐ反映"):
+        if st.button("🔄 ドキュメントを今すぐ反映"):
             _sync_and_report("反映中...", failed_sync_warning_slot)
         if st.button("🔄 Google Drive取り込み"):
             _sync_google_drive_and_report(failed_sync_warning_slot)
 
-    st.caption("ファイルをアップロードすると自動で data/ に保存・内容が反映されます。")
+    st.caption("ファイルをアップロードすると自動で保存され、内容が反映されます。")
     uploaded_files = st.file_uploader(
         "ファイルを追加",
         type=["pdf", "txt", "md", "docx", "csv", "xlsx", "xls", "pptx", "html", "htm"],
