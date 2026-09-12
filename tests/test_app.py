@@ -223,7 +223,7 @@ def test_startup_sync_failure_after_partial_progress_shows_error_but_app_keeps_r
     at = _run_app()
 
     assert at.exception == []
-    assert any("ドキュメントの同期に失敗しました" in e.value for e in at.error)
+    assert any("ドキュメントの反映に失敗しました" in e.value for e in at.error)
     assert progress_calls == [(1, 3, "a.txt")]
     assert "agent" in at.session_state
 
@@ -241,7 +241,7 @@ def test_startup_sync_failure_shows_error_but_app_keeps_running(monkeypatch):
 
     assert at.exception == []
     assert len(at.error) == 1
-    assert "ドキュメントの同期に失敗しました" in at.error[0].value
+    assert "ドキュメントの反映に失敗しました" in at.error[0].value
     assert "disk full" in at.error[0].value
     # 同期失敗後もアプリはクラッシュせず、エージェント構築まで到達している
     assert "agent" in at.session_state
@@ -305,9 +305,9 @@ def test_embedding_model_mismatch_shows_warning_banner(monkeypatch):
 
 
 def test_resync_button_failure_shows_error(monkeypatch):
-    """異常系: サイドバーの「🔄 data/ を再同期」ボタン押下時の同期失敗もカバーされる。
+    """異常系: サイドバーの「🔄 data/ を今すぐ反映」ボタン押下時の反映失敗もカバーされる。
 
-    このボタンは `st.expander("今すぐ強制的に再同期したい場合")` の中に
+    このボタンは `st.expander("今すぐ強制的に反映したい場合")` の中に
     移動したが、`AppTest`の`at.sidebar.button`はexpander内も含めてサイドバー配下の
     ボタンを再帰的に収集するため、取得方法自体は変更不要（folded状態でも
     要素ツリーには存在し、クリック操作も通常どおり可能）。
@@ -325,12 +325,12 @@ def test_resync_button_failure_shows_error(monkeypatch):
     at = _run_app()
     assert at.error == []
 
-    resync_button = next(b for b in at.sidebar.button if "再同期" in b.label)
+    resync_button = next(b for b in at.sidebar.button if "今すぐ反映" in b.label)
     at = resync_button.click().run()
 
     assert at.exception == []
     assert len(at.error) == 1
-    assert "ドキュメントの同期に失敗しました" in at.error[0].value
+    assert "ドキュメントの反映に失敗しました" in at.error[0].value
     assert "resync fail" in at.error[0].value
 
 
@@ -352,7 +352,7 @@ def test_resync_button_failed_files_shows_warning_immediately(monkeypatch):
     at = _run_app()
     assert at.warning == []
 
-    resync_button = next(b for b in at.sidebar.button if "再同期" in b.label)
+    resync_button = next(b for b in at.sidebar.button if "今すぐ反映" in b.label)
     at = resync_button.click().run()
 
     assert at.exception == []
@@ -382,12 +382,12 @@ def test_resync_button_recovery_clears_warning_immediately(monkeypatch):
     at = _run_app()
     assert at.warning == []
 
-    resync_button = next(b for b in at.sidebar.button if "再同期" in b.label)
+    resync_button = next(b for b in at.sidebar.button if "今すぐ反映" in b.label)
     at = resync_button.click().run()
     assert len(at.warning) == 1
     assert "bad.pdf" in at.warning[0].value
 
-    resync_button = next(b for b in at.sidebar.button if "再同期" in b.label)
+    resync_button = next(b for b in at.sidebar.button if "今すぐ反映" in b.label)
     at = resync_button.click().run()
 
     assert at.exception == []
@@ -408,7 +408,7 @@ def test_resync_button_success_shows_no_warning(monkeypatch):
     monkeypatch.setattr(ingest, "sync_data_dir", counting_sync)
 
     at = _run_app()
-    resync_button = next(b for b in at.sidebar.button if "再同期" in b.label)
+    resync_button = next(b for b in at.sidebar.button if "今すぐ反映" in b.label)
     at = resync_button.click().run()
 
     assert at.exception == []
@@ -528,7 +528,7 @@ def test_google_drive_sync_button_generic_failure_shows_error(monkeypatch):
 
     assert at.exception == []
     assert len(at.error) == 1
-    assert "Google Driveとの同期に失敗しました" in at.error[0].value
+    assert "Google Driveからの取り込みに失敗しました" in at.error[0].value
     assert "network timeout" in at.error[0].value
 
 
@@ -2217,7 +2217,7 @@ def test_upload_lock_timeout_shows_error_and_does_not_save_file(tmp_path, monkey
 
     assert at.exception == []
     assert len(at.error) == 1
-    assert "他のセッションがファイルを同期中" in at.error[0].value
+    assert "他のセッションがファイルを処理中" in at.error[0].value
     assert at.warning == []
     assert not (data_dir / "report.txt").exists()
 
@@ -3888,7 +3888,7 @@ def test_startup_build_agent_failure_shows_error_and_agent_is_none(monkeypatch):
 
     assert at.exception == []
     assert len(at.error) == 1
-    assert "RAGエージェントの初期化に失敗しました" in at.error[0].value
+    assert "アシスタントの初期化に失敗しました" in at.error[0].value
     assert "agent build boom" in at.error[0].value
     assert "agent" in at.session_state
     assert at.session_state["agent"] is None
@@ -3921,7 +3921,7 @@ def test_start_new_chat_build_agent_failure_sets_agent_none(monkeypatch):
     assert at.exception == []
     assert at.session_state["agent"] is None
     assert len(at.error) == 1
-    assert "RAGエージェントの初期化に失敗しました" in at.error[0].value
+    assert "アシスタントの初期化に失敗しました" in at.error[0].value
     assert "new chat agent boom" in at.error[0].value
 
 
@@ -3972,7 +3972,7 @@ def test_switch_thread_build_agent_failure_sets_agent_none(monkeypatch):
     assert at.session_state["thread_id"] == "thread-past"
     assert at.session_state["agent"] is None
     assert len(at.error) == 1
-    assert "RAGエージェントの初期化に失敗しました" in at.error[0].value
+    assert "アシスタントの初期化に失敗しました" in at.error[0].value
     assert "switch thread agent boom" in at.error[0].value
     # 履歴の復元自体は agent 構築より前に完了しているため維持される
     messages = at.session_state["messages"]
@@ -4006,7 +4006,7 @@ def test_chat_with_none_agent_shows_error_and_stops_without_crash(monkeypatch):
     # st.errorのみ（st.stop()の直前に呼ばれ、その後st.rerun()は発生しないため最終的な
     # 木にそのまま残る）。
     assert len(at.error) == 1
-    assert "RAGエージェントが利用できないため、回答を生成できません" in at.error[0].value
+    assert "アシスタントが利用できないため、回答を生成できません" in at.error[0].value
     assert at.session_state["messages"] == []
     assert save_calls == []
 
@@ -4024,7 +4024,7 @@ def test_chat_with_none_agent_after_recovery_still_shows_error_for_that_turn(mon
 
     assert at.exception == []
     assert len(at.error) == 1
-    assert "RAGエージェントが利用できないため、回答を生成できません" in at.error[0].value
+    assert "アシスタントが利用できないため、回答を生成できません" in at.error[0].value
     assert at.session_state["messages"] == []
 
 
@@ -4813,7 +4813,7 @@ def test_empty_state_guidance_shows_usage_steps_for_first_time_visit(monkeypatch
     guidance = at.info[0].value
     assert "ようこそ" in guidance
     assert "アップロード" in guidance
-    assert "ベクトルDB" in guidance
+    assert "内容が反映されます" in guidance
     assert "質問" in guidance
 
 
