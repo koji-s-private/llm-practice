@@ -10,7 +10,7 @@ data/ フォルダの変更は、ページの操作（リロード・チャッ�
 裏側で自動的にベクトルDBへ反映されます（手動での再同期は基本不要。即時性が必要な
 場合のフォールバックとして、サイドバーの折りたたみ内に手動の再同期ボタンもあります）。
 Google Driveとの連携（設定方法はdocs/google-drive-setup.md参照）を設定済みの場合、
-同じ折りたたみ内の「🔄 Google Driveと同期」ボタンから手動でオンデマンド同期できます。
+同じ折りたたみ内の「🔄 Google Drive取り込み」ボタンから手動でオンデマンド同期できます。
 
 さらに、チャットでの質問・回答も自動で data/conversations/<会話スレッドID>/ に保存され、
 「このスレッド」の次回以降の質問（別セッション・別タブでも同じスレッドを開けば）の
@@ -87,7 +87,7 @@ st.set_page_config(
 )
 st.title("📖 Doclore")
 st.markdown("##### あなたの資料から、迷わず答えへ。")
-st.caption("data/ フォルダにファイルを置くと自動でDBに反映され、AIエージェントが検索しながら回答します。")
+st.caption("data/ フォルダにファイルを置くと自動で内容が反映され、それをもとに回答します。")
 
 # サイドバーの狭い幅に収まるようhelp=ツールチップの幅上限と影を明示する。
 st.markdown(
@@ -121,13 +121,13 @@ def _sync_and_report(spinner_text: str, warning_slot: DeltaGenerator | None = No
             result = sync_data_dir(verbose=False, on_progress=on_progress)
     except Exception as e:
         progress_slot.empty()
-        st.error(f"ドキュメントの同期に失敗しました。時間をおいて再度お試しください。（詳細: {e}）")
+        st.error(f"ドキュメントの反映に失敗しました。時間をおいて再度お試しください。（詳細: {e}）")
         # 失敗時はシグネチャを更新しない。次回もトップレベルの軽量チェックが再同期を試みる。
         return
     progress_slot.empty()
     if any(result.values()):
         st.toast(
-            f"DBを更新しました（追加{len(result['added'])} / "
+            f"内容を反映しました（追加{len(result['added'])} / "
             f"更新{len(result['updated'])} / 削除{len(result['removed'])}）",
             icon="✅",
         )
@@ -151,29 +151,29 @@ def _sync_google_drive_and_report(warning_slot: DeltaGenerator | None = None) ->
     返す仕様のため、「未設定」と「設定済みだが変更なし」を区別せず同じ案内文で共通化する。
     """
     try:
-        with st.spinner("Google Driveと同期中..."):
+        with st.spinner("Google Driveから取り込み中..."):
             drive_result = google_drive_sync.sync_google_drive_files(verbose=False)
     except RuntimeError as e:
         st.error(f"Google Drive連携の認証情報が見つかりません。（詳細: {e}）")
         return
     except Exception as e:
-        st.error(f"Google Driveとの同期に失敗しました。時間をおいて再度お試しください。（詳細: {e}）")
+        st.error(f"Google Driveからの取り込みに失敗しました。時間をおいて再度お試しください。（詳細: {e}）")
         return
 
     if not any(drive_result.values()):
         st.info(
-            "Google Drive連携が未設定、または同期対象の変更はありませんでした。"
+            "Google Drive連携が未設定、または新しい変更はありませんでした。"
             "連携の設定方法は docs/google-drive-setup.md を参照してください。"
         )
     else:
         st.toast(
-            f"Google Driveの内容を同期しました（追加{len(drive_result['added'])} / "
+            f"Google Driveの内容を取り込みました（追加{len(drive_result['added'])} / "
             f"更新{len(drive_result['updated'])} / 削除{len(drive_result['removed'])} / "
             f"スキップ{len(drive_result['skipped'])}）",
             icon="✅",
         )
 
-    _sync_and_report("data/ をベクトルDBに反映中...", warning_slot)
+    _sync_and_report("data/ の内容を反映中...", warning_slot)
 
 
 def _sync_saved_conversation(path: Path, warning_slot: DeltaGenerator | None = None) -> None:
@@ -186,7 +186,7 @@ def _sync_saved_conversation(path: Path, warning_slot: DeltaGenerator | None = N
     try:
         status = add_single_conversation_file(path)
     except Exception as e:
-        st.error(f"会話ログの保存処理でDBへの反映に失敗しました。（詳細: {e}）")
+        st.error(f"会話ログの保存処理で内容の反映に失敗しました。（詳細: {e}）")
         return
     if status == "failed":
         try:
@@ -217,7 +217,7 @@ def _show_failed_sync_files_warning(container: DeltaGenerator | None = None) -> 
             container.empty()
         return
     target.warning(
-        "以下のファイルは読み込みに失敗したため、DBへの反映がスキップされています"
+        "以下のファイルは読み込みに失敗したため、内容の反映がスキップされています"
         "（破損・パスワード付き・不正なエンコーディング等の可能性があります）。"
         "data/ から修正・削除すると自動的に再試行されます:\n" + "\n".join(f"- {name}" for name in failed)
     )
@@ -234,9 +234,9 @@ def _show_embedding_model_mismatch_warning() -> None:
         return
     recorded_model, current_model = mismatch
     st.warning(
-        f"埋め込みモデルが変更されています（記録済み: {recorded_model} → 現在: {current_model}）。"
-        "既存のインデックスは旧モデルのベクトルのままのため、検索精度が劣化している可能性があります。"
-        "ターミナルで `rm -rf chroma_db && python ingest.py` を実行し、インデックスを再構築してください。",
+        f"検索に使うモデルが変更されています（記録済み: {recorded_model} → 現在: {current_model}）。"
+        "登録済みの資料は変更前の設定のままのため、検索精度が低下している可能性があります。"
+        "ターミナルで `rm -rf chroma_db && python ingest.py` を実行し、資料を登録し直してください。",
         icon="⚠️",
     )
 
@@ -289,7 +289,7 @@ def _build_agent_safely(thread_id: str):
     try:
         return build_agent(thread_id, chat_model=st.session_state.get("chat_model"))
     except Exception as e:
-        st.error(f"RAGエージェントの初期化に失敗しました。時間をおいて再度お試しください。（詳細: {e}）")
+        st.error(f"アシスタントの初期化に失敗しました。時間をおいて再度お試しください。（詳細: {e}）")
         return None
 
 
@@ -527,7 +527,7 @@ def _render_empty_state_guidance() -> None:
         st.info(
             "👋 ようこそ！使い方は簡単です。\n"
             "1. サイドバーからファイルをアップロード（または `data/` フォルダに配置）\n"
-            "2. 自動でベクトルDBに反映されます\n"
+            "2. 自動で内容が反映されます\n"
             "3. チャットで気になることを質問してみましょう"
         )
 
@@ -752,7 +752,7 @@ if "chat_model" not in st.session_state:
 # （リロード時の外部編集・会話ログ保存の両方）だけを検知して同期する。
 current_data_dir_signature = data_dir_signature()
 if st.session_state.get("data_dir_signature") != current_data_dir_signature:
-    _sync_and_report("data/ をベクトルDBに同期中...")
+    _sync_and_report("data/ の内容を反映中...")
 
 _show_embedding_model_mismatch_warning()
 
@@ -766,7 +766,7 @@ _show_failed_sync_files_warning(failed_sync_warning_slot)
 # エージェント自体はdata/の変更とは独立して一度だけ構築すればよい
 # （検索ツールはベクトルストアを都度クエリするため、同期結果は再構築なしで自動的に反映される）。
 if "agent" not in st.session_state:
-    with st.spinner("RAGエージェントを準備中..."):
+    with st.spinner("回答の準備中..."):
         st.session_state.agent = _build_agent_safely(st.session_state.thread_id)
 
 if "messages" not in st.session_state:
@@ -941,20 +941,20 @@ with st.sidebar:
     st.subheader("📂 ドキュメント管理")
     st.caption(
         "data/ フォルダの変更はページの操作（リロード・会話など）のたびに自動で検知され、"
-        "裏側で自動的にDBへ反映されます。"
+        "裏側で自動的に内容が反映されます。"
     )
     _render_indexed_file_list()
 
     # 自動検知はファイル数+最新mtimeによる近似的な判定のため、理論上は「同じmtime・
     # 同じサイズのまま中身だけ入れ替わる」ような極めて稀なケースを取りこぼす可能性がある。
     # 即時性・確実性が必要な場合のフォールバック手段として、目立たない場所に残しておく。
-    with st.expander("今すぐ強制的に再同期したい場合"):
-        if st.button("🔄 data/ を再同期"):
-            _sync_and_report("再同期中...", failed_sync_warning_slot)
-        if st.button("🔄 Google Driveと同期"):
+    with st.expander("今すぐ強制的に反映したい場合"):
+        if st.button("🔄 ドキュメントを今すぐ反映"):
+            _sync_and_report("反映中...", failed_sync_warning_slot)
+        if st.button("🔄 Google Drive取り込み"):
             _sync_google_drive_and_report(failed_sync_warning_slot)
 
-    st.caption("ファイルをアップロードすると自動で data/ に保存・DB反映されます。")
+    st.caption("ファイルをアップロードすると自動で保存され、内容が反映されます。")
     uploaded_files = st.file_uploader(
         "ファイルを追加",
         type=["pdf", "txt", "md", "docx", "csv", "xlsx", "xls", "pptx", "html", "htm"],
@@ -992,7 +992,7 @@ with st.sidebar:
                     st.session_state.processed_upload_ids.add(f.file_id)
         except Timeout:
             st.error(
-                "他のセッションがファイルを同期中のため、アップロードに失敗しました。"
+                "他のセッションがファイルを処理中のため、アップロードに失敗しました。"
                 "しばらく待ってから再度お試しください。"
             )
         else:
@@ -1051,9 +1051,7 @@ if question:
     with st.chat_message("assistant"):
         st.caption(_format_message_timestamp(turn_timestamp))
         if st.session_state.agent is None:
-            st.error(
-                "RAGエージェントが利用できないため、回答を生成できません。ページを再読み込みして再度お試しください。"
-            )
+            st.error("アシスタントが利用できないため、回答を生成できません。ページを再読み込みして再度お試しください。")
             st.stop()
         try:
             # 検索中であることを示すプレースホルダー。ツール呼び出し中は回答本文のトークンが
