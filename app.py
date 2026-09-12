@@ -10,7 +10,7 @@ data/ フォルダの変更は、ページの操作（リロード・チャッ�
 裏側で自動的にベクトルDBへ反映されます（手動での再同期は基本不要。即時性が必要な
 場合のフォールバックとして、サイドバーの折りたたみ内に手動の再同期ボタンもあります）。
 Google Driveとの連携（設定方法はdocs/google-drive-setup.md参照）を設定済みの場合、
-同じ折りたたみ内の「🔄 Google Driveと同期」ボタンから手動でオンデマンド同期できます。
+同じ折りたたみ内の「🔄 Google Drive取り込み」ボタンから手動でオンデマンド同期できます。
 
 さらに、チャットでの質問・回答も自動で data/conversations/<会話スレッドID>/ に保存され、
 「このスレッド」の次回以降の質問（別セッション・別タブでも同じスレッドを開けば）の
@@ -951,7 +951,7 @@ with st.sidebar:
     with st.expander("今すぐ強制的に反映したい場合"):
         if st.button("🔄 data/ を今すぐ反映"):
             _sync_and_report("反映中...", failed_sync_warning_slot)
-        if st.button("🔄 Google Driveから取り込む"):
+        if st.button("🔄 Google Drive取り込み"):
             _sync_google_drive_and_report(failed_sync_warning_slot)
 
     st.caption("ファイルをアップロードすると自動で data/ に保存・内容が反映されます。")
