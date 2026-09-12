@@ -39,6 +39,7 @@ app.py はモジュールトップレベルで `from ingest import ... sync_data
   通常の全件差分同期（`sync_data_dir`）で改めて再試行される。
 """
 
+import ast
 from pathlib import Path
 
 import pytest
@@ -5496,3 +5497,52 @@ def test_token_usage_note_formats_large_token_counts_with_comma_separators(monke
     assert "入力12,345,678" in captions[0]
     assert "出力1" in captions[0]
     assert "$" in captions[0]
+
+
+# ユーザー向け表示文言に対象読者を混乱させる専門用語（実装内部の概念）が
+# 紛れ込んでいないかをASTで機械的に検証する。UI文言追加・変更のたびに
+# 見落としで再混入するのを防ぐための回帰テスト。
+_JARGON_TERMS = ("ベクトルDB", "RAG", "エージェント", "Chroma", "埋め込み", "同期")
+_USER_FACING_ST_FUNCS = {"caption", "error", "warning", "info", "toast", "spinner"}
+
+
+def _iter_string_literals(node: ast.AST):
+    """文字列リテラル・f-string・`+`連結の各断片から文字列値を再帰的に取り出す。"""
+    if isinstance(node, ast.Constant) and isinstance(node.value, str):
+        yield node.value
+    elif isinstance(node, ast.JoinedStr):
+        for value in node.values:
+            if isinstance(value, ast.Constant) and isinstance(value.value, str):
+                yield value.value
+    elif isinstance(node, ast.BinOp):
+        yield from _iter_string_literals(node.left)
+        yield from _iter_string_literals(node.right)
+
+
+def test_user_facing_messages_do_not_contain_implementation_jargon():
+    """境界値: st.caption/error/warning/info/toast/spinner と_sync_and_reportへの
+    引数文字列（＝実際に画面へ表示される文言）に、実装用語が含まれていないことを
+    ソースコード全体に対してASTで検証する。開発者向けのコメント・docstringは対象外。"""
+    source = Path(APP_PATH).read_text(encoding="utf-8")
+    tree = ast.parse(source)
+
+    violations = []
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Call):
+            continue
+        func = node.func
+        is_target = (
+            isinstance(func, ast.Attribute)
+            and func.attr in _USER_FACING_ST_FUNCS
+            and isinstance(func.value, ast.Name)
+            and func.value.id == "st"
+        ) or (isinstance(func, ast.Name) and func.id == "_sync_and_report")
+        if not is_target:
+            continue
+        for arg in node.args:
+            for text in _iter_string_literals(arg):
+                for term in _JARGON_TERMS:
+                    if term in text:
+                        violations.append((term, text))
+
+    assert violations == [], f"ユーザー向け表示文言に実装用語が含まれています: {violations}"
