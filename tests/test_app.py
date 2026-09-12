@@ -1847,7 +1847,7 @@ def test_post_chat_add_single_conversation_file_exception_shows_error_and_skips_
 
     assert at.exception == []
     assert len(at.error) == 1
-    assert "会話ログの保存処理でDBへの反映に失敗しました" in at.error[0].value
+    assert "会話ログの保存処理で内容の反映に失敗しました" in at.error[0].value
     assert "lock timeout" in at.error[0].value
     assert at.session_state["data_dir_signature"] == (1, 100.0)
     # 同期失敗があっても直前のチャット応答自体は履歴に残っている
@@ -5502,7 +5502,7 @@ def test_token_usage_note_formats_large_token_counts_with_comma_separators(monke
 # ユーザー向け表示文言に対象読者を混乱させる専門用語（実装内部の概念）が
 # 紛れ込んでいないかをASTで機械的に検証する。UI文言追加・変更のたびに
 # 見落としで再混入するのを防ぐための回帰テスト。
-_JARGON_TERMS = ("ベクトルDB", "RAG", "エージェント", "Chroma", "埋め込み", "同期")
+_JARGON_TERMS = ("DB", "RAG", "エージェント", "Chroma", "埋め込み", "同期")
 _USER_FACING_ST_FUNCS = {"caption", "error", "warning", "info", "toast", "spinner"}
 
 
@@ -5531,12 +5531,11 @@ def test_user_facing_messages_do_not_contain_implementation_jargon():
         if not isinstance(node, ast.Call):
             continue
         func = node.func
-        is_target = (
-            isinstance(func, ast.Attribute)
-            and func.attr in _USER_FACING_ST_FUNCS
-            and isinstance(func.value, ast.Name)
-            and func.value.id == "st"
-        ) or (isinstance(func, ast.Name) and func.id == "_sync_and_report")
+        # target = container or st のような別名経由の呼び出しも拾うため、
+        # レシーバの変数名は問わずメソッド名だけで判定する。
+        is_target = (isinstance(func, ast.Attribute) and func.attr in _USER_FACING_ST_FUNCS) or (
+            isinstance(func, ast.Name) and func.id == "_sync_and_report"
+        )
         if not is_target:
             continue
         for arg in node.args:

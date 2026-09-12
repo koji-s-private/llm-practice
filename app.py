@@ -127,7 +127,7 @@ def _sync_and_report(spinner_text: str, warning_slot: DeltaGenerator | None = No
     progress_slot.empty()
     if any(result.values()):
         st.toast(
-            f"DBを更新しました（追加{len(result['added'])} / "
+            f"内容を反映しました（追加{len(result['added'])} / "
             f"更新{len(result['updated'])} / 削除{len(result['removed'])}）",
             icon="✅",
         )
@@ -186,7 +186,7 @@ def _sync_saved_conversation(path: Path, warning_slot: DeltaGenerator | None = N
     try:
         status = add_single_conversation_file(path)
     except Exception as e:
-        st.error(f"会話ログの保存処理でDBへの反映に失敗しました。（詳細: {e}）")
+        st.error(f"会話ログの保存処理で内容の反映に失敗しました。（詳細: {e}）")
         return
     if status == "failed":
         try:
@@ -217,7 +217,7 @@ def _show_failed_sync_files_warning(container: DeltaGenerator | None = None) -> 
             container.empty()
         return
     target.warning(
-        "以下のファイルは読み込みに失敗したため、DBへの反映がスキップされています"
+        "以下のファイルは読み込みに失敗したため、内容の反映がスキップされています"
         "（破損・パスワード付き・不正なエンコーディング等の可能性があります）。"
         "data/ から修正・削除すると自動的に再試行されます:\n" + "\n".join(f"- {name}" for name in failed)
     )
@@ -941,7 +941,7 @@ with st.sidebar:
     st.subheader("📂 ドキュメント管理")
     st.caption(
         "data/ フォルダの変更はページの操作（リロード・会話など）のたびに自動で検知され、"
-        "裏側で自動的にDBへ反映されます。"
+        "裏側で自動的に内容が反映されます。"
     )
     _render_indexed_file_list()
 
@@ -954,7 +954,7 @@ with st.sidebar:
         if st.button("🔄 Google Driveから取り込む"):
             _sync_google_drive_and_report(failed_sync_warning_slot)
 
-    st.caption("ファイルをアップロードすると自動で data/ に保存・DB反映されます。")
+    st.caption("ファイルをアップロードすると自動で data/ に保存・内容が反映されます。")
     uploaded_files = st.file_uploader(
         "ファイルを追加",
         type=["pdf", "txt", "md", "docx", "csv", "xlsx", "xls", "pptx", "html", "htm"],
