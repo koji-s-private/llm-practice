@@ -1055,9 +1055,14 @@ if question:
             st.stop()
         try:
             # 検索中であることを示すプレースホルダー。ツール呼び出し中は回答本文のトークンが
-            # 生成されないため、最初のトークンが届くまでの待機を可視化する。
+            # 生成されないため、最初のトークンが届くまでの待機を可視化する。この間は
+            # キャンセルボタンの反映がStreamlitの仕組み上遅れうるため、その旨も明示する。
             status_placeholder = st.empty()
-            status_placeholder.markdown("🔄 回答を再生成中..." if regenerating else "🔍 検索して回答を考え中...")
+            status_placeholder.markdown(
+                "🔄 回答を再生成中..."
+                if regenerating
+                else "🔍 検索して回答を考え中...（キャンセルの反映に時間がかかる場合があります）"
+            )
             # ストリーミング中に押せるキャンセルボタン。Streamlitはウィジェット操作を検知すると
             # 実行中のスクリプトを自動的に中断・再実行するため、押されたことを能動的にチェック
             # する必要はない。中断後は履歴追加やsave_conversation等も実行されない。
@@ -1101,6 +1106,13 @@ if question:
                                     continue
                                 seen_source_keys.add(key)
                                 sources.append(doc)
+                        # ToolMessage受信時はst.*を何も呼ばずcontinueするだけだと、Streamlitが
+                        # ウィジェット操作を検知して中断する機会（中断チェックポイント）が
+                        # 発生しない。同じstatus_placeholderへの再描画を挟むことで、検索結果を
+                        # 確認している間もキャンセルボタンが速やかに反映されるようにする。
+                        status_placeholder.markdown(
+                            "🔍 検索結果を確認中...（キャンセルの反映に時間がかかる場合があります）"
+                        )
                         continue
                     usage = getattr(chunk, "usage_metadata", None)
                     if usage:
