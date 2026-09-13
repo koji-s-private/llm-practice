@@ -1591,7 +1591,7 @@ def _track_markdown_calls(monkeypatch):
 
 
 def test_chat_streaming_tool_message_redraws_status_placeholder(monkeypatch):
-    """正常系(Issue #266関連): ToolMessage受信時、検索中プレースホルダーに対して
+    """正常系: ToolMessage受信時、検索中プレースホルダーに対して
     「検索結果を確認中」への再描画が挟まる。Streamlitはウィジェット操作を検知した際に
     実行中のスクリプトを中断する仕組みのため、st.*呼び出し自体が中断チェックポイントになる。
     ToolMessage受信後に何もst.*を呼ばないと、この中断チェックポイントが発生しない。"""
@@ -1628,7 +1628,6 @@ def test_chat_streaming_tool_message_redraw_happens_once_per_tool_message(monkey
     assert at.exception == []
     confirming_calls = [body for body, _ in markdown_calls if "検索結果を確認中" in body]
     assert len(confirming_calls) == 2
-
 
 
 # --- 3. 会話ログ保存後の挙動（save_conversation直後にadd_single_conversation_fileで即時反映） ---
