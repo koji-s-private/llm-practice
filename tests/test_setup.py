@@ -7,6 +7,7 @@
 """
 
 import getpass
+import importlib
 import json
 import urllib.error
 
@@ -431,6 +432,125 @@ def test_build_model_openai_does_not_pass_num_ctx(monkeypatch):
     assert args[0] == "gpt-5-chat-latest"
     assert kwargs["model_provider"] == "openai"
     assert "num_ctx" not in kwargs
+
+
+# --- LLM_REQUEST_TIMEOUT_SECONDS / _ollama_timeout_kwargs()（LLM呼び出しの無期限ブロック防止） ---
+
+
+def test_llm_request_timeout_seconds_default_is_120():
+    """デフォルト値（環境変数未設定時）は120秒。"""
+    assert setup.LLM_REQUEST_TIMEOUT_SECONDS == 120
+
+
+def test_llm_request_timeout_seconds_reads_from_env_var(monkeypatch):
+    """環境変数 LLM_REQUEST_TIMEOUT_SECONDS を設定した状態でモジュールを読み込み直すと、
+    デフォルト値(120)ではなく環境変数側の値が反映される。"""
+    monkeypatch.setenv("LLM_REQUEST_TIMEOUT_SECONDS", "45")
+    try:
+        importlib.reload(setup)
+        assert setup.LLM_REQUEST_TIMEOUT_SECONDS == 45
+    finally:
+        monkeypatch.delenv("LLM_REQUEST_TIMEOUT_SECONDS", raising=False)
+        importlib.reload(setup)
+
+
+def test_ollama_timeout_kwargs_returns_client_kwargs_with_timeout():
+    """ChatOllamaはextra="ignore"のため、他プロバイダと同じ`timeout`キーワードでは
+    無視されてしまう。実際にhttpxへ伝わる`client_kwargs`経由の形式になっていることを確認する。"""
+    assert setup._ollama_timeout_kwargs() == {"client_kwargs": {"timeout": setup.LLM_REQUEST_TIMEOUT_SECONDS}}
+
+
+def test_build_model_ollama_passes_timeout_client_kwargs(monkeypatch):
+    """正常系: Ollama利用時は init_chat_model に client_kwargs={"timeout": ...} を渡す。"""
+    monkeypatch.setattr(setup, "_ollama_available", lambda: True)
+    calls = []
+
+    def _fake_init_chat_model(*args, **kwargs):
+        calls.append((args, kwargs))
+        return object()
+
+    monkeypatch.setattr(setup, "init_chat_model", _fake_init_chat_model)
+
+    setup._build_model()
+
+    assert len(calls) == 1
+    _, kwargs = calls[0]
+    assert kwargs["client_kwargs"] == {"timeout": setup.LLM_REQUEST_TIMEOUT_SECONDS}
+
+
+def test_build_model_anthropic_passes_timeout_kwarg(monkeypatch):
+    """正常系: Anthropicフォールバック時は init_chat_model に timeout=... を直接渡す
+    （client_kwargsはOllama固有のためAnthropicには渡さない）。"""
+    monkeypatch.setattr(setup, "_ollama_available", lambda: False)
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "test-dummy-key")
+    calls = []
+
+    def _fake_init_chat_model(*args, **kwargs):
+        calls.append((args, kwargs))
+        return object()
+
+    monkeypatch.setattr(setup, "init_chat_model", _fake_init_chat_model)
+
+    setup._build_model()
+
+    assert len(calls) == 1
+    _, kwargs = calls[0]
+    assert kwargs["timeout"] == setup.LLM_REQUEST_TIMEOUT_SECONDS
+    assert "client_kwargs" not in kwargs
+
+
+def test_build_model_openai_passes_timeout_kwarg(monkeypatch):
+    """正常系: OpenAIフォールバック時も init_chat_model に timeout=... を直接渡す。"""
+    monkeypatch.setattr(setup, "_ollama_available", lambda: False)
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    monkeypatch.setenv("OPENAI_API_KEY", "already-set-key")
+    calls = []
+
+    def _fake_init_chat_model(*args, **kwargs):
+        calls.append((args, kwargs))
+        return object()
+
+    monkeypatch.setattr(setup, "init_chat_model", _fake_init_chat_model)
+
+    setup._build_model()
+
+    assert len(calls) == 1
+    _, kwargs = calls[0]
+    assert kwargs["timeout"] == setup.LLM_REQUEST_TIMEOUT_SECONDS
+
+
+def test_build_chat_model_ollama_passes_timeout_client_kwargs(monkeypatch):
+    """正常系: build_chat_model()経由でも_build_model()と同じタイムアウト指定が渡る。"""
+    calls = []
+    monkeypatch.setattr(setup, "init_chat_model", lambda *a, **k: calls.append((a, k)) or object())
+
+    setup.build_chat_model("ollama", "llama3.1")
+
+    assert len(calls) == 1
+    _, kwargs = calls[0]
+    assert kwargs["client_kwargs"] == {"timeout": setup.LLM_REQUEST_TIMEOUT_SECONDS}
+
+
+def test_build_chat_model_anthropic_passes_timeout_kwarg(monkeypatch):
+    calls = []
+    monkeypatch.setattr(setup, "init_chat_model", lambda *a, **k: calls.append((a, k)) or object())
+
+    setup.build_chat_model("anthropic", "claude-sonnet-5")
+
+    assert len(calls) == 1
+    _, kwargs = calls[0]
+    assert kwargs["timeout"] == setup.LLM_REQUEST_TIMEOUT_SECONDS
+
+
+def test_build_chat_model_openai_passes_timeout_kwarg(monkeypatch):
+    calls = []
+    monkeypatch.setattr(setup, "init_chat_model", lambda *a, **k: calls.append((a, k)) or object())
+
+    setup.build_chat_model("openai", "gpt-5-chat-latest")
+
+    assert len(calls) == 1
+    _, kwargs = calls[0]
+    assert kwargs["timeout"] == setup.LLM_REQUEST_TIMEOUT_SECONDS
 
 
 def test_build_model_falls_back_through_to_runtime_error_when_ollama_model_not_pulled_and_no_keys(

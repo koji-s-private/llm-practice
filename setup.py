@@ -40,6 +40,11 @@ OLLAMA_MODEL = os.environ.get("OLLAMA_MODEL", "llama3.1")
 # 明示的に指定する。
 OLLAMA_NUM_CTX = int(os.environ.get("OLLAMA_NUM_CTX", "8192"))
 
+# LLM呼び出し1回（ストリーミング中は各チャンクの受信間隔）が止まった場合に無期限に
+# 待たされないための上限秒数。検索ツールを呼ぶかの判断や_grade_relevanceの呼び出しなど、
+# 回答本文以外のLLM呼び出しにも同じタイムアウトが適用される。
+LLM_REQUEST_TIMEOUT_SECONDS = int(os.environ.get("LLM_REQUEST_TIMEOUT_SECONDS", "120"))
+
 # 外部APIプロバイダの候補モデル名。実在しないモデルIDを指定するとAPI呼び出し時に
 # エラーになるため、_build_model() と list_available_models() / build_chat_model() の
 # 選択肢を必ずこの定数で一致させる。
@@ -118,6 +123,16 @@ def _ollama_model_pulled() -> bool:
     return bool(names & candidates)
 
 
+def _ollama_timeout_kwargs() -> dict:
+    """ChatOllamaに渡すタイムアウト指定。
+
+    ChatOllamaはpydanticモデルがextra="ignore"のため、他プロバイダと同じ`timeout`引数を
+    渡しても黙って無視され効果がない。実際にhttpxクライアントへ伝わる`client_kwargs`
+    経由で指定する必要がある。
+    """
+    return {"client_kwargs": {"timeout": LLM_REQUEST_TIMEOUT_SECONDS}}
+
+
 def _build_model():
     """優先順位: 1) Ollama（無料・ローカル） 2) ANTHROPIC_API_KEY 3) OPENAI_API_KEY。
 
@@ -136,7 +151,9 @@ def _build_model():
             print(f"[setup] Ollama を検出: {OLLAMA_MODEL}（ローカル・無料、num_ctx={OLLAMA_NUM_CTX}）を使用します。")
             CURRENT_PROVIDER = "ollama"
             CURRENT_MODEL_NAME = OLLAMA_MODEL
-            return init_chat_model(OLLAMA_MODEL, model_provider="ollama", num_ctx=OLLAMA_NUM_CTX)
+            return init_chat_model(
+                OLLAMA_MODEL, model_provider="ollama", num_ctx=OLLAMA_NUM_CTX, **_ollama_timeout_kwargs()
+            )
         CURRENT_PROVIDER_FALLBACK_REASON = (
             f"Ollamaは起動していますが、モデル '{OLLAMA_MODEL}' が見つかりません（pull未実施の可能性）。"
             f"'ollama pull {OLLAMA_MODEL}' を実行するか、OLLAMA_MODEL を既存のモデル名に変更してください。"
@@ -152,7 +169,7 @@ def _build_model():
         print(f"[setup] ANTHROPIC_API_KEY を検出: Claude ({ANTHROPIC_MODEL}) を使用します。")
         CURRENT_PROVIDER = "anthropic"
         CURRENT_MODEL_NAME = ANTHROPIC_MODEL
-        return init_chat_model(ANTHROPIC_MODEL, model_provider="anthropic")
+        return init_chat_model(ANTHROPIC_MODEL, model_provider="anthropic", timeout=LLM_REQUEST_TIMEOUT_SECONDS)
 
     openai_key = os.environ.get("OPENAI_API_KEY")
     if not openai_key:
@@ -173,7 +190,7 @@ def _build_model():
     print(f"[setup] Ollama未起動・ANTHROPIC_API_KEY未設定のため、OpenAI ({OPENAI_MODEL}) にフォールバックします。")
     CURRENT_PROVIDER = "openai"
     CURRENT_MODEL_NAME = OPENAI_MODEL
-    return init_chat_model(OPENAI_MODEL, model_provider="openai")
+    return init_chat_model(OPENAI_MODEL, model_provider="openai", timeout=LLM_REQUEST_TIMEOUT_SECONDS)
 
 
 def list_available_models() -> list[dict]:
@@ -197,9 +214,9 @@ def build_chat_model(provider: str, model_name: str):
     使い回すための関数（Ollamaサーバー自体の再起動は不要で、モデル指定を切り替えるだけでよい）。
     """
     if provider == "ollama":
-        return init_chat_model(model_name, model_provider="ollama", num_ctx=OLLAMA_NUM_CTX)
+        return init_chat_model(model_name, model_provider="ollama", num_ctx=OLLAMA_NUM_CTX, **_ollama_timeout_kwargs())
     if provider in ("anthropic", "openai"):
-        return init_chat_model(model_name, model_provider=provider)
+        return init_chat_model(model_name, model_provider=provider, timeout=LLM_REQUEST_TIMEOUT_SECONDS)
     raise ValueError(f"未対応のプロバイダです: {provider}")
 
 

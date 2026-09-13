@@ -1572,6 +1572,64 @@ def test_chat_streaming_exception_also_clears_cancel_button(monkeypatch):
     assert cancel_cleared["value"] is True
 
 
+def _track_markdown_calls(monkeypatch):
+    """DeltaGenerator.markdown()の呼び出し(表示テキスト, 呼び出し元プレースホルダー)を記録する。
+
+    同じstatus_placeholder（st.empty()の戻り値）に対して複数回markdown()が
+    呼ばれたことを、テキスト内容だけでなく呼び出し先オブジェクトの同一性でも
+    確認できるようにする。
+    """
+    markdown_calls = []
+    original_markdown = DeltaGenerator.markdown
+
+    def _tracking_markdown(self, body, *args, **kwargs):
+        markdown_calls.append((body, self))
+        return original_markdown(self, body, *args, **kwargs)
+
+    monkeypatch.setattr(DeltaGenerator, "markdown", _tracking_markdown)
+    return markdown_calls
+
+
+def test_chat_streaming_tool_message_redraws_status_placeholder(monkeypatch):
+    """正常系: ToolMessage受信時、検索中プレースホルダーに対して
+    「検索結果を確認中」への再描画が挟まる。Streamlitはウィジェット操作を検知した際に
+    実行中のスクリプトを中断する仕組みのため、st.*呼び出し自体が中断チェックポイントになる。
+    ToolMessage受信後に何もst.*を呼ばないと、この中断チェックポイントが発生しない。"""
+    fake_agent = _FakeAgentWithSources(answer="文書に基づく回答", artifact=[_FakeSourceDoc()])
+    monkeypatch.setattr(rag_chain, "build_agent", lambda thread_id=None, chat_model=None: fake_agent)
+    markdown_calls = _track_markdown_calls(monkeypatch)
+
+    at = _run_app()
+    at.chat_input[0].set_value("質問です").run()
+
+    assert at.exception == []
+    searching_calls = [(body, placeholder) for body, placeholder in markdown_calls if "検索して回答を考え中" in body]
+    assert len(searching_calls) == 1
+    status_placeholder = searching_calls[0][1]
+    confirming_calls = [
+        body for body, placeholder in markdown_calls if placeholder is status_placeholder and "検索結果を確認中" in body
+    ]
+    assert confirming_calls == ["🔍 検索結果を確認中...（キャンセルの反映に時間がかかる場合があります）"]
+
+
+def test_chat_streaming_tool_message_redraw_happens_once_per_tool_message(monkeypatch):
+    """境界値: retrieve_contextが複数回呼ばれた場合、ToolMessageの受信回数と同じ回数だけ
+    status_placeholderへの再描画（中断チェックポイント）が発生する。"""
+    fake_agent = _FakeAgentWithMultipleToolCalls(
+        answer="複数回検索した回答",
+        artifacts=[[_FakeSourceDoc(metadata={"source": "a.txt"})], [_FakeSourceDoc(metadata={"source": "b.txt"})]],
+    )
+    monkeypatch.setattr(rag_chain, "build_agent", lambda thread_id=None, chat_model=None: fake_agent)
+    markdown_calls = _track_markdown_calls(monkeypatch)
+
+    at = _run_app()
+    at.chat_input[0].set_value("質問です").run()
+
+    assert at.exception == []
+    confirming_calls = [body for body, _ in markdown_calls if "検索結果を確認中" in body]
+    assert len(confirming_calls) == 2
+
+
 # --- 3. 会話ログ保存後の挙動（save_conversation直後にadd_single_conversation_fileで即時反映） ---
 
 
