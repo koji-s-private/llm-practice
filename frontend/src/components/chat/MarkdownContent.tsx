@@ -1,6 +1,9 @@
+import { lazy, Suspense } from 'react'
 import ReactMarkdown, { type Components } from 'react-markdown'
-import { Prism as SyntaxHighlighter } from 'react-syntax-highlighter'
-import { oneDark } from 'react-syntax-highlighter/dist/esm/styles/prism'
+
+// シンタックスハイライト本体（Prismの言語データ込み）は本文表示の初回描画をブロックしない
+// よう遅延読み込みし、コードブロックを含まないメッセージではバンドルを取得しない。
+const CodeBlock = lazy(() => import('./CodeBlock'))
 
 // Tailwindのpreflightがul/ol/blockquote等のデフォルト装飾を打ち消すため、
 // react-markdownの標準タグ出力にTailwindユーティリティで最低限の見た目を補う
@@ -35,14 +38,15 @@ const markdownComponents: Components = {
     }
     const codeText = String(children).replace(/\n$/, '')
     return (
-      <SyntaxHighlighter
-        language={match[1]}
-        style={oneDark}
-        PreTag="div"
-        className="mb-2 !rounded-lg text-sm"
+      <Suspense
+        fallback={
+          <pre className="bg-muted mb-2 overflow-x-auto rounded-lg p-3 text-sm last:mb-0">
+            <code>{codeText}</code>
+          </pre>
+        }
       >
-        {codeText}
-      </SyntaxHighlighter>
+        <CodeBlock language={match[1]} code={codeText} />
+      </Suspense>
     )
   },
 }

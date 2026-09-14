@@ -218,7 +218,7 @@ Streamlit版（`app.py`）は移行完了まで並存する。使用技術の詳
 | [Tailwind CSS](https://tailwindcss.com/) + [shadcn/ui](https://ui.shadcn.com/) | ユーティリティファーストなCSSフレームワークと、それを使ったコピー&ペースト方式のUIコンポーネント群 | `frontend/src/index.css`、`frontend/src/components/ui/` |
 | [TanStack Query](https://tanstack.com/query) | API通信のキャッシュ・再試行等を扱うデータ取得・状態管理ライブラリ | `frontend/src/main.tsx`（`QueryClientProvider`）、`frontend/src/components/chat/Chat.tsx`（会話スレッド発行 `POST /api/conversations/new`） |
 | [react-markdown](https://github.com/remarkjs/react-markdown) | チャット回答本文のMarkdown描画 | `frontend/src/components/chat/MarkdownContent.tsx` |
-| [react-syntax-highlighter](https://github.com/react-syntax-highlighter/react-syntax-highlighter) | コードブロックのシンタックスハイライト | `frontend/src/components/chat/MarkdownContent.tsx` |
+| [react-syntax-highlighter](https://github.com/react-syntax-highlighter/react-syntax-highlighter) | コードブロックのシンタックスハイライト。よく使う言語のみを個別登録し`React.lazy`で分離読み込みしてバンドルサイズを抑制 | `frontend/src/components/chat/CodeBlock.tsx`（遅延読み込み元は`MarkdownContent.tsx`） |
 | [react-dropzone](https://react-dropzone.js.org/) | ファイル管理UIのドラッグ&ドロップ・複数選択アップロード | `frontend/src/components/files/FileDropzone.tsx` |
 | [ESLint](https://eslint.org/) + [Prettier](https://prettier.io/) | フロントエンドの静的解析・コードフォーマット | `frontend/eslint.config.ts` / `frontend/.prettierrc.json` |
 | [Vitest](https://vitest.dev/) + [React Testing Library](https://testing-library.com/react) | コンポーネント単体テスト | `frontend/src/App.test.tsx` |
