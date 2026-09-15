@@ -4245,6 +4245,33 @@ def test_export_download_button_enabled_after_chat(monkeypatch):
     assert buttons[0].proto.disabled is False
 
 
+def test_export_download_button_disabled_help_explains_reason():
+    """正常系: 会話が無く無効化されている状態では、helpに無効化理由が表示される。"""
+    at = _run_app()
+
+    assert at.exception == []
+    buttons = [b for b in at.sidebar.download_button if "会話をダウンロード" in b.label]
+    assert len(buttons) == 1
+    assert buttons[0].proto.disabled is True
+    assert "会話がまだありません" in buttons[0].help
+
+
+def test_export_download_button_enabled_help_explains_usage(monkeypatch):
+    """正常系: 会話がありボタンが有効な状態では、helpに保存内容の説明が表示される。"""
+    fake_agent = _FakeAgent(answer="これが回答です")
+    monkeypatch.setattr(rag_chain, "build_agent", lambda thread_id=None, chat_model=None: fake_agent)
+
+    at = _run_app()
+    at.chat_input[0].set_value("質問です").run()
+    at = at.run()
+
+    assert at.exception == []
+    buttons = [b for b in at.sidebar.download_button if "会話をダウンロード" in b.label]
+    assert len(buttons) == 1
+    assert buttons[0].proto.disabled is False
+    assert "Markdownファイルとして保存" in buttons[0].help
+    assert "会話がまだありません" not in buttons[0].help
+
 def test_conversation_to_markdown_single_pair_is_labeled_1():
     """境界値: 質問・回答が1往復のみ（メッセージ2件）の最小構成でも正しく整形される。"""
     import app
