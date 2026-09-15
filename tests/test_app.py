@@ -4272,6 +4272,7 @@ def test_export_download_button_enabled_help_explains_usage(monkeypatch):
     assert "Markdownファイルとして保存" in buttons[0].help
     assert "会話がまだありません" not in buttons[0].help
 
+
 def test_conversation_to_markdown_single_pair_is_labeled_1():
     """境界値: 質問・回答が1往復のみ（メッセージ2件）の最小構成でも正しく整形される。"""
     import app
