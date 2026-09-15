@@ -439,6 +439,56 @@ def test_chat_no_sources_event_when_no_tool_message_at_all(client, monkeypatch):
     assert events == [{"content": "回答"}, {"done": True}]
 
 
+def test_chat_dedupes_sources_across_multiple_tool_calls(client, monkeypatch):
+    """正常系: retrieve_contextが1ターン中に複数回呼ばれ、それぞれのToolMessage.artifactに
+    (source, page, thread_id, page_content)が同じドキュメントが含まれていても、
+    sourcesイベントには重複排除された件数のみが含まれる（app.pyの `_stream_answer` と同じ挙動）。"""
+    duplicated_doc_call1 = Document(page_content="同じチャンクの内容", metadata={"source": "doc.txt"})
+    duplicated_doc_call2 = Document(page_content="同じチャンクの内容", metadata={"source": "doc.txt"})
+    unique_doc = Document(page_content="別の箇所", metadata={"source": "other.txt"})
+    tool_message_1 = ToolMessage(content="検索結果1", tool_call_id="call-1", artifact=[duplicated_doc_call1])
+    tool_message_2 = ToolMessage(
+        content="検索結果2", tool_call_id="call-2", artifact=[duplicated_doc_call2, unique_doc]
+    )
+    fake_agent = _FakeAgent(chunks=[tool_message_1, tool_message_2, _FakeChunk("複数回検索した末の回答")])
+    monkeypatch.setattr(api_main, "build_agent", lambda thread_id: fake_agent)
+
+    response = client.post("/api/chat", json={"thread_id": "thread-1", "message": "質問", "history": []})
+
+    events = _parse_sse_events(response.text)
+    sources_events = [e["sources"] for e in events if "sources" in e]
+    assert len(sources_events) == 1
+    assert len(sources_events[0]) == 2
+    labels = [s["label"] for s in sources_events[0]]
+    assert sum("doc.txt" in label for label in labels) == 1
+    assert sum("other.txt" in label for label in labels) == 1
+
+
+def test_chat_no_dedupe_when_all_sources_distinct_across_multiple_tool_calls(client, monkeypatch):
+    """境界値（回帰確認）: retrieve_contextが複数回呼ばれても、すべて別々の箇所がヒットした
+    場合は重複が無いため全件がsourcesイベントにそのまま含まれる（重複排除ロジックが
+    無関係なドキュメントまで誤って間引かないことの確認）。"""
+    doc_a = Document(page_content="Aの内容", metadata={"source": "a.txt"})
+    doc_b = Document(page_content="Bの内容", metadata={"source": "b.txt"})
+    doc_c = Document(page_content="Cの内容", metadata={"source": "c.txt"})
+    tool_message_1 = ToolMessage(content="検索結果1", tool_call_id="call-1", artifact=[doc_a])
+    tool_message_2 = ToolMessage(content="検索結果2", tool_call_id="call-2", artifact=[doc_b])
+    tool_message_3 = ToolMessage(content="検索結果3", tool_call_id="call-3", artifact=[doc_c])
+    fake_agent = _FakeAgent(
+        chunks=[tool_message_1, tool_message_2, tool_message_3, _FakeChunk("3回検索した末の回答")]
+    )
+    monkeypatch.setattr(api_main, "build_agent", lambda thread_id: fake_agent)
+
+    response = client.post("/api/chat", json={"thread_id": "thread-1", "message": "質問", "history": []})
+
+    events = _parse_sse_events(response.text)
+    sources_events = [e["sources"] for e in events if "sources" in e]
+    assert len(sources_events) == 1
+    labels = [s["label"] for s in sources_events[0]]
+    for name in ("a.txt", "b.txt", "c.txt"):
+        assert sum(name in label for label in labels) == 1
+
+
 # --- thread_id のパストラバーサル対策 ---
 
 _MALICIOUS_THREAD_IDS = [

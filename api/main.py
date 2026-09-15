@@ -58,7 +58,7 @@ from memory import (
     save_conversation,
     save_thread_title,
 )
-from rag_chain import build_agent
+from rag_chain import build_agent, source_dedupe_key
 from source_formatting import format_snippet as _format_snippet
 from source_formatting import format_source_label as _format_source_label
 
@@ -161,6 +161,7 @@ def _stream_chat_response(thread_id: str, message: str, history: list[ChatMessag
     切り捨てられるのを防ぐ）。リクエストで受け取った `history` 自体は変更しない。
     """
     sources: list[Document] = []
+    seen_source_keys: set = set()
     try:
         agent = build_agent(thread_id)
         windowed_history = _windowed_history(_to_langchain_messages(history))
@@ -168,7 +169,14 @@ def _stream_chat_response(thread_id: str, message: str, history: list[ChatMessag
         for chunk, _metadata in agent.stream({"messages": input_messages}, stream_mode="messages"):
             if isinstance(chunk, ToolMessage):
                 if getattr(chunk, "artifact", None):
-                    sources.extend(chunk.artifact)
+                    # 1ターン中に複数回検索されて同じチャンクが重複ヒットすることがあるため
+                    # 既出チャンクを除外する（app.pyの `_stream_answer` と同じ方針）。
+                    for doc in chunk.artifact:
+                        key = source_dedupe_key(doc)
+                        if key in seen_source_keys:
+                            continue
+                        seen_source_keys.add(key)
+                        sources.append(doc)
                 continue
             text = getattr(chunk, "text", "")
             if text:
