@@ -114,7 +114,7 @@ GitHub Actions上で動くAIチームによって定期的にメンテナンス�
   - `coder`: 実装・ブランチ作成（[.claude/agents/coder.md](.claude/agents/coder.md)）
   - `qa-engineer`: テスト作成・実行（[.claude/agents/qa-engineer.md](.claude/agents/qa-engineer.md)）
   - `reviewer`: 静的解析・セキュリティ観点でのレビュー、コード変更は行わない。判定結果は実際のGitHub PRレビュー(`gh pr review --comment`)として投稿する。`--approve`・`--request-changes`はどちらも使わない（PR作成者(coder)とレビュアー(reviewer)が同じGitHub App ID(`claude[bot]`)で動作しており、GitHubが自己レビューとみなしてどちらも必ず拒否するため。LGTM/修正必要のどちらの判定かは`--comment`の本文冒頭に明記する）（[.claude/agents/reviewer.md](.claude/agents/reviewer.md)）
-  - `designer`: 「使いやすさ・継続して利用したいと思えるか」というUI/UX観点でのレビュー、コード変更は行わない。`app.py` / `.streamlit/`配下を変更するPRのみが対象で、Playwrightで変更前(main)・変更後(PRブランチ)のStreamlit画面のスクリーンショットを撮影・比較する。判定結果はreviewerと同じ理由・同じ方式（`gh pr review --comment`、`--approve`/`--request-changes`は使わない）で投稿する（[.claude/agents/designer.md](.claude/agents/designer.md)）
+  - `designer`: 「使いやすさ・継続して利用したいと思えるか」というUI/UX観点でのレビュー、コード変更は行わない。`app.py` / `.streamlit/`配下、または`frontend/src/`配下のUIコード（[docs/frontend-tech-policy.md](docs/frontend-tech-policy.md)参照。APIクライアント等のロジック・テストコードは除く）を変更するPRが対象で、Playwrightで変更前(main)・変更後(PRブランチ)の画面のスクリーンショットを撮影・比較する（Streamlit版は`python -m streamlit run`、React版は`npm run dev`のViteサーバを起動）。判定結果はreviewerと同じ理由・同じ方式（`gh pr review --comment`、`--approve`/`--request-changes`は使わない）で投稿する（[.claude/agents/designer.md](.claude/agents/designer.md)）
 - 3者（UI関連PRの場合はdesignerを含め4者）の作業が完了し、テストが通ってからPRを作成する
 - ワークフロー本体は [.github/workflows/ai-team.yml](.github/workflows/ai-team.yml) を参照
 - チケットの新規発掘は [.github/workflows/daily-health-check.yml](.github/workflows/daily-health-check.yml) が別途毎日担当する（役割が重複しないよう、ai-team.yml側はリポジトリ全体の能動的なスキャンは行わない）
@@ -125,7 +125,7 @@ GitHub Actions上で動くAIチームによって定期的にメンテナンス�
   同じ選定条件をクリアする最優先（Issue番号が最も小さい＝作成が最も古い）Issueを1件探し、
   見つかればラベルを `now` に自動で付け替えた上でその日の対象として選定する（昇格した旨をIssueにコメントで残す）。
   `now`/`next`/`later` のいずれにも対象が無い場合のみ、その日は何も実行しない
-- 3者の作業が完了しテストが通ったらPRを作成し、reviewerに実際のGitHub PRレビューでLGTM判定（`gh pr review --comment`、本文に「LGTM」と明記する慣習。coder/reviewerが同じGitHub App ID(`claude[bot]`)で動作するため、GitHub上の正式な`--approve`は自己承認扱いで必ず拒否される。そのためAIによる判定は常に`--comment`で記録し、GitHub上の正式なApprove状態の付与は行わない）をもらう。加えて`app.py` / `.streamlit/`配下を変更するUI関連のPRである場合は、designerにも同じPR番号でUI/UXレビューを依頼し、reviewerと同格のゲートとして扱う
+- 3者の作業が完了しテストが通ったらPRを作成し、reviewerに実際のGitHub PRレビューでLGTM判定（`gh pr review --comment`、本文に「LGTM」と明記する慣習。coder/reviewerが同じGitHub App ID(`claude[bot]`)で動作するため、GitHub上の正式な`--approve`は自己承認扱いで必ず拒否される。そのためAIによる判定は常に`--comment`で記録し、GitHub上の正式なApprove状態の付与は行わない）をもらう。加えて`app.py` / `.streamlit/`配下、または`frontend/src/`配下のUIコードを変更するUI関連のPRである場合は、designerにも同じPR番号でUI/UXレビューを依頼し、reviewerと同格のゲートとして扱う
 - **reviewerのLGTM（UI関連PRの場合はdesignerのLGTM相当も含む）が揃っても、絶対に自動マージしない。マージは必ず人間（koji）が手動で行う。** これは意図的な設計判断であり、将来的にも変更しない前提とする
 - reviewer・designerのいずれかがrequest changesのまま(両者ともLGTM相当に至らない)場合も同様にマージしない。PRにこれまでの経緯を要約したコメントを残し、人間の判断を待つ
 - 何らかの理由（技術的制約、優先度変更、要件不明瞭など）によりcoder/qa-engineer/reviewer/designerが実装・検証・レビューを
