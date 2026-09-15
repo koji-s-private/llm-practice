@@ -928,12 +928,17 @@ with st.sidebar:
     st.caption("現在表示中のスレッドの質問・回答をMarkdownファイルとしてダウンロードします。")
     has_messages = bool(st.session_state.messages)
     export_filename = f"conversation_{st.session_state.thread_id}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.md"
+    if has_messages:
+        download_help_text = "現在表示中のスレッドの会話をMarkdownファイルとして保存します"
+    else:
+        download_help_text = "会話がまだありません。質問すると保存できるようになります"
     st.download_button(
         "📥 この会話をダウンロード",
         data=_conversation_to_markdown(st.session_state.messages, st.session_state.thread_id) if has_messages else "",
         file_name=export_filename,
         mime="text/markdown",
         disabled=not has_messages,
+        help=download_help_text,
         use_container_width=True,
     )
 
