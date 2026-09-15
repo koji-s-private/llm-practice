@@ -474,9 +474,7 @@ def test_chat_no_dedupe_when_all_sources_distinct_across_multiple_tool_calls(cli
     tool_message_1 = ToolMessage(content="検索結果1", tool_call_id="call-1", artifact=[doc_a])
     tool_message_2 = ToolMessage(content="検索結果2", tool_call_id="call-2", artifact=[doc_b])
     tool_message_3 = ToolMessage(content="検索結果3", tool_call_id="call-3", artifact=[doc_c])
-    fake_agent = _FakeAgent(
-        chunks=[tool_message_1, tool_message_2, tool_message_3, _FakeChunk("3回検索した末の回答")]
-    )
+    fake_agent = _FakeAgent(chunks=[tool_message_1, tool_message_2, tool_message_3, _FakeChunk("3回検索した末の回答")])
     monkeypatch.setattr(api_main, "build_agent", lambda thread_id: fake_agent)
 
     response = client.post("/api/chat", json={"thread_id": "thread-1", "message": "質問", "history": []})
