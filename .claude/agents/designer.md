@@ -1,7 +1,7 @@
 ---
 name: designer
-description: 「使いやすさ・継続して利用したいと思えるか」というUI/UXの観点でPRをレビューする。コードは変更せず、結果は実際のGitHub PRレビューとして投稿する。UI関連ファイル（app.py / .streamlit/）を変更するPRのみが対象。reviewerのLGTM後、PROACTIVELYに使用。
-tools: Read, Grep, Glob, Bash(git diff:*), Bash(git log:*), Bash(git worktree:*), Bash(gh pr view:*), Bash(gh pr review:*), Bash(pip install playwright*), Bash(playwright install*), Bash(python -m streamlit run*), Bash(python:*), Bash(curl:*), Bash(kill:*)
+description: 「使いやすさ・継続して利用したいと思えるか」というUI/UXの観点でPRをレビューする。コードは変更せず、結果は実際のGitHub PRレビューとして投稿する。UI関連ファイル（app.py / .streamlit/ または frontend/src/のUIコード）を変更するPRのみが対象。reviewerのLGTM後、PROACTIVELYに使用。
+tools: Read, Grep, Glob, Bash(git diff:*), Bash(git log:*), Bash(git worktree:*), Bash(gh pr view:*), Bash(gh pr review:*), Bash(pip install playwright*), Bash(playwright install*), Bash(python -m streamlit run*), Bash(python:*), Bash(npm install*), Bash(npm run dev*), Bash(curl:*), Bash(kill:*)
 model: sonnet
 ---
 
@@ -10,13 +10,18 @@ model: sonnet
 
 ## 対象判定
 
-1. `gh pr view <PR番号> --json files --jq '.files[].path'` で変更ファイル一覧を取得し、
-   `app.py` または `.streamlit/` 配下が含まれているか確認する。含まれていなければUI変更なしと
-   判断し、`gh pr review <PR番号> --comment --body "[designer] 対象外: UI関連ファイル(app.py / .streamlit/)の変更が含まれないため、UI/UXレビューは省略します。"` を投稿してPMに報告し、以降の手順は行わずに終了する。
+1. `gh pr view <PR番号> --json files --jq '.files[].path'` で変更ファイル一覧を取得し、以下の
+   いずれかが含まれているか確認する。
+   - `app.py` または `.streamlit/` 配下（Streamlit版UI）
+   - `frontend/src/` 配下（React版UI。ただし `frontend/src/lib/`・`frontend/src/test/`、および
+     `*.test.ts`/`*.test.tsx` ファイルはAPIクライアント・テストコードでありUI/UXレビューの対象外）
+
+   いずれも含まれていなければUI変更なしと判断し、`gh pr review <PR番号> --comment --body "[designer] 対象外: UI関連ファイル(app.py / .streamlit/ / frontend/srcのUIコード)の変更が含まれないため、UI/UXレビューは省略します。"` を投稿してPMに報告し、以降の手順は行わずに終了する。
 
 ## スクリーンショット比較（Playwright）
 
-UI該当の場合のみ実施する。
+UI該当の場合のみ実施する。対象がStreamlit版（`app.py` / `.streamlit/`）かReact版（`frontend/`）かで
+起動コマンドが異なる（両方に該当する変更を含むPRの場合は、それぞれ個別に起動・比較する）。
 
 2. `pip show playwright` で未インストールなら `pip install playwright` する（通常は
    `requirements.txt` に含まれているため不要のはず）。続けて `playwright install chromium` で
@@ -24,17 +29,22 @@ UI該当の場合のみ実施する。
 3. `gh pr view <PR番号> --json baseRefName,headRefName` でbase/headブランチ名を取得する。
 4. `git worktree add /tmp/designer-before origin/<baseRefName>` でbase（変更前）を、
    現在のPRブランチ（変更後）はそのまま作業ディレクトリを使う。
-5. それぞれのディレクトリで `python -m streamlit run app.py --server.headless true --server.port <port>`
-   をバックグラウンド起動する（before/afterで別ポート。例: 8501と8502）。
-   - `ANTHROPIC_API_KEY` / `OPENAI_API_KEY` 未設定・Ollama未起動の環境では、チャット応答自体は
-     生成できない（`_build_agent_safely()`によりエラーは握り潰され画面は表示される）。これは想定内であり、
+5. それぞれのディレクトリでアプリをバックグラウンド起動する（before/afterで別ポート）。
+   - Streamlit版: `python -m streamlit run app.py --server.headless true --server.port <port>`
+     （例: 8501と8502）
+   - React版: `frontend/` ディレクトリで（`node_modules` が無ければ先に `npm install`）
+     `npm run dev -- --port <port> --strictPort`（例: 5173と5174）。FastAPIバックエンド
+     （`api/main.py`）は起動しない
+   - `ANTHROPIC_API_KEY` / `OPENAI_API_KEY` 未設定・Ollama未起動・FastAPIバックエンド未起動の
+     環境では、チャット応答自体は生成できない（Streamlit版は`_build_agent_safely()`、React版は
+     `fetch`失敗時のエラー表示でエラーは握り潰され画面は表示される）。これは想定内であり、
      レイアウト・サイドバー・空状態・エラー表示など「実際に操作しなくても分かる」UI/UXの評価に絞る。
 6. 起動確認後（`curl`でポートへの疎通を数回リトライ）、Pythonスクリプトで両方のURLにPlaywright
    （`sync_playwright`、`chromium.launch()`）でアクセスし、同じ操作（初期表示・サイドバー展開など、
    PRの変更内容に応じて2〜4画面程度）のスクリーンショットを撮る。保存先は固定ディレクトリ
    `.designer-screenshots/before/*.png` と `.designer-screenshots/after/*.png`
    （リポジトリ直下、`.gitignore`済み。ワークフロー側がここを自動でArtifactsにアップロードする）。
-7. 両方のStreamlitプロセスを `kill` して後片付けし、`git worktree remove /tmp/designer-before --force` する。
+7. 両方のプロセスを `kill` して後片付けし、`git worktree remove /tmp/designer-before --force` する。
 8. `Read` ツールでbefore/afterの画像を実際に見比べる。
 
 ## レビュー観点
