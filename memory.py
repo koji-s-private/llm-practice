@@ -79,10 +79,15 @@ def _slugify_snippet(text: str, length: int = 20) -> str:
 
 
 def _serialize_sources(sources: list) -> str:
-    """参照元DocumentのリストをMarkdown内に埋め込むためJSON文字列へ変換する。"""
+    """参照元DocumentのリストをMarkdown内に埋め込むためJSON文字列へ変換する。
+
+    metadataにJSON化できない値（将来ingest側の設計が拡張された場合等）が混入しても
+    例外にせず文字列化して保存するため、default=strでフォールバックする。
+    """
     return json.dumps(
         [{"metadata": doc.metadata, "page_content": doc.page_content} for doc in sources],
         ensure_ascii=False,
+        default=str,
     )
 
 
@@ -112,7 +117,14 @@ def save_conversation(
     filename = f"{now.strftime('%Y%m%d_%H%M%S')}_{uuid.uuid4().hex[:6]}_{_slugify_snippet(question)}.md"
     path = thread_dir / filename
 
-    sources_json = _serialize_sources(sources) if sources else None
+    sources_json = None
+    if sources:
+        try:
+            sources_json = _serialize_sources(sources)
+        except (TypeError, ValueError) as e:
+            # default=strでも救えない場合（循環参照など）は参照元セクションのみ諦め、
+            # 質問・回答本体の保存自体は失敗させない。
+            logger.warning("参照元情報のシリアライズに失敗したため参照元の保存をスキップします: %s", e)
 
     metadata_lines = (
         f"# 会話ログ\n\n"

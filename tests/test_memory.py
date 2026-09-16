@@ -615,6 +615,39 @@ def test_load_conversation_falls_back_to_empty_sources_when_json_entry_missing_k
     assert conversations[0]["answer"] == "回答"
 
 
+def test_serialize_sources_falls_back_to_str_for_non_json_value():
+    """境界値: metadataにJSON化できない値が混入していても、default=strで文字列化して保存できる。"""
+
+    class Unserializable:
+        def __str__(self):
+            return "custom-repr"
+
+    sources = [Document(page_content="本文", metadata={"source": "data/a.txt", "extra": Unserializable()})]
+
+    result = memory._serialize_sources(sources)
+
+    assert '"custom-repr"' in result
+
+
+def test_save_conversation_skips_sources_section_when_serialization_fails(tmp_path, monkeypatch, caplog):
+    """異常系: default=strでも救えない循環参照等でシリアライズに失敗しても、
+    参照元セクションのみ省略され質問・回答本体の保存自体は失敗しない。"""
+    monkeypatch.setattr(memory, "CONVERSATIONS_DIR", tmp_path)
+    circular = {}
+    circular["self"] = circular
+    sources = [Document(page_content="本文", metadata={"source": "data/a.txt", "circular": circular})]
+
+    with caplog.at_level(logging.WARNING, logger="memory"):
+        path = memory.save_conversation(question="質問", answer="回答", thread_id="thread-a", sources=sources)
+
+    content = path.read_text(encoding="utf-8")
+    assert "質問" in content
+    assert "回答" in content
+    assert "参照元文字数" not in content
+    assert "## 参照元" not in content
+    assert any("シリアライズに失敗" in record.message for record in caplog.records)
+
+
 # --- save_thread_title() / load_thread_title()（スレッドの任意タイトル） ---
 
 
