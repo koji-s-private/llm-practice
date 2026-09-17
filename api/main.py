@@ -14,7 +14,9 @@
        受信して画面にストリーミング表示する（現行Streamlit版の `st.spinner` + 逐次表示相当）。
     2. 受信し終えた回答全文を POST /api/conversations/save で会話ログとして保存する
        （Streamlit版の `save_conversation` 呼び出しに相当。呼ぶかどうかはフロントエンド側の
-       「今の会話を記憶として保存する」設定に委ねる）。
+       「今の会話を記憶として保存する」設定に委ねる）。保存とベクトルDBへの反映は
+       このエンドポイント内で完結するため、フロントエンドから別途 POST /api/sync を
+       呼ぶ必要はない。
     3. GET /api/files でインデックス済みファイル一覧を取得し、POST /api/files/upload・
        DELETE /api/files/{name} でファイルの追加・削除を行う（いずれもDB反映まで
        サーバー側で完結するため、フロントエンドから別途 POST /api/sync を呼ぶ必要はない）。
@@ -40,6 +42,7 @@ from pydantic import BaseModel
 from history_utils import _windowed_history
 from ingest import (
     SUPPORTED_EXTENSIONS,
+    add_single_conversation_file,
     delete_indexed_file,
     list_indexed_files,
     resolve_upload_dest,
@@ -380,20 +383,31 @@ class SaveConversationRequest(BaseModel):
 
 
 class SaveConversationResponse(BaseModel):
-    """POST /api/conversations/save のレスポンスボディ。"""
+    """POST /api/conversations/save のレスポンスボディ。
+
+    sync_status: ベクトルDBへの反映結果（ingest.add_single_conversation_file()の戻り値）。
+    反映に失敗しても会話ログ自体の保存は取り消されないため "failed" が返る。
+    """
 
     path: str
+    sync_status: Literal["added", "updated", "unchanged", "failed"]
 
 
 @app.post("/api/conversations/save", response_model=SaveConversationResponse)
 def save_conversation_endpoint(request: SaveConversationRequest) -> dict:
-    """1回分の質問・回答を会話ログとして保存する（memory.save_conversation()のラッパー）。
+    """1回分の質問・回答を会話ログとして保存し、ベクトルDBにもその場で反映する
+    （memory.save_conversation() + ingest.add_single_conversation_file() のラッパー）。
 
-    保存後のベクトルDBへの反映は行わない（Streamlit版と同様、次回の /api/sync 呼び出しに委ねる）。
+    DB反映（ロック取得タイムアウト等）に失敗しても会話ログの保存自体は取り消さない
+    （app.pyの `_sync_saved_conversation` と同様、次回の /api/sync による全件同期で再試行される）。
     """
     _validate_thread_id(request.thread_id)
     path = save_conversation(request.question, request.answer, request.thread_id, is_fallback=request.is_fallback)
-    return {"path": str(path)}
+    try:
+        sync_status = add_single_conversation_file(path)
+    except Exception:
+        sync_status = "failed"
+    return {"path": str(path), "sync_status": sync_status}
 
 
 # --- 会話スレッド管理（一覧・切り替え・タイトル編集・削除） ---

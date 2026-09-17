@@ -56,7 +56,9 @@ describe('Chat', () => {
       }
       if (target.endsWith('/api/conversations/save') && init?.method === 'POST') {
         return Promise.resolve(
-          new Response(JSON.stringify({ path: 'data/conversations/t1/1.json' })),
+          new Response(
+            JSON.stringify({ path: 'data/conversations/t1/1.json', sync_status: 'added' }),
+          ),
         )
       }
       if (
@@ -110,6 +112,69 @@ describe('Chat', () => {
       )
       expect(threadsGetCalls.length).toBeGreaterThan(1)
     })
+  })
+
+  it('「記憶として保存」をオフにすると、回答完了後も会話を保存しない', async () => {
+    const user = userEvent.setup()
+    const fetchMock = vi.fn((url: string, init?: RequestInit) => {
+      const target = url.toString()
+      if (target.endsWith('/api/conversations/new') && init?.method === 'POST') {
+        return Promise.resolve(new Response(JSON.stringify({ thread_id: 't1' })))
+      }
+      return Promise.resolve(sseResponse([{ content: '回答本文' }, { done: true }]))
+    })
+    vi.stubGlobal('fetch', fetchMock)
+
+    renderChat()
+    const input = await screen.findByPlaceholderText('質問を入力してください（Shift+Enterで改行）')
+    await waitFor(() => expect(input).not.toBeDisabled())
+
+    await user.click(screen.getByRole('switch', { name: '🧠 記憶として保存' }))
+    await user.type(input, '質問文')
+    await user.keyboard('{Enter}')
+
+    expect(await screen.findByText('回答本文')).toBeInTheDocument()
+
+    const saveCall = fetchMock.mock.calls.find(([url]) =>
+      url.toString().endsWith('/api/conversations/save'),
+    )
+    expect(saveCall).toBeUndefined()
+  })
+
+  it('会話の保存には成功したがナレッジベースへの反映に失敗した場合、警告を表示する', async () => {
+    const user = userEvent.setup()
+    vi.stubGlobal(
+      'fetch',
+      vi.fn((url: string, init?: RequestInit) => {
+        const target = url.toString()
+        if (target.endsWith('/api/conversations/new') && init?.method === 'POST') {
+          return Promise.resolve(new Response(JSON.stringify({ thread_id: 't1' })))
+        }
+        if (target.endsWith('/api/conversations/save') && init?.method === 'POST') {
+          return Promise.resolve(
+            new Response(
+              JSON.stringify({ path: 'data/conversations/t1/1.json', sync_status: 'failed' }),
+            ),
+          )
+        }
+        if (target.endsWith('/api/conversations')) {
+          return Promise.resolve(new Response(JSON.stringify({ threads: [] })))
+        }
+        return Promise.resolve(sseResponse([{ content: '回答本文' }, { done: true }]))
+      }),
+    )
+
+    renderChat()
+    const input = await screen.findByPlaceholderText('質問を入力してください（Shift+Enterで改行）')
+    await waitFor(() => expect(input).not.toBeDisabled())
+    await user.type(input, '質問文')
+    await user.keyboard('{Enter}')
+
+    expect(
+      await screen.findByText(
+        '会話は保存しましたが、ナレッジベースへの反映に失敗しました（次回の全件同期で再試行されます）',
+      ),
+    ).toBeInTheDocument()
   })
 
   it('会話パネルから過去のスレッドを選択すると、その会話内容が表示される', async () => {

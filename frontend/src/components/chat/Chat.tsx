@@ -6,6 +6,7 @@ import type { DisplayMessage } from '@/components/chat/types'
 import { ThreadPanel } from '@/components/conversations/ThreadPanel'
 import { FileManager } from '@/components/files/FileManager'
 import { Button } from '@/components/ui/button'
+import { Switch } from '@/components/ui/switch'
 import {
   type ChatMessage,
   type ChatSource,
@@ -66,6 +67,8 @@ export function Chat() {
   const [isSending, setIsSending] = useState(false)
   const [isFileManagerOpen, setIsFileManagerOpen] = useState(false)
   const [isThreadPanelOpen, setIsThreadPanelOpen] = useState(false)
+  // 今の会話を記憶として保存するか（デフォルトON）。app.pyのst.session_state.auto_save_memoryと同じ既定値。
+  const [autoSaveMemory, setAutoSaveMemory] = useState(true)
 
   const newThreadMutation = useMutation({
     mutationFn: createNewThread,
@@ -143,7 +146,7 @@ export function Chat() {
             hasError = true
           }
         }
-        if (!hasError) {
+        if (!hasError && autoSaveMemory) {
           saveConversationMutation.mutate({
             threadId,
             question: text,
@@ -160,7 +163,7 @@ export function Chat() {
         setIsSending(false)
       }
     },
-    [threadId, isBusy, messages, saveConversationMutation],
+    [threadId, isBusy, messages, autoSaveMemory, saveConversationMutation],
   )
 
   return (
@@ -174,7 +177,11 @@ export function Chat() {
             </p>
           )}
         </div>
-        <div className="flex gap-2">
+        <div className="flex items-center gap-3">
+          <label className="flex items-center gap-1.5 text-xs text-muted-foreground">
+            <Switch checked={autoSaveMemory} onCheckedChange={setAutoSaveMemory} />
+            🧠 記憶として保存
+          </label>
           <Button
             variant="outline"
             size="sm"
@@ -206,6 +213,11 @@ export function Chat() {
       {saveConversationMutation.isError && (
         <p className="text-destructive border-b px-4 py-2 text-xs">
           会話の保存に失敗しました: {errorMessage(saveConversationMutation.error)}
+        </p>
+      )}
+      {saveConversationMutation.data?.sync_status === 'failed' && (
+        <p className="text-destructive border-b px-4 py-2 text-xs">
+          会話は保存しましたが、ナレッジベースへの反映に失敗しました（次回の全件同期で再試行されます）
         </p>
       )}
       {isThreadPanelOpen && (
