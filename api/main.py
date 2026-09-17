@@ -9,7 +9,7 @@
 起動:
     uvicorn api.main:app --reload
 
-想定しているフロントエンド側の使い方（Step2以降で実装予定）:
+想定しているフロントエンド側の使い方:
     1. POST /api/chat で質問を送信し、SSE（Server-Sent Events）で回答をトークン単位に
        受信して画面にストリーミング表示する（現行Streamlit版の `st.spinner` + 逐次表示相当）。
     2. 受信し終えた回答全文を POST /api/conversations/save で会話ログとして保存する
