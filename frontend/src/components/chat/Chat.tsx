@@ -66,6 +66,9 @@ export function Chat() {
   const [isSending, setIsSending] = useState(false)
   const [isFileManagerOpen, setIsFileManagerOpen] = useState(false)
   const [isThreadPanelOpen, setIsThreadPanelOpen] = useState(false)
+  // 今の会話を記憶として保存するか（app.pyの st.session_state.auto_save_memory 相当）。
+  // デフォルトはON。タブを再読み込みすればONに戻ってよい（永続化は不要）。
+  const [autoSaveMemory, setAutoSaveMemory] = useState(true)
 
   const newThreadMutation = useMutation({
     mutationFn: createNewThread,
@@ -143,7 +146,7 @@ export function Chat() {
             hasError = true
           }
         }
-        if (!hasError) {
+        if (!hasError && autoSaveMemory) {
           saveConversationMutation.mutate({
             threadId,
             question: text,
@@ -160,7 +163,7 @@ export function Chat() {
         setIsSending(false)
       }
     },
-    [threadId, isBusy, messages, saveConversationMutation],
+    [threadId, isBusy, messages, saveConversationMutation, autoSaveMemory],
   )
 
   return (
@@ -175,6 +178,15 @@ export function Chat() {
           )}
         </div>
         <div className="flex gap-2">
+          <Button
+            variant={autoSaveMemory ? 'default' : 'outline'}
+            size="sm"
+            onClick={() => setAutoSaveMemory((enabled) => !enabled)}
+            aria-pressed={autoSaveMemory}
+            title="ONの場合、やりとりをこの会話スレッド内の以降の質問の回答材料として保存します"
+          >
+            🧠 記憶{autoSaveMemory ? 'ON' : 'OFF'}
+          </Button>
           <Button
             variant="outline"
             size="sm"
@@ -206,6 +218,11 @@ export function Chat() {
       {saveConversationMutation.isError && (
         <p className="text-destructive border-b px-4 py-2 text-xs">
           会話の保存に失敗しました: {errorMessage(saveConversationMutation.error)}
+        </p>
+      )}
+      {saveConversationMutation.isSuccess && saveConversationMutation.data.synced === false && (
+        <p className="border-b px-4 py-2 text-xs text-amber-600 dark:text-amber-400">
+          会話は保存されましたが、検索対象への反映に失敗しました。
         </p>
       )}
       {isThreadPanelOpen && (

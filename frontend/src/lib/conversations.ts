@@ -60,6 +60,11 @@ export interface SaveConversationParams {
   isFallback: boolean
 }
 
+export interface SaveConversationResult {
+  // 保存した会話ログ1件をベクトルDBへ反映できたかどうか。falseでも保存自体は成功している。
+  synced: boolean
+}
+
 // isFallback: ドキュメントに根拠が見つからず一般知識で回答した場合（sourcesが空）にtrueを渡す
 // （app.pyの save_conversation(..., is_fallback=not sources) と同じ判定基準）。
 export async function saveConversation({
@@ -67,7 +72,7 @@ export async function saveConversation({
   question,
   answer,
   isFallback,
-}: SaveConversationParams): Promise<void> {
+}: SaveConversationParams): Promise<SaveConversationResult> {
   const response = await fetch(`${API_BASE_URL}/api/conversations/save`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -81,6 +86,8 @@ export async function saveConversation({
   if (!response.ok) {
     throw new Error(`会話の保存に失敗しました (status: ${response.status})`)
   }
+  const data = (await response.json()) as { synced?: boolean }
+  return { synced: data.synced ?? true }
 }
 
 export async function deleteThread(threadId: string): Promise<void> {

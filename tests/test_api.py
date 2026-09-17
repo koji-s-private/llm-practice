@@ -7,8 +7,8 @@
 - `api.main.build_agent`（POST /api/chat が呼ぶ。フェイクエージェントの `.stream()` で
   トークンチャンクを模擬する）
 - `api.main.sync_data_dir` / `api.main.new_thread_id` / `api.main.conversation_count` /
-  `api.main.save_conversation` / `api.main.list_indexed_files` / `api.main.resolve_upload_dest` /
-  `api.main.delete_indexed_file`
+  `api.main.save_conversation` / `api.main.add_single_conversation_file` /
+  `api.main.list_indexed_files` / `api.main.resolve_upload_dest` / `api.main.delete_indexed_file`
 """
 
 import json
@@ -972,7 +972,12 @@ def test_save_conversation_returns_saved_path(client, monkeypatch, tmp_path):
         assert is_fallback is False
         return saved_path
 
+    def _fake_add_single(path):
+        assert path == saved_path
+        return "added"
+
     monkeypatch.setattr(api_main, "save_conversation", _fake_save)
+    monkeypatch.setattr(api_main, "add_single_conversation_file", _fake_add_single)
 
     response = client.post(
         "/api/conversations/save",
@@ -980,7 +985,42 @@ def test_save_conversation_returns_saved_path(client, monkeypatch, tmp_path):
     )
 
     assert response.status_code == 200
-    assert response.json() == {"path": str(saved_path)}
+    assert response.json() == {"path": str(saved_path), "synced": True}
+
+
+def test_save_conversation_synced_false_when_ingest_fails(client, monkeypatch, tmp_path):
+    """add_single_conversation_file()が"failed"を返した場合、保存自体は成功扱いのままsynced=Falseになる。"""
+    saved_path = tmp_path / "thread-a" / "20260101_000000_abcdef_question.md"
+
+    monkeypatch.setattr(api_main, "save_conversation", lambda *a, **k: saved_path)
+    monkeypatch.setattr(api_main, "add_single_conversation_file", lambda path: "failed")
+
+    response = client.post(
+        "/api/conversations/save",
+        json={"question": "質問内容", "answer": "回答内容", "thread_id": "thread-a"},
+    )
+
+    assert response.status_code == 200
+    assert response.json() == {"path": str(saved_path), "synced": False}
+
+
+def test_save_conversation_synced_false_when_ingest_raises(client, monkeypatch, tmp_path):
+    """add_single_conversation_file()が例外を送出しても、保存済みファイルのpathとともに200が返る。"""
+    saved_path = tmp_path / "thread-a" / "20260101_000000_abcdef_question.md"
+
+    def _fake_add_single(path):
+        raise RuntimeError("db書き込みに失敗しました")
+
+    monkeypatch.setattr(api_main, "save_conversation", lambda *a, **k: saved_path)
+    monkeypatch.setattr(api_main, "add_single_conversation_file", _fake_add_single)
+
+    response = client.post(
+        "/api/conversations/save",
+        json={"question": "質問内容", "answer": "回答内容", "thread_id": "thread-a"},
+    )
+
+    assert response.status_code == 200
+    assert response.json() == {"path": str(saved_path), "synced": False}
 
 
 def test_save_conversation_missing_field_returns_422(client):
@@ -1025,6 +1065,7 @@ def test_save_conversation_passes_is_fallback_true_through_to_memory(client, mon
         return "/tmp/dummy.md"
 
     monkeypatch.setattr(api_main, "save_conversation", _fake_save)
+    monkeypatch.setattr(api_main, "add_single_conversation_file", lambda path: "added")
 
     response = client.post(
         "/api/conversations/save",
@@ -1045,6 +1086,7 @@ def test_save_conversation_without_is_fallback_defaults_to_false(client, monkeyp
         return "/tmp/dummy.md"
 
     monkeypatch.setattr(api_main, "save_conversation", _fake_save)
+    monkeypatch.setattr(api_main, "add_single_conversation_file", lambda path: "added")
 
     response = client.post(
         "/api/conversations/save",
@@ -1068,6 +1110,7 @@ def test_save_conversation_accepts_thread_id_at_max_length_boundary(client, monk
         return saved_path
 
     monkeypatch.setattr(api_main, "save_conversation", _fake_save)
+    monkeypatch.setattr(api_main, "add_single_conversation_file", lambda path: "added")
 
     response = client.post(
         "/api/conversations/save",
@@ -1075,7 +1118,7 @@ def test_save_conversation_accepts_thread_id_at_max_length_boundary(client, monk
     )
 
     assert response.status_code == 200
-    assert response.json() == {"path": saved_path}
+    assert response.json() == {"path": saved_path, "synced": True}
 
 
 def test_save_conversation_accepts_thread_id_under_max_length(client, monkeypatch):
@@ -1086,6 +1129,7 @@ def test_save_conversation_accepts_thread_id_under_max_length(client, monkeypatc
         "save_conversation",
         lambda question, answer, thread_id_arg, is_fallback=False: "/tmp/dummy.md",
     )
+    monkeypatch.setattr(api_main, "add_single_conversation_file", lambda path: "added")
 
     response = client.post(
         "/api/conversations/save",

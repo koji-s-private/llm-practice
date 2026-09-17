@@ -24,6 +24,7 @@
 """
 
 import json
+import logging
 from collections.abc import Generator
 from datetime import datetime
 from pathlib import Path
@@ -40,6 +41,7 @@ from pydantic import BaseModel
 from history_utils import _windowed_history
 from ingest import (
     SUPPORTED_EXTENSIONS,
+    add_single_conversation_file,
     delete_indexed_file,
     list_indexed_files,
     resolve_upload_dest,
@@ -61,6 +63,8 @@ from memory import (
 from rag_chain import build_agent, source_dedupe_key
 from source_formatting import format_snippet as _format_snippet
 from source_formatting import format_source_label as _format_source_label
+
+logger = logging.getLogger(__name__)
 
 app = FastAPI(
     title="Doclore API",
@@ -380,20 +384,33 @@ class SaveConversationRequest(BaseModel):
 
 
 class SaveConversationResponse(BaseModel):
-    """POST /api/conversations/save のレスポンスボディ。"""
+    """POST /api/conversations/save のレスポンスボディ。
+
+    synced: 保存した会話ログ1件をベクトルDBへ反映できたかどうか（Falseでも保存自体は
+    成功しているため200を返す。フロントエンド側で「検索対象への反映に失敗した」旨の
+    警告表示に使う）。
+    """
 
     path: str
+    synced: bool
 
 
 @app.post("/api/conversations/save", response_model=SaveConversationResponse)
 def save_conversation_endpoint(request: SaveConversationRequest) -> dict:
-    """1回分の質問・回答を会話ログとして保存する（memory.save_conversation()のラッパー）。
+    """1回分の質問・回答を会話ログとして保存し、data/全件走査なしでベクトルDBに反映する
+    （app.pyの save_conversation() + _sync_saved_conversation() 相当）。
 
-    保存後のベクトルDBへの反映は行わない（Streamlit版と同様、次回の /api/sync 呼び出しに委ねる）。
+    DB反映が失敗しても保存自体（ファイル書き込み）は成功しているため、例外はログに残す
+    だけでHTTPエラーにはせず、synced=Falseとしてレスポンスで通知する。
     """
     _validate_thread_id(request.thread_id)
     path = save_conversation(request.question, request.answer, request.thread_id, is_fallback=request.is_fallback)
-    return {"path": str(path)}
+    try:
+        synced = add_single_conversation_file(path) != "failed"
+    except Exception:
+        logger.exception("保存した会話ログ %s のベクトルDB反映に失敗しました。", path)
+        synced = False
+    return {"path": str(path), "synced": synced}
 
 
 # --- 会話スレッド管理（一覧・切り替え・タイトル編集・削除） ---

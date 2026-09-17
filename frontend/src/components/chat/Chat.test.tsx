@@ -56,7 +56,7 @@ describe('Chat', () => {
       }
       if (target.endsWith('/api/conversations/save') && init?.method === 'POST') {
         return Promise.resolve(
-          new Response(JSON.stringify({ path: 'data/conversations/t1/1.json' })),
+          new Response(JSON.stringify({ path: 'data/conversations/t1/1.json', synced: true })),
         )
       }
       if (
@@ -110,6 +110,41 @@ describe('Chat', () => {
       )
       expect(threadsGetCalls.length).toBeGreaterThan(1)
     })
+  })
+
+  it('記憶トグルをOFFにすると、ストリーミング完了後も会話を保存しない', async () => {
+    const user = userEvent.setup()
+    const fetchMock = vi.fn((url: string, init?: RequestInit) => {
+      const target = url.toString()
+      if (target.endsWith('/api/conversations/new') && init?.method === 'POST') {
+        return Promise.resolve(new Response(JSON.stringify({ thread_id: 't1' })))
+      }
+      if (target.endsWith('/api/conversations/save') && init?.method === 'POST') {
+        return Promise.resolve(
+          new Response(JSON.stringify({ path: 'data/conversations/t1/1.json', synced: true })),
+        )
+      }
+      return Promise.resolve(sseResponse([{ content: '回答本文' }, { done: true }]))
+    })
+    vi.stubGlobal('fetch', fetchMock)
+
+    renderChat()
+    const input = await screen.findByPlaceholderText('質問を入力してください（Shift+Enterで改行）')
+    await waitFor(() => expect(input).not.toBeDisabled())
+
+    await user.click(screen.getByRole('button', { name: '🧠 記憶ON' }))
+    expect(screen.getByRole('button', { name: '🧠 記憶OFF' })).toBeInTheDocument()
+
+    await user.type(input, '質問文')
+    await user.keyboard('{Enter}')
+
+    expect(await screen.findByText('回答本文')).toBeInTheDocument()
+
+    const saveCall = fetchMock.mock.calls.find(
+      ([url, callInit]) =>
+        url.toString().endsWith('/api/conversations/save') && callInit?.method === 'POST',
+    )
+    expect(saveCall).toBeUndefined()
   })
 
   it('会話パネルから過去のスレッドを選択すると、その会話内容が表示される', async () => {
