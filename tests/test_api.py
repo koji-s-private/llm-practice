@@ -1016,7 +1016,11 @@ def test_save_conversation_rejects_path_traversal_thread_id(client, monkeypatch,
 @pytest.mark.parametrize("sync_status", ["added", "updated", "unchanged", "failed"])
 def test_save_conversation_returns_sync_status_from_ingest(client, monkeypatch, sync_status):
     """正常系: add_single_conversation_file()の戻り値がそのままsync_statusとしてレスポンスに反映される。"""
-    monkeypatch.setattr(api_main, "save_conversation", lambda question, answer, thread_id, is_fallback=False: "/tmp/dummy.md")
+    monkeypatch.setattr(
+        api_main,
+        "save_conversation",
+        lambda question, answer, thread_id, is_fallback=False: "/tmp/dummy.md",
+    )
     monkeypatch.setattr(api_main, "add_single_conversation_file", lambda path: sync_status)
 
     response = client.post(
@@ -1038,7 +1042,11 @@ def test_save_conversation_swallows_filelock_timeout_from_sync(client, monkeypat
     def _raise_timeout(path):
         raise FileLockTimeout("dummy-lock")
 
-    monkeypatch.setattr(api_main, "save_conversation", lambda question, answer, thread_id, is_fallback=False: saved_path)
+    monkeypatch.setattr(
+        api_main,
+        "save_conversation",
+        lambda question, answer, thread_id, is_fallback=False: saved_path,
+    )
     monkeypatch.setattr(api_main, "add_single_conversation_file", _raise_timeout)
 
     response = client.post(
@@ -1058,7 +1066,11 @@ def test_save_conversation_swallows_generic_exception_from_sync(client, monkeypa
     def _raise_error(path):
         raise RuntimeError("unexpected failure")
 
-    monkeypatch.setattr(api_main, "save_conversation", lambda question, answer, thread_id, is_fallback=False: saved_path)
+    monkeypatch.setattr(
+        api_main,
+        "save_conversation",
+        lambda question, answer, thread_id, is_fallback=False: saved_path,
+    )
     monkeypatch.setattr(api_main, "add_single_conversation_file", _raise_error)
 
     response = client.post(
