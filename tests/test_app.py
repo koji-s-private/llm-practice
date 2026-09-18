@@ -3856,6 +3856,7 @@ def test_cancel_download_closes_download_button(tmp_path, monkeypatch):
     assert at.exception == []
     assert [b for b in at.sidebar.download_button if b.key == "confirm_download_report.txt"] == []
     assert "pending_download_report.txt" not in at.session_state
+    assert "download_bytes_report.txt" not in at.session_state
 
 
 def test_download_and_delete_confirmations_are_mutually_exclusive(tmp_path, monkeypatch):
@@ -3889,6 +3890,7 @@ def test_download_and_delete_confirmations_are_mutually_exclusive(tmp_path, monk
     assert "pending_delete_report.txt" in at.session_state
     assert "pending_download_report.txt" not in at.session_state
     assert [b for b in at.sidebar.download_button if b.key == "confirm_download_report.txt"] == []
+    assert "download_bytes_report.txt" not in at.session_state
 
 
 def test_download_panel_reuses_cached_bytes_across_unrelated_reruns(tmp_path, monkeypatch):
@@ -3947,6 +3949,32 @@ def test_download_panel_reads_again_after_file_modified(tmp_path, monkeypatch):
 
     assert at.exception == []
     assert captured["data"] == b"updated content"
+
+
+def test_download_panel_discards_cache_when_file_removed_from_disk(tmp_path, monkeypatch):
+    """異常系: パネルを開いてキャッシュが生成された後、実体がディスク上から消えた場合は
+    エラー表示とともにキャッシュも破棄され、残留したデータがdownload_buttonに渡らない。"""
+    data_dir = tmp_path / "data"
+    data_dir.mkdir(parents=True)
+    file_path = data_dir / "report.txt"
+    file_path.write_bytes(b"hello world")
+    monkeypatch.setattr(ingest, "DATA_DIR", data_dir)
+    monkeypatch.setattr(ingest, "list_indexed_files", lambda: [{"name": "report.txt", "chunk_count": 2}])
+    _capture_download_button_media(monkeypatch)
+
+    at = _run_app()
+    download_button = next(b for b in at.sidebar.button if b.key == "download_button_report.txt")
+    at = download_button.click().run()
+    assert "download_bytes_report.txt" in at.session_state
+
+    file_path.unlink()
+    checkbox = next(c for c in at.sidebar.checkbox if c.key == "selected_delete_report.txt")
+    at = checkbox.check().run()
+
+    assert at.exception == []
+    assert any("report.txt" in e.value for e in at.sidebar.error)
+    assert [b for b in at.sidebar.download_button if b.key == "confirm_download_report.txt"] == []
+    assert "download_bytes_report.txt" not in at.session_state
 
 
 # --- 11. build_agent()呼び出しのtry/except保護（_build_agent_safely） ---
