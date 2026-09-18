@@ -413,25 +413,36 @@ def _render_indexed_file_list() -> None:
             # 確認ダイアログが同時に出てしまうため、一括側は閉じる。
             st.session_state[pending_key] = True
             st.session_state.pop(download_key, None)
+            st.session_state.pop(f"download_bytes_{name}", None)
             st.session_state.pop(_PENDING_BULK_DELETE_KEY, None)
 
         if st.session_state.get(download_key):
             file_path = safe_relative_dest(name)
+            cache_key = f"download_bytes_{name}"
             if file_path is None or not file_path.is_file():
                 st.error(f"「{name}」の実体が見つかりません（削除済みの可能性があります）。")
                 st.session_state.pop(download_key, None)
+                st.session_state.pop(cache_key, None)
             else:
                 mime_type, _ = mimetypes.guess_type(file_path.name)
+                # パネルを開いたまま無関係な操作でスクリプトが再実行されても
+                # read_bytes()を毎回走らせないよう、mtimeをキーにした結果をキャッシュする。
+                mtime = file_path.stat().st_mtime
+                cached = st.session_state.get(cache_key)
+                if cached is None or cached[0] != mtime:
+                    cached = (mtime, file_path.read_bytes())
+                    st.session_state[cache_key] = cached
                 col_download_action, col_download_close = st.columns([4, 1])
                 col_download_action.download_button(
                     "クリックしてダウンロード",
-                    data=file_path.read_bytes(),
+                    data=cached[1],
                     file_name=file_path.name,
                     mime=mime_type or "application/octet-stream",
                     key=f"confirm_download_{name}",
                 )
                 if col_download_close.button("✕", key=f"cancel_download_{name}", help="ダウンロード欄を閉じる"):
                     st.session_state.pop(download_key, None)
+                    st.session_state.pop(cache_key, None)
                     st.rerun()
 
         if st.session_state.get(pending_key):
