@@ -40,6 +40,7 @@ app.py はモジュールトップレベルで `from ingest import ... sync_data
 """
 
 import ast
+import os
 from pathlib import Path
 
 import pytest
@@ -3888,6 +3889,64 @@ def test_download_and_delete_confirmations_are_mutually_exclusive(tmp_path, monk
     assert "pending_delete_report.txt" in at.session_state
     assert "pending_download_report.txt" not in at.session_state
     assert [b for b in at.sidebar.download_button if b.key == "confirm_download_report.txt"] == []
+
+
+def test_download_panel_reuses_cached_bytes_across_unrelated_reruns(tmp_path, monkeypatch):
+    """正常系: パネルを開いたまま無関係な操作（他要素のチェックボックス変更等）で
+    再実行されても、read_bytes()はパネルを開いた最初の1回しか呼ばれない。"""
+    data_dir = tmp_path / "data"
+    data_dir.mkdir(parents=True)
+    (data_dir / "report.txt").write_bytes(b"hello world")
+    monkeypatch.setattr(ingest, "DATA_DIR", data_dir)
+    monkeypatch.setattr(ingest, "list_indexed_files", lambda: [{"name": "report.txt", "chunk_count": 2}])
+    _capture_download_button_media(monkeypatch)
+
+    read_calls = []
+    original_read_bytes = Path.read_bytes
+
+    def counting_read_bytes(self):
+        read_calls.append(self)
+        return original_read_bytes(self)
+
+    monkeypatch.setattr(Path, "read_bytes", counting_read_bytes)
+
+    at = _run_app()
+    download_button = next(b for b in at.sidebar.button if b.key == "download_button_report.txt")
+    at = download_button.click().run()
+    assert len(read_calls) == 1
+
+    checkbox = next(c for c in at.sidebar.checkbox if c.key == "selected_delete_report.txt")
+    at = checkbox.check().run()
+
+    assert at.exception == []
+    assert len(read_calls) == 1
+    assert len([b for b in at.sidebar.download_button if b.key == "confirm_download_report.txt"]) == 1
+
+
+def test_download_panel_reads_again_after_file_modified(tmp_path, monkeypatch):
+    """境界値: パネルを開いたままファイルの中身・mtimeが変わった場合は、
+    古いキャッシュを使わず再度read_bytes()する。"""
+    data_dir = tmp_path / "data"
+    data_dir.mkdir(parents=True)
+    file_path = data_dir / "report.txt"
+    file_path.write_bytes(b"hello world")
+    monkeypatch.setattr(ingest, "DATA_DIR", data_dir)
+    monkeypatch.setattr(ingest, "list_indexed_files", lambda: [{"name": "report.txt", "chunk_count": 2}])
+    captured = _capture_download_button_media(monkeypatch)
+
+    at = _run_app()
+    download_button = next(b for b in at.sidebar.button if b.key == "download_button_report.txt")
+    at = download_button.click().run()
+    assert captured["data"] == b"hello world"
+
+    file_path.write_bytes(b"updated content")
+    os.utime(file_path, (file_path.stat().st_mtime + 1, file_path.stat().st_mtime + 1))
+
+    checkbox = next(c for c in at.sidebar.checkbox if c.key == "selected_delete_report.txt")
+    at = checkbox.check().run()
+
+    assert at.exception == []
+    assert captured["data"] == b"updated content"
 
 
 # --- 11. build_agent()呼び出しのtry/except保護（_build_agent_safely） ---
