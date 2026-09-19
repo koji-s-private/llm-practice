@@ -1157,16 +1157,6 @@ if question:
 
             st.session_state.token_usage["input_tokens"] += turn_usage["input_tokens"]
             st.session_state.token_usage["output_tokens"] += turn_usage["output_tokens"]
-
-            _render_answer_provenance(sources)
-            _render_copy_button(answer)
-            # この時点ではまだmessagesに追加していないため、追加後にこのAIMessageが
-            # 収まるインデックス（履歴再描画ループと同じ体系）を先読みして計算する。
-            # 再生成時はHumanMessageを追加し直さないため+1しない。
-            next_index = len(st.session_state.messages) if regenerating else len(st.session_state.messages) + 1
-            _render_feedback_buttons(question, answer, next_index)
-            _render_token_usage_note()
-            _render_regenerate_button(next_index)
         except Exception as e:
             status_placeholder.empty()
             cancel_placeholder.empty()
@@ -1175,6 +1165,22 @@ if question:
             answer_placeholder.empty()
             answer = None
             st.error(_format_invoke_error_message(e))
+
+        if answer is not None:
+            # 参照元・コピーボタン等は回答生成後の付随的な描画であり、ここでの例外が
+            # 生成済みの回答（answer/sources）自体の破棄に波及しないよう分離する。
+            try:
+                _render_answer_provenance(sources)
+                _render_copy_button(answer)
+                # この時点ではまだmessagesに追加していないため、追加後にこのAIMessageが
+                # 収まるインデックス（履歴再描画ループと同じ体系）を先読みして計算する。
+                # 再生成時はHumanMessageを追加し直さないため+1しない。
+                next_index = len(st.session_state.messages) if regenerating else len(st.session_state.messages) + 1
+                _render_feedback_buttons(question, answer, next_index)
+                _render_token_usage_note()
+                _render_regenerate_button(next_index)
+            except Exception:
+                st.warning("回答の表示中に一部エラーが発生しましたが、回答自体は保存されています。")
 
     if answer is not None:
         if not regenerating:
