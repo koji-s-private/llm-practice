@@ -54,6 +54,7 @@ import google_drive_sync
 import ingest
 import memory
 import rag_chain
+import source_formatting
 
 APP_PATH = str(Path(__file__).resolve().parent.parent / "app.py")
 
@@ -1128,6 +1129,85 @@ def test_chat_streaming_exception_clears_partial_answer_from_screen(monkeypatch)
     assert at.exception == []
     assert len(at.error) == 1
     assert not any("途中まで表示された回答" in m.value for m in at.markdown)
+
+
+def test_chat_streaming_exception_does_not_append_history_or_save(monkeypatch):
+    """異常系: ストリーミング取得自体で例外が発生した場合、従来通りanswerはNoneのままとなり、
+    会話履歴への追加もsave_conversationの呼び出しも行われない。"""
+    fake_agent = _FakeAgent(chunks=["途中まで表示された回答"], exc=RuntimeError("stream broken"))
+    monkeypatch.setattr(rag_chain, "build_agent", lambda thread_id=None, chat_model=None: fake_agent)
+    save_calls = []
+    monkeypatch.setattr(memory, "save_conversation", lambda *a, **k: save_calls.append((a, k)) or Path("/tmp/x.md"))
+
+    at = _run_app()
+    at.chat_input[0].set_value("質問です").run()
+
+    assert at.exception == []
+    assert len(at.error) == 1
+    assert at.session_state["messages"] == []
+    assert save_calls == []
+
+
+def test_chat_post_stream_render_exception_does_not_discard_answer(monkeypatch):
+    """異常系: ストリーミング完了後の参照元表示（_render_answer_provenance）で例外が
+    発生しても、生成済みの回答は破棄されず、履歴への追加・会話ログ保存が実行され、
+    画面には警告メッセージのみが表示される。"""
+    doc = _FakeSourceDoc(page_content="参照元の内容", metadata={"source": "doc.txt"})
+    fake_agent = _FakeAgentWithSources(answer="保持されるはずの回答", artifact=[doc])
+    monkeypatch.setattr(rag_chain, "build_agent", lambda thread_id=None, chat_model=None: fake_agent)
+
+    def _raise(*args, **kwargs):
+        raise RuntimeError("source label formatting failed")
+
+    monkeypatch.setattr(source_formatting, "format_source_label", _raise)
+
+    save_calls = []
+    monkeypatch.setattr(memory, "save_conversation", lambda *a, **k: save_calls.append((a, k)) or Path("/tmp/x.md"))
+
+    at = _run_app()
+    at.chat_input[0].set_value("質問です").run()
+
+    assert at.exception == []
+    assert at.error == []
+    assert len(at.warning) == 1
+    assert "回答の表示中に一部エラーが発生しましたが" in at.warning[0].value
+
+    messages = at.session_state["messages"]
+    assert len(messages) == 2
+    assert messages[0].content == "質問です"
+    assert messages[1].content == "保持されるはずの回答"
+    assert len(save_calls) == 1
+
+
+def test_chat_post_stream_render_exception_regenerating_does_not_re_add_question(monkeypatch):
+    """境界値: 再生成時に描画例外が発生しても、質問（HumanMessage）は重複追加されず、
+    末尾のAI回答だけが新しい回答に置き換わる（通常時の分岐との違いを確認する）。"""
+    doc = _FakeSourceDoc(page_content="参照元の内容", metadata={"source": "doc.txt"})
+    fake_agent = _FakeAgentWithSources(answer="再生成後の回答", artifact=[doc])
+    monkeypatch.setattr(rag_chain, "build_agent", lambda thread_id=None, chat_model=None: fake_agent)
+
+    def _raise(*args, **kwargs):
+        raise RuntimeError("source label formatting failed")
+
+    monkeypatch.setattr(source_formatting, "format_source_label", _raise)
+
+    at = _run_app()
+    at.session_state["messages"] = [
+        HumanMessage(content="元の質問です"),
+        AIMessage(content="古い回答"),
+    ]
+    at = at.run()
+
+    regenerate_button = next(b for b in at.button if b.key == "regenerate_thread-test_1")
+    at = regenerate_button.click().run()
+
+    assert at.exception == []
+    assert len(at.warning) == 1
+
+    messages = at.session_state["messages"]
+    assert len(messages) == 2
+    assert messages[0].content == "元の質問です"
+    assert messages[1].content == "再生成後の回答"
 
 
 def test_chat_streaming_tool_message_artifact_becomes_sources_expander(monkeypatch):
