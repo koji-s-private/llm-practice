@@ -151,7 +151,13 @@ def test_unsupported_extension_is_skipped(fake_env, monkeypatch):
 
     result = google_drive_sync.sync_google_drive_files(verbose=False)
 
-    assert result == {"added": [], "updated": [], "removed": [], "skipped": ["video.mp4"]}
+    assert result == {
+        "added": [],
+        "updated": [],
+        "removed": [],
+        "skipped": ["video.mp4"],
+        "removal_blocked_files": [],
+    }
     assert list(drive_dir.iterdir()) == []
 
 
@@ -163,7 +169,13 @@ def test_file_re_downloaded_on_second_sync_is_marked_updated(fake_env, monkeypat
     _use_fake_service(monkeypatch, drive_files, media_contents={"pdf1": b"v2"})
     result = google_drive_sync.sync_google_drive_files(verbose=False)
 
-    assert result == {"added": [], "updated": ["manual.pdf"], "removed": [], "skipped": []}
+    assert result == {
+        "added": [],
+        "updated": ["manual.pdf"],
+        "removed": [],
+        "skipped": [],
+        "removal_blocked_files": [],
+    }
 
 
 def test_file_removed_from_drive_is_deleted_locally(fake_env, monkeypatch):
@@ -179,7 +191,13 @@ def test_file_removed_from_drive_is_deleted_locally(fake_env, monkeypatch):
     _use_fake_service(monkeypatch, [drive_files[0]], media_contents={"pdf1": b"keep"})
     result = google_drive_sync.sync_google_drive_files(verbose=False)
 
-    assert result == {"added": [], "updated": ["keep.pdf"], "removed": ["gone.pdf"], "skipped": []}
+    assert result == {
+        "added": [],
+        "updated": ["keep.pdf"],
+        "removed": ["gone.pdf"],
+        "skipped": [],
+        "removal_blocked_files": [],
+    }
     assert not (drive_dir / "gone.pdf").exists()
     assert (drive_dir / "keep.pdf").exists()
 
@@ -194,7 +212,13 @@ def test_sync_is_skipped_when_folder_id_not_set(fake_env, monkeypatch):
 
     result = google_drive_sync.sync_google_drive_files(verbose=False)
 
-    assert result == {"added": [], "updated": [], "removed": [], "skipped": []}
+    assert result == {
+        "added": [],
+        "updated": [],
+        "removed": [],
+        "skipped": [],
+        "removal_blocked_files": [],
+    }
 
 
 def test_missing_client_secret_file_raises_clear_error(fake_env, monkeypatch, tmp_path):
@@ -232,7 +256,13 @@ def test_download_failure_does_not_corrupt_existing_local_file(fake_env, monkeyp
     _use_fake_service(monkeypatch, drive_files, media_contents={"pdf1": RuntimeError("simulated network error")})
     result = google_drive_sync.sync_google_drive_files(verbose=False)
 
-    assert result == {"added": [], "updated": [], "removed": [], "skipped": ["manual.pdf"]}
+    assert result == {
+        "added": [],
+        "updated": [],
+        "removed": [],
+        "skipped": ["manual.pdf"],
+        "removal_blocked_files": [],
+    }
     assert (drive_dir / "manual.pdf").read_bytes() == b"original-content"
 
 
@@ -366,3 +396,206 @@ def test_duplicate_resolved_next_sync_reverts_to_plain_name_and_removes_stale_co
     assert not (drive_dir / "report_aaaaaaaa.pdf").exists()
     assert not (drive_dir / "report_bbbbbbbb.pdf").exists()
     assert (drive_dir / "report.pdf").read_bytes() == b"content-A"
+
+
+def _sync_n_files(monkeypatch, n: int) -> None:
+    drive_files = [{"id": f"id{i}", "name": f"file{i}.pdf", "mimeType": "application/pdf"} for i in range(n)]
+    media_contents = {f"id{i}": f"content-{i}".encode() for i in range(n)}
+    _use_fake_service(monkeypatch, drive_files, media_contents=media_contents)
+    google_drive_sync.sync_google_drive_files(verbose=False)
+
+
+def test_removal_blocked_when_majority_of_files_disappear_at_once(fake_env, monkeypatch, caplog):
+    """既存ファイルの半数以上が一度に消えたと判定された場合、削除せずブロックすることを確認する。"""
+    drive_dir = fake_env
+    _sync_n_files(monkeypatch, 6)
+    assert len(list(drive_dir.iterdir())) == 6
+
+    # 6件中1件しかDrive上で確認できない（5件=約83%が消えたように見える）状態を模擬する
+    _use_fake_service(
+        monkeypatch,
+        [{"id": "id0", "name": "file0.pdf", "mimeType": "application/pdf"}],
+        media_contents={"id0": b"content-0"},
+    )
+    with caplog.at_level(logging.WARNING, logger="google_drive_sync"):
+        result = google_drive_sync.sync_google_drive_files(verbose=False)
+
+    assert result["removed"] == []
+    assert sorted(result["removal_blocked_files"]) == [f"file{i}.pdf" for i in range(1, 6)]
+    # ブロックされたファイルはローカルから削除されない
+    for i in range(1, 6):
+        assert (drive_dir / f"file{i}.pdf").exists()
+    warnings = [r for r in caplog.records if r.levelname == "WARNING"]
+    assert any("削除をスキップ" in r.getMessage() for r in warnings)
+
+
+def test_removal_proceeds_when_minority_of_files_disappear(fake_env, monkeypatch):
+    """半数未満の消失であれば、従来通り通常の削除が実行されることを確認する（回帰確認）。"""
+    drive_dir = fake_env
+    _sync_n_files(monkeypatch, 6)
+
+    # 6件中5件が引き続きDrive上で確認できる（1件=約17%の消失）状態を模擬する
+    remaining = [{"id": f"id{i}", "name": f"file{i}.pdf", "mimeType": "application/pdf"} for i in range(5)]
+    media_contents = {f"id{i}": f"content-{i}".encode() for i in range(5)}
+    _use_fake_service(monkeypatch, remaining, media_contents=media_contents)
+    result = google_drive_sync.sync_google_drive_files(verbose=False)
+
+    assert result["removed"] == ["file5.pdf"]
+    assert result["removal_blocked_files"] == []
+    assert not (drive_dir / "file5.pdf").exists()
+
+
+def test_removal_blocked_when_drive_returns_no_files_at_all(fake_env, monkeypatch, caplog):
+    """Drive APIから1件も取得できなかった場合、フォルダが空なのか取得失敗なのか区別できないため
+    削除処理自体をスキップすることを確認する。"""
+    drive_dir = fake_env
+    _sync_n_files(monkeypatch, 2)
+    assert len(list(drive_dir.iterdir())) == 2
+
+    _use_fake_service(monkeypatch, [])
+    with caplog.at_level(logging.WARNING, logger="google_drive_sync"):
+        result = google_drive_sync.sync_google_drive_files(verbose=False)
+
+    assert result["removed"] == []
+    assert sorted(result["removal_blocked_files"]) == ["file0.pdf", "file1.pdf"]
+    assert (drive_dir / "file0.pdf").exists()
+    assert (drive_dir / "file1.pdf").exists()
+    warnings = [r for r in caplog.records if r.levelname == "WARNING"]
+    assert any("1件も確認できません" in r.getMessage() for r in warnings)
+
+
+def test_removal_not_blocked_when_existing_file_count_below_min_threshold(fake_env, monkeypatch):
+    """既存ファイル数がREMOVAL_BLOCK_MIN_EXISTING_FILES未満なら、消失割合が50%以上でも
+    件数条件を満たさないため通常通り削除されることを確認する（境界値）。"""
+    drive_dir = fake_env
+    assert google_drive_sync.REMOVAL_BLOCK_MIN_EXISTING_FILES == 5
+    _sync_n_files(monkeypatch, 4)
+
+    # 4件中3件(75%)が消えるが、既存件数が閾値(5件)未満のためブロックされない
+    _use_fake_service(
+        monkeypatch,
+        [{"id": "id0", "name": "file0.pdf", "mimeType": "application/pdf"}],
+        media_contents={"id0": b"content-0"},
+    )
+    result = google_drive_sync.sync_google_drive_files(verbose=False)
+
+    assert result["removal_blocked_files"] == []
+    assert sorted(result["removed"]) == ["file1.pdf", "file2.pdf", "file3.pdf"]
+    for name in ("file1.pdf", "file2.pdf", "file3.pdf"):
+        assert not (drive_dir / name).exists()
+
+
+def test_removal_blocked_at_min_existing_file_count_threshold(fake_env, monkeypatch):
+    """既存ファイル数がちょうどREMOVAL_BLOCK_MIN_EXISTING_FILES件の場合も、件数条件を
+    満たすものとしてブロックされることを確認する（境界値、>=の包含確認）。"""
+    drive_dir = fake_env
+    _sync_n_files(monkeypatch, 5)
+
+    # 5件中3件(60%)が消える
+    remaining = [{"id": f"id{i}", "name": f"file{i}.pdf", "mimeType": "application/pdf"} for i in range(2)]
+    media_contents = {f"id{i}": f"content-{i}".encode() for i in range(2)}
+    _use_fake_service(monkeypatch, remaining, media_contents=media_contents)
+    result = google_drive_sync.sync_google_drive_files(verbose=False)
+
+    assert result["removed"] == []
+    assert sorted(result["removal_blocked_files"]) == ["file2.pdf", "file3.pdf", "file4.pdf"]
+    for name in ("file2.pdf", "file3.pdf", "file4.pdf"):
+        assert (drive_dir / name).exists()
+
+
+def test_removal_blocked_at_exactly_50_percent_ratio(fake_env, monkeypatch):
+    """消失割合がちょうど50%の場合、閾値の>=条件によりブロックされることを確認する（境界値）。"""
+    drive_dir = fake_env
+    _sync_n_files(monkeypatch, 100)
+    assert len(list(drive_dir.iterdir())) == 100
+
+    # 100件中50件(ちょうど50%)が消える
+    remaining = [{"id": f"id{i}", "name": f"file{i}.pdf", "mimeType": "application/pdf"} for i in range(50)]
+    media_contents = {f"id{i}": f"content-{i}".encode() for i in range(50)}
+    _use_fake_service(monkeypatch, remaining, media_contents=media_contents)
+    result = google_drive_sync.sync_google_drive_files(verbose=False)
+
+    assert result["removed"] == []
+    assert sorted(result["removal_blocked_files"]) == [f"file{i}.pdf" for i in range(50, 100)]
+
+
+def test_removal_not_blocked_at_49_percent_ratio(fake_env, monkeypatch):
+    """消失割合が50%未満（49%程度）であれば、ブロックされず通常通り削除されることを
+    確認する（境界値）。"""
+    drive_dir = fake_env
+    _sync_n_files(monkeypatch, 100)
+
+    # 100件中51件(49%消失)が引き続きDrive上で確認できる
+    remaining = [{"id": f"id{i}", "name": f"file{i}.pdf", "mimeType": "application/pdf"} for i in range(51)]
+    media_contents = {f"id{i}": f"content-{i}".encode() for i in range(51)}
+    _use_fake_service(monkeypatch, remaining, media_contents=media_contents)
+    result = google_drive_sync.sync_google_drive_files(verbose=False)
+
+    assert result["removal_blocked_files"] == []
+    assert sorted(result["removed"]) == [f"file{i}.pdf" for i in range(51, 100)]
+    for i in range(51, 100):
+        assert not (drive_dir / f"file{i}.pdf").exists()
+
+
+def test_failed_downloads_excluded_from_removal_and_stale_calculation(fake_env, monkeypatch):
+    """ダウンロード失敗したファイルは「消えたファイル」の判定対象から除外され、削除も
+    ブロック対象にもならないことを確認する（failed_namesの扱い）。"""
+    drive_dir = fake_env
+    _sync_n_files(monkeypatch, 6)  # file0.pdf 〜 file5.pdf
+
+    # file0は再ダウンロード成功、file1はダウンロード失敗(消えたと誤判定されるべきでない)、
+    # file2〜file4は変更なしで存在確認、file5はDrive一覧に無い(真に消えた=1/6≒17%)。
+    drive_files = [
+        {"id": "id0", "name": "file0.pdf", "mimeType": "application/pdf"},
+        {"id": "id1", "name": "file1.pdf", "mimeType": "application/pdf"},
+        {"id": "id2", "name": "file2.pdf", "mimeType": "application/pdf"},
+        {"id": "id3", "name": "file3.pdf", "mimeType": "application/pdf"},
+        {"id": "id4", "name": "file4.pdf", "mimeType": "application/pdf"},
+    ]
+    media_contents = {
+        "id0": b"content-0-v2",
+        "id1": RuntimeError("simulated network error"),
+        "id2": b"content-2",
+        "id3": b"content-3",
+        "id4": b"content-4",
+    }
+    _use_fake_service(monkeypatch, drive_files, media_contents=media_contents)
+    result = google_drive_sync.sync_google_drive_files(verbose=False)
+
+    assert result["removed"] == ["file5.pdf"]
+    assert result["removal_blocked_files"] == []
+    assert result["skipped"] == ["file1.pdf"]
+    # ダウンロード失敗したfile1は「消えた」と誤判定されず、旧内容のまま残る
+    assert (drive_dir / "file1.pdf").read_bytes() == b"content-1"
+    assert not (drive_dir / "file5.pdf").exists()
+
+
+def test_failed_downloads_alone_prevent_zero_confirmed_block_but_ratio_block_still_applies(
+    fake_env, monkeypatch, caplog
+):
+    """存在確認できたファイルがダウンロード失敗のみであっても「0件確認」経路には入らず、
+    通常のratio判定に進み、消失割合が閾値以上であればブロックされることを確認する。"""
+    drive_dir = fake_env
+    _sync_n_files(monkeypatch, 6)  # file0.pdf 〜 file5.pdf
+
+    # Drive上にはfile0, file1のみ存在確認できるが両方ダウンロードに失敗する。
+    # 残るfile2〜file5(4件, 約67%)は本当に消えたのか区別できないためブロックされることを確認する。
+    drive_files = [
+        {"id": "id0", "name": "file0.pdf", "mimeType": "application/pdf"},
+        {"id": "id1", "name": "file1.pdf", "mimeType": "application/pdf"},
+    ]
+    media_contents = {
+        "id0": RuntimeError("simulated network error"),
+        "id1": RuntimeError("simulated network error"),
+    }
+    _use_fake_service(monkeypatch, drive_files, media_contents=media_contents)
+    with caplog.at_level(logging.WARNING, logger="google_drive_sync"):
+        result = google_drive_sync.sync_google_drive_files(verbose=False)
+
+    assert result["removed"] == []
+    assert sorted(result["removal_blocked_files"]) == ["file2.pdf", "file3.pdf", "file4.pdf", "file5.pdf"]
+    # ダウンロードに失敗したfile0, file1自体はstale扱いされずそのまま残る
+    assert (drive_dir / "file0.pdf").exists()
+    assert (drive_dir / "file1.pdf").exists()
+    warnings = [r for r in caplog.records if r.levelname == "WARNING"]
+    assert any("既存6件中4件" in r.getMessage() for r in warnings)

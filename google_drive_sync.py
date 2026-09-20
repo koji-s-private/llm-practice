@@ -40,6 +40,12 @@ SCOPES = ["https://www.googleapis.com/auth/drive.readonly"]
 GOOGLE_DRIVE_DIR = ingest.DATA_DIR / "google_drive"
 CREDENTIALS_DIR = Path(__file__).parent / ".credentials"
 
+# 一度に消えたと判定されたファイルの削除を自動実行せずブロックする閾値。
+# 少数ファイル構成では同名衝突の解消（1ファイルへの統合）のような正常な操作でも
+# 割合が高くなりやすいため、対象件数がこの最小件数に満たない場合は割合判定の対象外とする。
+REMOVAL_BLOCK_MIN_EXISTING_FILES = 5
+REMOVAL_BLOCK_RATIO_THRESHOLD = 0.5
+
 CLIENT_SECRET_FILE = Path(os.environ.get("GOOGLE_OAUTH_CLIENT_SECRET_FILE", CREDENTIALS_DIR / "client_secret.json"))
 TOKEN_FILE = Path(os.environ.get("GOOGLE_OAUTH_TOKEN_FILE", CREDENTIALS_DIR / "token.json"))
 
@@ -192,21 +198,28 @@ def _download_drive_file(service, drive_file: dict, dest_path: Path) -> None:
 def sync_google_drive_files(verbose: bool = True) -> dict:
     """data/google_drive/ をGoogle Driveの指定フォルダ（GOOGLE_DRIVE_FOLDER_ID）の内容にミラーする。
 
-    戻り値: {"added": [...], "updated": [...], "removed": [...], "skipped": [...]}
+    戻り値: {"added": [...], "updated": [...], "removed": [...], "skipped": [...],
+    "removal_blocked_files": [...]}
     ("updated"はローカルに同名ファイルが既にあった場合。内容が実際に変わったかは
     後続の ingest.sync_data_dir() がmtime/sizeベースで最終判定する)
 
     GOOGLE_DRIVE_FOLDER_ID が未設定の場合は同期をスキップし、警告ログを出して全キー空リストを
     返す（認証・API呼び出しは行わない）。ダウンロード・エクスポートに失敗したファイルは、
     旧ローカルコピーを誤って削除しないよう「消えたファイル」の判定対象から除外する。
+
+    Drive側の一覧取得結果は、共有権限の失効やフォルダ設定ミス等により実態を反映していない
+    ことがあり得るため無条件には信頼しない。1件も存在確認できなかった場合、または既存
+    ローカルファイルの半数以上が一度に「消えた」と判定された場合は、削除を実行せず対象
+    ファイル名を"removal_blocked_files"に入れて呼び出し元に判断を委ねる。
     """
     folder_id = os.environ.get("GOOGLE_DRIVE_FOLDER_ID")
+    empty_result = {"added": [], "updated": [], "removed": [], "skipped": [], "removal_blocked_files": []}
     if not folder_id:
         logger.warning(
             "GOOGLE_DRIVE_FOLDER_ID が未設定のため、Google Drive同期をスキップします。"
             "設定方法は docs/google-drive-setup.md を参照してください。"
         )
-        return {"added": [], "updated": [], "removed": [], "skipped": []}
+        return empty_result
 
     service = _get_drive_service()
     drive_files = _list_drive_files(service, folder_id)
@@ -214,7 +227,7 @@ def sync_google_drive_files(verbose: bool = True) -> dict:
     GOOGLE_DRIVE_DIR.mkdir(parents=True, exist_ok=True)
     existing_names = {f.name for f in GOOGLE_DRIVE_DIR.iterdir() if f.is_file()}
 
-    result = {"added": [], "updated": [], "removed": [], "skipped": []}
+    result = {"added": [], "updated": [], "removed": [], "skipped": [], "removal_blocked_files": []}
     downloaded_names: set[str] = set()
     failed_names: set[str] = set()
 
@@ -261,10 +274,36 @@ def sync_google_drive_files(verbose: bool = True) -> dict:
         result[status].append(dest_path.name)
         _log_progress(verbose, "  %s: %s", "更新" if status == "updated" else "追加", dest_path.name)
 
-    for stale_name in sorted(existing_names - downloaded_names - failed_names):
-        (GOOGLE_DRIVE_DIR / stale_name).unlink()
-        result["removed"].append(stale_name)
-        _log_progress(verbose, "  削除（Drive上から消えたファイル）: %s", stale_name)
+    stale_names = existing_names - downloaded_names - failed_names
+    removal_blocked_reason = None
+    if stale_names:
+        confirmed_names = downloaded_names | failed_names
+        if not confirmed_names:
+            # 取得できたファイルが0件の場合、フォルダが本当に空なのか取得自体が
+            # 失敗しているのか区別できないため、無条件の全件削除は行わない。
+            removal_blocked_reason = "Drive上でファイルを1件も確認できませんでした"
+        elif (
+            len(existing_names) >= REMOVAL_BLOCK_MIN_EXISTING_FILES
+            and len(stale_names) / len(existing_names) >= REMOVAL_BLOCK_RATIO_THRESHOLD
+        ):
+            # 一度に半数以上が消える状況は、通常の編集より権限喪失や設定ミスを
+            # 疑うべきケースのため、削除は自動実行せず人の確認を挟む。
+            removal_blocked_reason = (
+                f"既存{len(existing_names)}件中{len(stale_names)}件が一度にDrive上から消えたと判定されました"
+            )
+
+    if removal_blocked_reason:
+        logger.warning(
+            "%s。誤検知の可能性があるため削除をスキップしました: %s",
+            removal_blocked_reason,
+            ", ".join(sorted(stale_names)),
+        )
+        result["removal_blocked_files"] = sorted(stale_names)
+    else:
+        for stale_name in sorted(stale_names):
+            (GOOGLE_DRIVE_DIR / stale_name).unlink()
+            result["removed"].append(stale_name)
+            _log_progress(verbose, "  削除（Drive上から消えたファイル）: %s", stale_name)
 
     return result
 
@@ -288,6 +327,12 @@ def main():
         f"更新{len(drive_result['updated'])}件 / 削除{len(drive_result['removed'])}件 / "
         f"スキップ{len(drive_result['skipped'])}件"
     )
+    if drive_result["removal_blocked_files"]:
+        print(
+            f"警告: {len(drive_result['removal_blocked_files'])}件の削除がブロックされました"
+            "（Drive側の権限・設定を確認してください）: " + ", ".join(drive_result["removal_blocked_files"]),
+            file=sys.stderr,
+        )
 
     print("data/ をベクトルDBに同期しています...")
     db_result = ingest.sync_data_dir()
