@@ -166,12 +166,20 @@ def _sync_google_drive_and_report(warning_slot: DeltaGenerator | None = None) ->
             "連携の設定方法は docs/google-drive-setup.md を参照してください。"
         )
     else:
-        st.toast(
-            f"Google Driveの内容を取り込みました（追加{len(drive_result['added'])} / "
-            f"更新{len(drive_result['updated'])} / 削除{len(drive_result['removed'])} / "
-            f"スキップ{len(drive_result['skipped'])}）",
-            icon="✅",
-        )
+        if any(drive_result[key] for key in ("added", "updated", "removed", "skipped")):
+            st.toast(
+                f"Google Driveの内容を取り込みました（追加{len(drive_result['added'])} / "
+                f"更新{len(drive_result['updated'])} / 削除{len(drive_result['removed'])} / "
+                f"スキップ{len(drive_result['skipped'])}）",
+                icon="✅",
+            )
+        if drive_result["removal_blocked_files"]:
+            st.warning(
+                f"Drive上から{len(drive_result['removal_blocked_files'])}件のファイルが"
+                "一度に消えたと判定されたため、ローカルからの削除を自動実行せずスキップしました。"
+                "共有権限の変更やフォルダ設定ミスがないか確認し、意図した変更であれば"
+                "data/google_drive/ 配下の該当ファイルを手動で削除してください。"
+            )
 
     _sync_and_report("data/ の内容を反映中...", warning_slot)
 

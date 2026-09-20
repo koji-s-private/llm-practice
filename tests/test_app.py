@@ -430,7 +430,13 @@ def test_google_drive_sync_button_unconfigured_shows_info(monkeypatch):
     monkeypatch.setattr(
         google_drive_sync,
         "sync_google_drive_files",
-        lambda verbose=True: {"added": [], "updated": [], "removed": [], "skipped": []},
+        lambda verbose=True: {
+            "added": [],
+            "updated": [],
+            "removed": [],
+            "skipped": [],
+            "removal_blocked_files": [],
+        },
     )
     # ドキュメントも会話履歴もある状態にし、空状態ガイダンス（st.info）が余分に
     # 出現してGoogle Drive未設定案内の件数検証と混ざらないようにする。
@@ -459,6 +465,7 @@ def test_google_drive_sync_button_success_shows_both_results(monkeypatch):
             "updated": [],
             "removed": ["old.txt"],
             "skipped": [],
+            "removal_blocked_files": [],
         },
     )
     # ドキュメントも会話履歴もある状態にし、空状態ガイダンス（st.info）が
@@ -486,6 +493,33 @@ def test_google_drive_sync_button_success_shows_both_results(monkeypatch):
     assert len(at.toast) == 2
     assert "追加1" in at.toast[0].value and "削除1" in at.toast[0].value
     assert "追加1" in at.toast[1].value and "削除1" in at.toast[1].value
+
+
+def test_google_drive_sync_button_removal_blocked_shows_warning(monkeypatch):
+    """境界値: sync_google_drive_files()がremoval_blocked_filesを返した場合、
+    ローカル削除がスキップされた旨の警告バナーが表示される。"""
+    monkeypatch.setattr(
+        google_drive_sync,
+        "sync_google_drive_files",
+        lambda verbose=True: {
+            "added": [],
+            "updated": [],
+            "removed": [],
+            "skipped": [],
+            "removal_blocked_files": ["a.pdf", "b.pdf"],
+        },
+    )
+    monkeypatch.setattr(ingest, "list_indexed_files", lambda: [{"name": "dummy.txt", "chunk_count": 1}])
+    monkeypatch.setattr(memory, "conversation_count", lambda thread_id=None: 1)
+
+    at = _run_app()
+    drive_button = next(b for b in at.sidebar.button if "Google Drive" in b.label)
+    at = drive_button.click().run()
+
+    assert at.exception == []
+    assert at.error == []
+    assert len(at.warning) == 1
+    assert "2件" in at.warning[0].value
 
 
 def test_google_drive_sync_button_missing_credentials_shows_error(monkeypatch):
@@ -548,6 +582,7 @@ def test_google_drive_sync_button_db_reflection_failed_files_shows_warning(monke
             "updated": [],
             "removed": [],
             "skipped": [],
+            "removal_blocked_files": [],
         },
     )
 
