@@ -741,6 +741,80 @@ def test_fix_two_column_pages_skips_page_with_actual_table(tmp_path):
     assert result[0].page_content == original_content
 
 
+def test_fix_two_column_pages_skips_find_tables_when_no_column_split_detected(tmp_path, monkeypatch):
+    # 2カラム判定ができないページ（_detect_pdf_column_splitがNoneを返す単一カラムページ）では
+    # find_tables()呼び出し自体が発生しないこと（無駄なコスト回避の実装）を確認する。
+    import fitz
+
+    pdf_path = tmp_path / "single_column.pdf"
+    doc = fitz.open()
+    page = doc.new_page(width=595, height=842)
+    page.insert_textbox(fitz.Rect(50, 50, 500, 400), "単一カラムの本文です。" * 5, fontsize=12, fontname="japan")
+    doc.save(str(pdf_path))
+
+    def _fail_if_called(self, *args, **kwargs):
+        raise AssertionError("2カラム判定できないページでfind_tables()が呼ばれてはならない")
+
+    import pymupdf
+
+    monkeypatch.setattr(pymupdf.Page, "find_tables", _fail_if_called)
+
+    original_content = "元の本文"
+    docs = [Document(page_content=original_content, metadata={"page": 0})]
+
+    result = ingest._fix_two_column_pages(pdf_path, docs)
+
+    assert result[0].page_content == original_content
+
+
+def test_fix_two_column_pages_returns_original_docs_when_find_tables_raises(tmp_path, monkeypatch):
+    # find_tables()が例外を送出した場合でも、外側のtry/exceptで全体がキャッチされ
+    # 例外発生前のdocsがそのまま（未加工で）返ることを確認する異常系テスト。
+    import pymupdf
+
+    pdf_path = tmp_path / "two_column_find_tables_error.pdf"
+    _make_two_column_pdf(pdf_path, right_first=True)
+
+    def _raise(self, *args, **kwargs):
+        raise RuntimeError("find_tables内部エラーを模した例外")
+
+    monkeypatch.setattr(pymupdf.Page, "find_tables", _raise)
+
+    original_content = "元の本文（find_tables例外時は変更されないはず）"
+    docs = [Document(page_content=original_content, metadata={"page": 0})]
+
+    result = ingest._fix_two_column_pages(pdf_path, docs)
+
+    assert result[0].page_content == original_content
+
+
+@pytest.mark.parametrize("table_count", [1, 2])
+def test_fix_two_column_pages_skips_regardless_of_detected_table_count(tmp_path, monkeypatch, table_count):
+    # find_tables().tablesの件数（1件・複数件）に関わらず、表が1件でも検出されれば
+    # 2カラム修正の対象から除外されることを確認する境界値テスト。
+    import pymupdf
+
+    pdf_path = tmp_path / "two_column_fake_tables.pdf"
+    _make_two_column_pdf(pdf_path, right_first=True)
+
+    class _FakeTables:
+        def __init__(self, tables):
+            self.tables = tables
+
+    monkeypatch.setattr(
+        pymupdf.Page,
+        "find_tables",
+        lambda self, *a, **k: _FakeTables([object()] * table_count),
+    )
+
+    original_content = "元の本文（表検出時は変更されないはず）"
+    docs = [Document(page_content=original_content, metadata={"page": 0})]
+
+    result = ingest._fix_two_column_pages(pdf_path, docs)
+
+    assert result[0].page_content == original_content
+
+
 def test_detect_pdf_column_split_ignores_single_column_table_page(tmp_path):
     # 罫線表を含む単一カラムの行政資料風ページでは、行全体に広がるブロックが
     # X区間を1つに結合するため2カラムと誤検出されないことを確認する。
