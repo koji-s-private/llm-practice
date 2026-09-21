@@ -692,6 +692,55 @@ def test_load_pdf_keeps_natural_order_when_left_column_written_first(monkeypatch
     assert left_pos < right_pos
 
 
+def test_fix_two_column_pages_reorders_page_containing_literal_pipe_character(tmp_path):
+    # 本文中にたまたま"|"が含まれるだけで実際には表が無いページは、除外せず
+    # 2カラム修正を適用できることを確認する（find_tables()ベースの判定への変更点）。
+    pdf_path = tmp_path / "two_column_with_pipe.pdf"
+    _make_two_column_pdf(pdf_path, right_first=True)
+    docs = [Document(page_content="元の本文に | が含まれています", metadata={"page": 0})]
+
+    result = ingest._fix_two_column_pages(pdf_path, docs)
+
+    content = result[0].page_content
+    left_pos = content.find("左カラムの本文です")
+    right_pos = content.find("右カラムの本文です")
+    assert left_pos != -1
+    assert right_pos != -1
+    assert left_pos < right_pos
+
+
+def test_fix_two_column_pages_skips_page_with_actual_table(tmp_path):
+    # find_tables()で実際に表が検出されるページは、Markdown表の追記位置を
+    # 壊さないよう2カラム修正の対象から除外されることを確認する。
+    import fitz
+
+    pdf_path = tmp_path / "two_column_with_table.pdf"
+    doc = fitz.open()
+    page = doc.new_page(width=595, height=842)
+
+    # 左カラム側に収まる罫線表（ページ全幅に広がらないようにし、2カラム判定を壊さない）
+    col_x = [50, 165, 280]
+    row_h = 22
+    table_top = 50
+    rows = [["項目", "値"], ["予算額", "12,500,000"]]
+    for row_i, cells in enumerate(rows):
+        for col_i in range(len(col_x) - 1):
+            rect = fitz.Rect(col_x[col_i], table_top + row_h * row_i, col_x[col_i + 1], table_top + row_h * (row_i + 1))
+            page.draw_rect(rect, color=(0, 0, 0), width=0.5)
+            page.insert_textbox(rect, cells[col_i], fontsize=10, fontname="japan", align=1)
+
+    right_text = "これは右カラムの本文です。" * 6
+    page.insert_textbox(fitz.Rect(315, 50, 545, 780), right_text, fontsize=11, fontname="japan")
+    doc.save(str(pdf_path))
+
+    original_content = "この内容は変更されないはずです"
+    docs = [Document(page_content=original_content, metadata={"page": 0})]
+
+    result = ingest._fix_two_column_pages(pdf_path, docs)
+
+    assert result[0].page_content == original_content
+
+
 def test_detect_pdf_column_split_ignores_single_column_table_page(tmp_path):
     # 罫線表を含む単一カラムの行政資料風ページでは、行全体に広がるブロックが
     # X区間を1つに結合するため2カラムと誤検出されないことを確認する。
