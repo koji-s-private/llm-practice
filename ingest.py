@@ -318,8 +318,9 @@ def _fix_two_column_pages(path: Path, docs: list[Document]) -> list[Document]:
     """2カラムレイアウトと判定できるページに限り、列単位で再抽出して読み取り順を修正する。
 
     extract_tables="markdown"によるMarkdown表は本文の特定位置に追記されており、
-    ページ全体を再構築すると追記位置がずれる恐れがあるため、Markdown表が
-    含まれるらしいページ（"|"を含むページ）は対象から除外する（安全側に倒す）。
+    ページ全体を再構築すると追記位置がずれる恐れがあるため、find_tables()で実際に
+    表が検出されたページは対象から除外する。find_tables()は呼び出しコストがあるため、
+    2カラム判定で対象外と分かったページでは呼ばない。
     再抽出に失敗しても取り込み全体は止めず、元のdocsをそのまま返す。
     """
     import pymupdf
@@ -330,12 +331,13 @@ def _fix_two_column_pages(path: Path, docs: list[Document]) -> list[Document]:
                 page_number = doc.metadata.get("page")
                 if not isinstance(page_number, int) or not (0 <= page_number < len(pdf)):
                     continue
-                if "|" in doc.page_content:
-                    continue
-                split_x = _detect_pdf_column_split(pdf[page_number])
+                page = pdf[page_number]
+                split_x = _detect_pdf_column_split(page)
                 if split_x is None:
                     continue
-                doc.page_content = _reorder_two_column_page_text(pdf[page_number], split_x)
+                if page.find_tables().tables:
+                    continue
+                doc.page_content = _reorder_two_column_page_text(page, split_x)
     except Exception as e:
         logger.warning("%s の2カラムレイアウト判定中にエラーが発生したためスキップします: %s", path, e)
     return docs
