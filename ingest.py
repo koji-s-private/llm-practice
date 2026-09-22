@@ -54,7 +54,7 @@ from langchain_community.document_loaders import BSHTMLLoader, CSVLoader, Docx2t
 from langchain_core.documents import Document
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 
-from memory import THREAD_TITLE_FILENAME
+from memory import THREAD_TITLE_FILENAME, strip_sources_section
 from rag_chain import CHUNK_SIZE, COLLECTION_NAME, EMBEDDING_MODEL_NAME, GLOBAL_THREAD_ID, PERSIST_DIR, get_vectorstore
 
 try:
@@ -801,6 +801,11 @@ def _ingest_file(name: str, path: Path, vector_store, manifest: dict, splitter, 
         else:
             loader = LOADERS[path.suffix.lower()](str(path))
             docs = loader.load()
+            if Path(name).parts[0] == CONVERSATIONS_DIRNAME:
+                # 参照元セクション（元ドキュメントpage_content全文のJSON）はチャンク化対象から
+                # 除外し、元ドキュメントの内容が会話ログ経由で重複埋め込みされるのを防ぐ。
+                for doc in docs:
+                    doc.page_content = strip_sources_section(doc.page_content)
         chunks = splitter.split_documents(docs)
     except Exception as e:
         # 1ファイルの読み込み失敗で他の正常なファイルの同期まで止めないよう、

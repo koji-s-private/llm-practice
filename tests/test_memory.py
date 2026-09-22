@@ -648,6 +648,52 @@ def test_save_conversation_skips_sources_section_when_serialization_fails(tmp_pa
     assert any("シリアライズに失敗" in record.message for record in caplog.records)
 
 
+# --- strip_sources_section()（会話ログ再埋め込み時の参照元セクション除外） ---
+
+
+def test_strip_sources_section_removes_sources_json(tmp_path, monkeypatch):
+    monkeypatch.setattr(memory, "CONVERSATIONS_DIR", tmp_path)
+    sources = [Document(page_content="元ドキュメントの本文です。", metadata={"source": "data/a.txt"})]
+    path = memory.save_conversation(question="質問", answer="回答", thread_id="thread-a", sources=sources)
+    content = path.read_text(encoding="utf-8")
+
+    stripped = memory.strip_sources_section(content)
+
+    assert "## 参照元" not in stripped
+    assert "元ドキュメントの本文です" not in stripped
+    assert "参照元文字数" in stripped  # メタデータ行自体は本文除去の対象外
+
+
+def test_strip_sources_section_keeps_question_and_answer(tmp_path, monkeypatch):
+    monkeypatch.setattr(memory, "CONVERSATIONS_DIR", tmp_path)
+    sources = [Document(page_content="元ドキュメントの本文です。", metadata={"source": "data/a.txt"})]
+    path = memory.save_conversation(
+        question="質問本文です", answer="回答本文です", thread_id="thread-a", sources=sources
+    )
+    content = path.read_text(encoding="utf-8")
+
+    stripped = memory.strip_sources_section(content)
+
+    assert "質問本文です" in stripped
+    assert "回答本文です" in stripped
+
+
+def test_strip_sources_section_returns_content_unchanged_when_no_sources(tmp_path, monkeypatch):
+    monkeypatch.setattr(memory, "CONVERSATIONS_DIR", tmp_path)
+    path = memory.save_conversation(question="質問", answer="回答", thread_id="thread-a")
+    content = path.read_text(encoding="utf-8")
+
+    assert memory.strip_sources_section(content) == content
+
+
+def test_strip_sources_section_returns_content_unchanged_for_legacy_format(tmp_path, monkeypatch):
+    """後方互換性: 文字数メタデータの無い旧形式ファイルも安全にそのまま返す。"""
+    monkeypatch.setattr(memory, "CONVERSATIONS_DIR", tmp_path)
+    legacy_content = "## 質問\n\n質問\n\n## 回答\n\n回答\n"
+
+    assert memory.strip_sources_section(legacy_content) == legacy_content
+
+
 # --- save_thread_title() / load_thread_title()（スレッドの任意タイトル） ---
 
 
