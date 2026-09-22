@@ -19,6 +19,7 @@ from filelock import FileLock, Timeout
 from langchain_core.documents import Document
 
 import ingest
+import memory
 
 
 class _FakeVectorStore:
@@ -2003,6 +2004,55 @@ def test_sync_data_dir_tags_non_fallback_conversation_log_chunks_as_not_fallback
 
     is_fallback_values = {doc.metadata["is_fallback"] for doc in store.docs_by_id.values()}
     assert is_fallback_values == {False}
+
+
+# --- 会話ログの参照元セクション（sources）を埋め込み対象から除外する ---
+
+
+def test_sync_data_dir_excludes_sources_json_from_conversation_log_chunks(fake_env, tmp_path, monkeypatch):
+    """会話ログに埋め込まれた参照元セクション（元ドキュメントpage_content全文のJSON）が、
+    同期後のチャンクに含まれないこと。"""
+    data_dir, store = fake_env
+    memory_dir = tmp_path / "memory_conversations"
+    monkeypatch.setattr(memory, "CONVERSATIONS_DIR", memory_dir)
+    original_doc_content = "元ドキュメントの本文です。この文字列がそのまま重複埋め込みされてはいけません。"
+    saved_path = memory.save_conversation(
+        question="質問文です。" * 5,
+        answer="回答文です。" * 5,
+        thread_id="thread-z",
+        sources=[Document(page_content=original_doc_content, metadata={"source": "data/original.txt"})],
+    )
+    content = saved_path.read_text(encoding="utf-8")
+    assert original_doc_content in content  # 前提: 保存直後は参照元JSONが含まれている
+    _write(data_dir, "conversations/thread-z/log.md", content)
+
+    ingest.sync_data_dir(verbose=False)
+
+    all_chunk_text = "".join(doc.page_content for doc in store.docs_by_id.values())
+    assert original_doc_content not in all_chunk_text
+    assert "## 参照元" not in all_chunk_text
+
+
+def test_sync_data_dir_keeps_question_and_answer_of_conversation_log_with_sources(fake_env, tmp_path, monkeypatch):
+    """参照元セクションを取り除いても、質問・回答本体は通常通り埋め込み対象になること。"""
+    data_dir, store = fake_env
+    memory_dir = tmp_path / "memory_conversations"
+    monkeypatch.setattr(memory, "CONVERSATIONS_DIR", memory_dir)
+    question = "参照元セクション除外後も質問本体は残るはずですという質問です。" * 3
+    answer = "参照元セクション除外後も回答本体は残るはずですという回答です。" * 3
+    saved_path = memory.save_conversation(
+        question=question,
+        answer=answer,
+        thread_id="thread-z",
+        sources=[Document(page_content="元ドキュメントの本文です。", metadata={"source": "data/original.txt"})],
+    )
+    _write(data_dir, "conversations/thread-z/log.md", saved_path.read_text(encoding="utf-8"))
+
+    ingest.sync_data_dir(verbose=False)
+
+    all_chunk_text = "".join(doc.page_content for doc in store.docs_by_id.values())
+    assert question in all_chunk_text
+    assert answer in all_chunk_text
 
 
 @pytest.mark.parametrize(

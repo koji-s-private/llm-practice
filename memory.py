@@ -221,6 +221,29 @@ def _extract_sources(content: str) -> list[Document]:
         return []
 
 
+def strip_sources_section(content: str) -> str:
+    """会話ログMarkdownの本文から参照元セクション（JSON断片）だけを取り除く。
+
+    参照元セクションには元ドキュメントのpage_content全文がJSONとして埋め込まれており、
+    このまま再埋め込みすると元ドキュメントの内容が重複ヒットしたり検索結果に生JSONが
+    混ざるため、ingest側でのチャンク化対象から除外する用途に使う。
+    質問・回答本体やその他のメタデータ行は変更しない。参照元セクションが無い場合は
+    contentをそのまま返す。
+    """
+    len_match = _SOURCES_LENGTH_PATTERN.search(content)
+    if not len_match:
+        return content
+    sources_start = content.find(_SOURCES_HEADER)
+    if sources_start == -1:
+        return content
+    json_end = sources_start + len(_SOURCES_HEADER) + int(len_match.group(1))
+    # JSON本文の後ろに残るのは末尾改行のみのため取り除き、参照元セクションが無い場合と
+    # 同じ末尾（末尾改行1つ）に揃える。
+    remainder = content[json_end:].lstrip("\n")
+    head = content[:sources_start].rstrip("\n")
+    return f"{head}\n{remainder}" if remainder else f"{head}\n"
+
+
 def _parse_created_at(path: Path) -> datetime:
     """ファイル名の先頭（save_conversationが付与するタイムスタンプ）から作成日時を復元する。
 
