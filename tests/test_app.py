@@ -139,6 +139,30 @@ class _FakeAgentWithMultipleToolCalls:
         yield AIMessageChunk(content=self.answer), {}
 
 
+class _FakeAgentWithToolCallChunks:
+    """retrieve_contextのツール呼び出し開始イベント（AIMessageChunk.tool_calls）を
+    含めてストリーミングするフェイクエージェント。呼び出し回数分だけツール呼び出し
+    チャンク→ToolMessageの組を繰り返してからyieldし、最後に回答本文を返す。
+    """
+
+    def __init__(self, answer="最終回答", call_count=1, artifact=None):
+        self.answer = answer
+        self.call_count = call_count
+        self.artifact = artifact if artifact is not None else []
+
+    def stream(self, payload, stream_mode="messages"):
+        for i in range(self.call_count):
+            yield (
+                AIMessageChunk(
+                    content="",
+                    tool_calls=[{"name": "retrieve_context", "args": {"query": "q"}, "id": f"call-{i}"}],
+                ),
+                {},
+            )
+            yield ToolMessage(content="検索結果", artifact=self.artifact, tool_call_id=f"call-{i}"), {}
+        yield AIMessageChunk(content=self.answer), {}
+
+
 def _ok_sync(verbose=False, on_progress=None):
     return {"added": [], "updated": [], "removed": [], "failed": []}
 
@@ -1115,7 +1139,7 @@ def test_chat_streaming_chunks_are_concatenated_into_history(monkeypatch):
 
 
 def test_chat_streaming_clears_searching_placeholder_after_first_token(monkeypatch):
-    """正常系: 最初の回答トークンが届いた時点で「🔍 検索して回答を考え中...」の
+    """正常系: 最初の回答トークンが届いた時点で「🔍 ドキュメントを検索中...」の
     プレースホルダーが消え、最終的な画面には残らない。"""
     fake_agent = _FakeAgent(answer="回答")
     monkeypatch.setattr(rag_chain, "build_agent", lambda thread_id=None, chat_model=None: fake_agent)
@@ -1124,7 +1148,7 @@ def test_chat_streaming_clears_searching_placeholder_after_first_token(monkeypat
     at.chat_input[0].set_value("質問です").run()
 
     assert at.exception == []
-    assert not any("検索して回答を考え中" in m.value for m in at.markdown)
+    assert not any("ドキュメントを検索中" in m.value for m in at.markdown)
 
 
 def test_chat_streaming_anthropic_content_blocks_are_extracted_as_text(monkeypatch):
@@ -1708,7 +1732,7 @@ def _track_markdown_calls(monkeypatch):
 
 def test_chat_streaming_tool_message_redraws_status_placeholder(monkeypatch):
     """正常系: ToolMessage受信時、検索中プレースホルダーに対して
-    「検索結果を確認中」への再描画が挟まる。Streamlitはウィジェット操作を検知した際に
+    「回答を作成中」への再描画が挟まる。Streamlitはウィジェット操作を検知した際に
     実行中のスクリプトを中断する仕組みのため、st.*呼び出し自体が中断チェックポイントになる。
     ToolMessage受信後に何もst.*を呼ばないと、この中断チェックポイントが発生しない。"""
     fake_agent = _FakeAgentWithSources(answer="文書に基づく回答", artifact=[_FakeSourceDoc()])
@@ -1719,13 +1743,13 @@ def test_chat_streaming_tool_message_redraws_status_placeholder(monkeypatch):
     at.chat_input[0].set_value("質問です").run()
 
     assert at.exception == []
-    searching_calls = [(body, placeholder) for body, placeholder in markdown_calls if "検索して回答を考え中" in body]
+    searching_calls = [(body, placeholder) for body, placeholder in markdown_calls if "ドキュメントを検索中" in body]
     assert len(searching_calls) == 1
     status_placeholder = searching_calls[0][1]
-    confirming_calls = [
-        body for body, placeholder in markdown_calls if placeholder is status_placeholder and "検索結果を確認中" in body
+    composing_calls = [
+        body for body, placeholder in markdown_calls if placeholder is status_placeholder and "回答を作成中" in body
     ]
-    assert confirming_calls == ["🔍 検索結果を確認中...（キャンセルの反映に時間がかかる場合があります）"]
+    assert composing_calls == ["✍️ 回答を作成中...（キャンセルの反映に時間がかかる場合があります）"]
 
 
 def test_chat_streaming_tool_message_redraw_happens_once_per_tool_message(monkeypatch):
@@ -1742,8 +1766,51 @@ def test_chat_streaming_tool_message_redraw_happens_once_per_tool_message(monkey
     at.chat_input[0].set_value("質問です").run()
 
     assert at.exception == []
-    confirming_calls = [body for body, _ in markdown_calls if "検索結果を確認中" in body]
-    assert len(confirming_calls) == 2
+    composing_calls = [body for body, _ in markdown_calls if "回答を作成中" in body]
+    assert len(composing_calls) == 2
+
+
+def test_retrieve_status_label_first_call_is_searching():
+    import app
+
+    assert app._retrieve_status_label(1) == "🔍 ドキュメントを検索中...（キャンセルの反映に時間がかかる場合があります）"
+
+
+def test_retrieve_status_label_second_call_is_researching():
+    import app
+
+    expected = "🔄 別のキーワードで再検索中...（キャンセルの反映に時間がかかる場合があります）"
+    assert app._retrieve_status_label(2) == expected
+
+
+def test_chat_streaming_tool_call_start_shows_searching_label(monkeypatch):
+    """正常系: retrieve_contextの呼び出し開始（AIMessageChunk.tool_calls）を検知すると
+    「ドキュメントを検索中」の文言でstatus_placeholderが更新される。"""
+    fake_agent = _FakeAgentWithToolCallChunks(answer="回答", call_count=1)
+    monkeypatch.setattr(rag_chain, "build_agent", lambda thread_id=None, chat_model=None: fake_agent)
+    markdown_calls = _track_markdown_calls(monkeypatch)
+
+    at = _run_app()
+    at.chat_input[0].set_value("質問です").run()
+
+    assert at.exception == []
+    searching_calls = [body for body, _ in markdown_calls if "ドキュメントを検索中" in body]
+    assert len(searching_calls) >= 1
+
+
+def test_chat_streaming_second_tool_call_shows_research_label(monkeypatch):
+    """正常系: retrieve_contextが2回目に呼ばれた場合、「別のキーワードで再検索中」の
+    専用文言に切り替わる（言い換えての再検索であることが伝わるようにするため）。"""
+    fake_agent = _FakeAgentWithToolCallChunks(answer="回答", call_count=2)
+    monkeypatch.setattr(rag_chain, "build_agent", lambda thread_id=None, chat_model=None: fake_agent)
+    markdown_calls = _track_markdown_calls(monkeypatch)
+
+    at = _run_app()
+    at.chat_input[0].set_value("質問です").run()
+
+    assert at.exception == []
+    research_calls = [body for body, _ in markdown_calls if "別のキーワードで再検索中" in body]
+    assert len(research_calls) == 1
 
 
 # --- 3. 会話ログ保存後の挙動（save_conversation直後にadd_single_conversation_fileで即時反映） ---
