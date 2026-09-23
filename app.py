@@ -249,6 +249,21 @@ def _show_embedding_model_mismatch_warning() -> None:
     )
 
 
+# 検索結果を受け取った後、モデルが実際に回答を組み立て始める段階の表示文言。
+_STATUS_COMPOSING = "✍️ 回答を作成中...（キャンセルの反映に時間がかかる場合があります）"
+
+
+def _retrieve_status_label(call_count: int) -> str:
+    """retrieve_contextツール呼び出し回数に応じた検索中の表示文言を返す。
+
+    1回目は通常の検索、2回目以降は質問を言い換えての再検索であることが
+    ユーザーに伝わるよう文言を変える。
+    """
+    if call_count >= 2:
+        return "🔄 別のキーワードで再検索中...（キャンセルの反映に時間がかかる場合があります）"
+    return "🔍 ドキュメントを検索中...（キャンセルの反映に時間がかかる場合があります）"
+
+
 def _format_invoke_error_message(e: Exception) -> str:
     """agent.invoke()/agent.stream()失敗時のエラーメッセージを、実際に使用中のプロバイダに応じて出し分ける。
 
@@ -1082,11 +1097,7 @@ if question:
             # 生成されないため、最初のトークンが届くまでの待機を可視化する。この間は
             # キャンセルボタンの反映がStreamlitの仕組み上遅れうるため、その旨も明示する。
             status_placeholder = st.empty()
-            status_placeholder.markdown(
-                "🔄 回答を再生成中..."
-                if regenerating
-                else "🔍 検索して回答を考え中...（キャンセルの反映に時間がかかる場合があります）"
-            )
+            status_placeholder.markdown("🔄 回答を再生成中..." if regenerating else _retrieve_status_label(1))
             # ストリーミング中に押せるキャンセルボタン。Streamlitはウィジェット操作を検知すると
             # 実行中のスクリプトを自動的に中断・再実行するため、押されたことを能動的にチェック
             # する必要はない。中断後は履歴追加やsave_conversation等も実行されない。
@@ -1111,9 +1122,16 @@ if question:
                 （str、またはAnthropicのcontent blocks list）ため、.text プロパティでテキストを取り出す。
                 usage_metadataはLLM呼び出し1回につき最後のチャンクにのみ乗るため、単純に加算するだけで
                 1ターン中の複数回のLLM呼び出し分を正しく積算できる。
+
+                AIMessageChunk.tool_calls は、そのチャンクが持つ生のtool_call_chunksから
+                その場で組み立てられる（LangChain側の仕様）。ツール名はストリーミングの最初の
+                デルタにしか乗らないため、名前ありのエントリだけを「呼び出し開始」として扱えば
+                後続の引数だけのデルタを誤って二重カウントすることもない。
                 """
                 first_token = True
                 seen_source_keys: set = set()
+                seen_tool_call_ids: set = set()
+                retrieve_call_count = 0
                 for chunk, _metadata in st.session_state.agent.stream(
                     {"messages": _windowed_history(history_for_agent) + [HumanMessage(content=question)]},
                     stream_mode="messages",
@@ -1134,10 +1152,18 @@ if question:
                         # ウィジェット操作を検知して中断する機会（中断チェックポイント）が
                         # 発生しない。同じstatus_placeholderへの再描画を挟むことで、検索結果を
                         # 確認している間もキャンセルボタンが速やかに反映されるようにする。
-                        status_placeholder.markdown(
-                            "🔍 検索結果を確認中...（キャンセルの反映に時間がかかる場合があります）"
-                        )
+                        status_placeholder.markdown(_STATUS_COMPOSING)
                         continue
+                    for tool_call in getattr(chunk, "tool_calls", None) or []:
+                        if tool_call.get("name") != "retrieve_context":
+                            continue
+                        call_id = tool_call.get("id")
+                        if call_id is not None:
+                            if call_id in seen_tool_call_ids:
+                                continue
+                            seen_tool_call_ids.add(call_id)
+                        retrieve_call_count += 1
+                        status_placeholder.markdown(_retrieve_status_label(retrieve_call_count))
                     usage = getattr(chunk, "usage_metadata", None)
                     if usage:
                         turn_usage["input_tokens"] += usage.get("input_tokens") or 0
