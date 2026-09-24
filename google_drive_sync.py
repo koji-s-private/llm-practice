@@ -104,6 +104,11 @@ def _get_drive_service():
 
         TOKEN_FILE.parent.mkdir(parents=True, exist_ok=True)
         TOKEN_FILE.write_text(creds.to_json(), encoding="utf-8")
+        # token.jsonにはリフレッシュトークンが平文で含まれるため、umask設定に関わらず
+        # 所有者以外から読めないよう明示的に制限する。os.chmod()はPOSIX（Linux/macOS）でのみ
+        # 有効で、Windowsではパーミッションモデルが異なり効果が限定的。
+        os.chmod(TOKEN_FILE.parent, 0o700)
+        os.chmod(TOKEN_FILE, 0o600)
 
     return build("drive", "v3", credentials=creds)
 

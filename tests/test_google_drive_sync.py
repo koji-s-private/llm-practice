@@ -6,6 +6,8 @@ Driveサービスクライアントに monkeypatch して、ミラー処理（ex
 """
 
 import logging
+import stat
+import sys
 
 import pytest
 
@@ -226,6 +228,47 @@ def test_missing_client_secret_file_raises_clear_error(fake_env, monkeypatch, tm
 
     with pytest.raises(RuntimeError, match="OAuthクライアントシークレットファイルが見つかりません"):
         google_drive_sync._get_drive_service()
+
+
+class _FakeCredentials:
+    def __init__(self):
+        self.valid = True
+        self.expired = False
+        self.refresh_token = None
+
+    def to_json(self):
+        return '{"token": "fake-token"}'
+
+
+class _FakeFlow:
+    def run_local_server(self, port=0):
+        return _FakeCredentials()
+
+
+class _FakeInstalledAppFlow:
+    @staticmethod
+    def from_client_secrets_file(*args, **kwargs):
+        return _FakeFlow()
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="os.chmod()によるパーミッション制御はPOSIX環境のみ対象")
+def test_new_token_file_is_saved_with_owner_only_permissions(fake_env, monkeypatch, tmp_path):
+    """新規発行したトークンファイルとその親ディレクトリが、所有者のみアクセス可能な
+    パーミッション（0o600 / 0o700）で保存されることを確認する。"""
+    client_secret_file = tmp_path / "client_secret.json"
+    client_secret_file.write_text("{}", encoding="utf-8")
+    token_file = tmp_path / ".credentials" / "token.json"
+
+    monkeypatch.setattr(google_drive_sync, "CLIENT_SECRET_FILE", client_secret_file)
+    monkeypatch.setattr(google_drive_sync, "TOKEN_FILE", token_file)
+    monkeypatch.setattr(google_drive_sync, "InstalledAppFlow", _FakeInstalledAppFlow)
+    monkeypatch.setattr(google_drive_sync, "build", lambda *args, **kwargs: object())
+
+    google_drive_sync._get_drive_service()
+
+    assert token_file.exists()
+    assert stat.S_IMODE(token_file.stat().st_mode) == 0o600
+    assert stat.S_IMODE(token_file.parent.stat().st_mode) == 0o700
 
 
 def test_pagination_collects_all_pages(fake_env, monkeypatch):
