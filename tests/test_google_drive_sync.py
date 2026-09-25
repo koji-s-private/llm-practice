@@ -8,10 +8,14 @@ Driveサービスクライアントに monkeypatch して、ミラー処理（ex
 import logging
 import stat
 import sys
+import threading
+import time
 
 import pytest
+from filelock import FileLock, Timeout
 
 import google_drive_sync
+import ingest
 
 
 class _FakeRequest:
@@ -84,6 +88,9 @@ def fake_env(tmp_path, monkeypatch):
     monkeypatch.setattr(google_drive_sync, "GOOGLE_DRIVE_DIR", drive_dir)
     monkeypatch.setattr(google_drive_sync, "MediaIoBaseDownload", _FakeMediaIoBaseDownload)
     monkeypatch.setenv("GOOGLE_DRIVE_FOLDER_ID", "fake-folder-id")
+    # ingest.sync_data_dir()等の他テストと同じロックファイルを共有しないよう、
+    # このテスト専用のパスに差し替える（tests/test_ingest.py の fake_env に倣う）。
+    monkeypatch.setattr(ingest, "SYNC_LOCK_PATH", tmp_path / "chroma_db" / "sync.lock")
     return drive_dir
 
 
@@ -642,3 +649,90 @@ def test_failed_downloads_alone_prevent_zero_confirmed_block_but_ratio_block_sti
     assert (drive_dir / "file1.pdf").exists()
     warnings = [r for r in caplog.records if r.levelname == "WARNING"]
     assert any("既存6件中4件" in r.getMessage() for r in warnings)
+
+
+# --- ロックによる排他制御（複数セッションからの同時実行対策） ---
+
+
+def test_sync_raises_timeout_when_lock_already_held_by_other_session(fake_env, monkeypatch):
+    # ingest.sync_data_dir()と同じSYNC_LOCK_PATHを他セッションが保持中の場合、
+    # 待機時間内に取得できなければfilelock.Timeoutを送出し、一覧取得〜削除を実行しない。
+    drive_files = [{"id": "pdf1", "name": "manual.pdf", "mimeType": "application/pdf"}]
+    _use_fake_service(monkeypatch, drive_files, media_contents={"pdf1": b"%PDF-bytes"})
+    monkeypatch.setattr(ingest, "SYNC_LOCK_TIMEOUT_SECONDS", 0.1)
+
+    other_session_lock = FileLock(str(ingest.SYNC_LOCK_PATH))
+    other_session_lock.acquire()
+    try:
+        with pytest.raises(Timeout):
+            google_drive_sync.sync_google_drive_files(verbose=False)
+    finally:
+        other_session_lock.release()
+
+    # ロック解放後は通常どおり同期できる
+    result = google_drive_sync.sync_google_drive_files(verbose=False)
+    assert result["added"] == ["manual.pdf"]
+
+
+def test_sync_releases_lock_after_success(fake_env, monkeypatch):
+    # 同期完了後はロックが解放され、後続の呼び出しがブロックされずに実行できる。
+    drive_files = [{"id": "pdf1", "name": "manual.pdf", "mimeType": "application/pdf"}]
+    _use_fake_service(monkeypatch, drive_files, media_contents={"pdf1": b"%PDF-bytes"})
+
+    google_drive_sync.sync_google_drive_files(verbose=False)
+
+    lock = FileLock(str(ingest.SYNC_LOCK_PATH), timeout=1)
+    with lock:
+        pass
+
+
+def test_concurrent_syncs_are_serialized(fake_env, monkeypatch):
+    """複数セッションから同時にsync_google_drive_files()が呼ばれても、ロックにより
+    既存ファイル一覧の取得〜ダウンロード〜削除の区間（_mirror_drive_files_locked）が
+    重複して実行されないことを、実際にスレッドを起動して検証する。この排他が効いて
+    いれば、片方が取得した既存ファイル一覧のスナップショットが古いまま削除判定に
+    使われることはなく、他セッションが書き込んだファイルを誤って削除する余地が無い。"""
+    drive_files = [{"id": "pdf1", "name": "manual.pdf", "mimeType": "application/pdf"}]
+    _use_fake_service(monkeypatch, drive_files, media_contents={"pdf1": b"%PDF-bytes"})
+
+    original_locked = google_drive_sync._mirror_drive_files_locked
+    counter_lock = threading.Lock()
+    active_count = 0
+    max_active = 0
+
+    def slow_locked(service, drive_files, verbose):
+        nonlocal active_count, max_active
+        with counter_lock:
+            active_count += 1
+            max_active = max(max_active, active_count)
+        try:
+            time.sleep(0.05)
+            return original_locked(service, drive_files, verbose)
+        finally:
+            with counter_lock:
+                active_count -= 1
+
+    monkeypatch.setattr(google_drive_sync, "_mirror_drive_files_locked", slow_locked)
+
+    errors = []
+    results = []
+    results_lock = threading.Lock()
+
+    def worker():
+        try:
+            result = google_drive_sync.sync_google_drive_files(verbose=False)
+            with results_lock:
+                results.append(result)
+        except Exception as exc:  # pragma: no cover - 失敗時にテストで検知させる
+            with results_lock:
+                errors.append(exc)
+
+    threads = [threading.Thread(target=worker) for _ in range(4)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+
+    assert errors == []
+    assert len(results) == 4
+    assert max_active == 1
