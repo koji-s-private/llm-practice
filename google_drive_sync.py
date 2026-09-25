@@ -24,6 +24,7 @@ import os
 import sys
 from pathlib import Path
 
+from filelock import Timeout
 from google.auth.transport.requests import Request
 from google.oauth2.credentials import Credentials
 from google_auth_oauthlib.flow import InstalledAppFlow
@@ -216,6 +217,12 @@ def sync_google_drive_files(verbose: bool = True) -> dict:
     ことがあり得るため無条件には信頼しない。1件も存在確認できなかった場合、または既存
     ローカルファイルの半数以上が一度に「消えた」と判定された場合は、削除を実行せず対象
     ファイル名を"removal_blocked_files"に入れて呼び出し元に判断を委ねる。
+
+    ローカルの既存ファイル一覧取得〜ダウンロード〜古いファイルの削除までは、複数セッションから
+    同時に呼ばれても安全なよう ingest.upload_lock()（sync_data_dir()と同じSYNC_LOCK_PATH）で
+    排他制御する。ロック取得がタイムアウトした場合は `filelock.Timeout` をそのまま送出する。
+    認証・Drive APIからの一覧取得はロック対象に含めない（ブラウザでの初回認証操作は
+    時間が読めず、他セッションを不必要に長く待たせてしまうため）。
     """
     folder_id = os.environ.get("GOOGLE_DRIVE_FOLDER_ID")
     empty_result = {"added": [], "updated": [], "removed": [], "skipped": [], "removal_blocked_files": []}
@@ -230,6 +237,20 @@ def sync_google_drive_files(verbose: bool = True) -> dict:
     drive_files = _list_drive_files(service, folder_id)
 
     GOOGLE_DRIVE_DIR.mkdir(parents=True, exist_ok=True)
+
+    try:
+        with ingest.upload_lock():
+            return _mirror_drive_files_locked(service, drive_files, verbose=verbose)
+    except Timeout:
+        logger.warning(
+            "%s のロック取得がタイムアウトしました（他のセッションが同期中の可能性があります）。",
+            ingest.SYNC_LOCK_PATH,
+        )
+        raise
+
+
+def _mirror_drive_files_locked(service, drive_files: list[dict], verbose: bool) -> dict:
+    """sync_google_drive_files()の本体（呼び出し元がファイルロックを取得済みであることが前提）。"""
     existing_names = {f.name for f in GOOGLE_DRIVE_DIR.iterdir() if f.is_file()}
 
     result = {"added": [], "updated": [], "removed": [], "skipped": [], "removal_blocked_files": []}
