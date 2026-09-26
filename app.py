@@ -63,6 +63,7 @@ from ingest import (
 )
 from memory import (
     conversation_count,
+    delete_conversation,
     delete_thread,
     list_threads,
     load_conversation,
@@ -654,21 +655,28 @@ def _render_copy_button(text: str) -> None:
 
 
 def _feedback_widget_key(index: int, suffix: str) -> str:
-    """フィードバックボタン群のwidget key・記録済みフラグ用のkeyを組み立てる。
-
-    メッセージ自体に一意なIDが無いため、st.session_state.messages内での位置（index）を
-    識別子として使う。
-    """
+    """フィードバックボタンのwidget key（up/down押下時の一時状態）を組み立てる。"""
     return f"feedback_{st.session_state.thread_id}_{index}_{suffix}"
 
 
-def _render_feedback_buttons(question: str, answer: str, index: int) -> None:
+def _feedback_recorded_key(index: int, log_filename: str | None) -> str:
+    """フィードバック「記録済み」フラグの永続化keyを組み立てる。
+
+    indexはターン削除で前方にずれるため、log_filenameがあればそれを識別子にして
+    ずれの影響を受けないようにする。log_filenameが無いターン（記憶設定OFF等）は
+    indexにフォールバックする。
+    """
+    identifier = log_filename or f"idx_{index}"
+    return f"feedback_recorded_{st.session_state.thread_id}_{identifier}"
+
+
+def _render_feedback_buttons(question: str, answer: str, index: int, log_filename: str | None = None) -> None:
     """回答の下に👍/👎ボタンを表示し、押下したら data/feedback.jsonl に記録する。
 
     同じ回答への重複記録・連打を防ぐため、記録済みかどうかをsession_stateで管理し、
     記録後はボタンの代わりにお礼の一言を表示する。
     """
-    state_key = _feedback_widget_key(index, "recorded")
+    state_key = _feedback_recorded_key(index, log_filename)
     recorded = st.session_state.get(state_key)
     if recorded:
         icon = "👍" if recorded == RATING_UP else "👎"
@@ -686,19 +694,74 @@ def _render_feedback_buttons(question: str, answer: str, index: int) -> None:
         st.rerun()
 
 
-def _render_regenerate_button(index: int) -> None:
+def _render_regenerate_button(index: int, log_filename: str | None = None) -> None:
     """直近のAI回答の下に🔄再生成ボタンを表示する（対象は最新の1件のみ、呼び出し側で判定済み）。
 
     押下時は対象のAIMessageをmessagesから取り除いた上でrerunし、以降の回答生成ブロックに
     「直前のユーザー入力に対する再生成」として処理させる。取り除いた回答は生成失敗時に
-    復元できるよう退避しておく。同じindexの既存フィードバック記録は古い回答のものなので、
+    復元できるよう退避しておく。同じ回答の既存フィードバック記録は古い回答のものなので、
     新しい回答に引き継がれないよう消しておく。
     """
     if st.button("🔄 再生成", key=f"regenerate_{st.session_state.thread_id}_{index}", help="この回答を作り直す"):
         st.session_state.regenerate_original_message = st.session_state.messages.pop()
-        st.session_state.pop(_feedback_widget_key(index, "recorded"), None)
+        st.session_state.pop(_feedback_recorded_key(index, log_filename), None)
         st.session_state.regenerating = True
         st.rerun()
+
+
+def _remove_turn_by_log_filename(log_filename: str) -> None:
+    """log_filenameに対応するAIMessageと、直前のHumanMessage（あれば）をmessagesから取り除く。
+
+    インデックスの直接指定ではなくlog_filenameで対象を探すのは、削除対象がリスト先頭側の
+    ターンだった場合に後続メッセージのインデックスがずれても正しく削除対象を特定するため。
+    """
+    messages = st.session_state.messages
+    index = next(
+        (
+            i
+            for i, m in enumerate(messages)
+            if isinstance(m, AIMessage) and m.additional_kwargs.get("log_filename") == log_filename
+        ),
+        None,
+    )
+    if index is None:
+        return
+    del messages[index]
+    if index - 1 >= 0 and isinstance(messages[index - 1], HumanMessage):
+        del messages[index - 1]
+
+
+def _render_delete_turn_button(log_filename: str | None) -> None:
+    """回答の下に、その質問・回答1往復だけを削除するボタンと確認ステップを表示する。
+
+    log_filenameが無い場合（記憶設定OFFで保存されていないターン）は削除対象の
+    会話ログファイルが存在しないため何も表示しない。
+    """
+    if not log_filename:
+        return
+    pending_key = f"pending_delete_turn_{log_filename}"
+    if st.button(
+        "🗑️ この質問と回答を削除",
+        key=f"delete_turn_button_{log_filename}",
+        help="このやり取りだけを削除します（以降の回答の検索対象からも外れます）",
+    ):
+        st.session_state[pending_key] = True
+
+    if st.session_state.get(pending_key):
+        st.warning("この質問・回答のやり取りを削除します。この操作は取り消せません。よろしいですか？")
+        col_confirm, col_cancel = st.columns(2)
+        if col_confirm.button("削除する", key=f"confirm_delete_turn_{log_filename}", type="primary"):
+            if delete_conversation(st.session_state.thread_id, log_filename):
+                st.session_state.pop(pending_key, None)
+                _remove_turn_by_log_filename(log_filename)
+                _sync_and_report("削除を反映中...")
+                st.rerun()
+            else:
+                st.session_state.pop(pending_key, None)
+                st.error("削除に失敗しました（既に削除されている可能性があります）。")
+        if col_cancel.button("キャンセル", key=f"cancel_delete_turn_{log_filename}"):
+            st.session_state.pop(pending_key, None)
+            st.rerun()
 
 
 def _model_switcher_key(model: dict) -> tuple:
@@ -765,7 +828,11 @@ def _switch_thread(thread_id: str) -> None:
         if turn["question"]:
             messages.append(HumanMessage(content=turn["question"], additional_kwargs=timestamp_kwargs))
         if turn["answer"]:
-            answer_kwargs = {**timestamp_kwargs, "sources": turn.get("sources") or []}
+            answer_kwargs = {
+                **timestamp_kwargs,
+                "sources": turn.get("sources") or [],
+                "log_filename": turn.get("filename"),
+            }
             messages.append(AIMessage(content=turn["answer"], additional_kwargs=answer_kwargs))
     st.session_state.messages = messages
     st.session_state.agent = _build_agent_safely(thread_id)
@@ -1055,9 +1122,11 @@ for index, message in enumerate(st.session_state.messages):
             # 積んでおいても後続のagent.stream()への影響なくセッション内で保持できる。
             _render_answer_provenance(message.additional_kwargs.get("sources") or [])
             _render_copy_button(message.content)
-            _render_feedback_buttons(_last_question, message.content, index)
+            message_log_filename = message.additional_kwargs.get("log_filename")
+            _render_feedback_buttons(_last_question, message.content, index, message_log_filename)
             if index == len(st.session_state.messages) - 1:
-                _render_regenerate_button(index)
+                _render_regenerate_button(index, message_log_filename)
+            _render_delete_turn_button(message_log_filename)
     if isinstance(message, HumanMessage):
         _last_question = message.content
 
@@ -1201,6 +1270,23 @@ if question:
             st.error(_format_invoke_error_message(e))
 
         if answer is not None:
+            # 会話を自動でナレッジ化する（保存した1ファイルだけをその場でDB反映）。sourcesが
+            # 空＝根拠なしの一般知識回答なのでis_fallbackとして記録し、以降の検索対象から除外する。
+            # 再生成時は同じ質問への回答が重複保存されるのを防ぐためスキップする。
+            saved_path = None
+            log_filename = None
+            if st.session_state.auto_save_memory and not regenerating:
+                saved_path = save_conversation(
+                    question, answer, st.session_state.thread_id, is_fallback=not sources, sources=sources
+                )
+                log_filename = saved_path.name
+            elif regenerating:
+                # 再生成時は保存し直さないため、削除ボタンは元のターンのファイル
+                # （まだ再生成前の回答のまま）と紐付けて表示を継続する。
+                original_message = st.session_state.get("regenerate_original_message")
+                if original_message is not None:
+                    log_filename = original_message.additional_kwargs.get("log_filename")
+
             # 参照元・コピーボタン等は回答生成後の付随的な描画であり、ここでの例外が
             # 生成済みの回答（answer/sources）自体の破棄に波及しないよう分離する。
             try:
@@ -1210,9 +1296,10 @@ if question:
                 # 収まるインデックス（履歴再描画ループと同じ体系）を先読みして計算する。
                 # 再生成時はHumanMessageを追加し直さないため+1しない。
                 next_index = len(st.session_state.messages) if regenerating else len(st.session_state.messages) + 1
-                _render_feedback_buttons(question, answer, next_index)
+                _render_feedback_buttons(question, answer, next_index, log_filename)
                 _render_token_usage_note()
-                _render_regenerate_button(next_index)
+                _render_regenerate_button(next_index, log_filename)
+                _render_delete_turn_button(log_filename)
             except Exception:
                 st.warning("回答の表示中に一部エラーが発生しましたが、回答自体は保存されています。")
 
@@ -1224,17 +1311,14 @@ if question:
         # 参照元・タイムスタンプは再描画ループでも表示できるよう、additional_kwargsに載せて
         # メッセージ本体と一緒に保持する。
         st.session_state.messages.append(
-            AIMessage(content=answer, additional_kwargs={"sources": sources, "timestamp": turn_timestamp})
+            AIMessage(
+                content=answer,
+                additional_kwargs={"sources": sources, "timestamp": turn_timestamp, "log_filename": log_filename},
+            )
         )
         st.session_state.pop("regenerate_original_message", None)
 
-        # 会話を自動でナレッジ化する（保存した1ファイルだけをその場でDB反映）。sourcesが
-        # 空＝根拠なしの一般知識回答なのでis_fallbackとして記録し、以降の検索対象から除外する。
-        # 再生成時は同じ質問への回答が重複保存されるのを防ぐためスキップする。
-        if st.session_state.auto_save_memory and not regenerating:
-            saved_path = save_conversation(
-                question, answer, st.session_state.thread_id, is_fallback=not sources, sources=sources
-            )
+        if saved_path is not None:
             _sync_saved_conversation(saved_path, failed_sync_warning_slot)
     elif regenerating:
         # 生成に失敗した場合、ボタン押下時に取り除いておいた元の回答を復元し、

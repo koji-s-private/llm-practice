@@ -259,18 +259,24 @@ def test_load_conversation_extracts_question_and_answer(tmp_path, monkeypatch):
     conversations = memory.load_conversation("thread-a")
 
     assert conversations == [
-        {"question": "質問内容", "answer": "回答内容", "created_at": datetime(2024, 1, 1, 9, 0), "sources": []}
+        {
+            "question": "質問内容",
+            "answer": "回答内容",
+            "created_at": datetime(2024, 1, 1, 9, 0),
+            "sources": [],
+            "filename": "20240101_090000_aaa111_q.md",
+        }
     ]
 
 
 def test_load_conversation_created_at_has_expected_keys(tmp_path, monkeypatch):
-    """境界値: load_conversation()の各要素は question/answer/created_at/sources の4キーのみを持つ。"""
+    """境界値: load_conversation()の各要素は question/answer/created_at/sources/filename の5キーのみを持つ。"""
     monkeypatch.setattr(memory, "CONVERSATIONS_DIR", tmp_path)
     _write_log(tmp_path, "thread-a", "20240101_090000_aaa111_q.md", question="質問内容", answer="回答内容")
 
     conversations = memory.load_conversation("thread-a")
 
-    assert set(conversations[0].keys()) == {"question", "answer", "created_at", "sources"}
+    assert set(conversations[0].keys()) == {"question", "answer", "created_at", "sources", "filename"}
     assert isinstance(conversations[0]["created_at"], datetime)
 
 
@@ -322,7 +328,15 @@ def test_load_conversation_returns_empty_strings_when_content_malformed(tmp_path
 
     conversations = memory.load_conversation("thread-a")
 
-    assert conversations == [{"question": "", "answer": "", "created_at": datetime(2024, 1, 1, 9, 0), "sources": []}]
+    assert conversations == [
+        {
+            "question": "",
+            "answer": "",
+            "created_at": datetime(2024, 1, 1, 9, 0),
+            "sources": [],
+            "filename": "20240101_090000_aaa111_q.md",
+        }
+    ]
 
 
 def test_load_conversation_ignores_non_markdown_files(tmp_path, monkeypatch):
@@ -367,6 +381,7 @@ def test_load_conversation_normal_case_without_heading_like_strings(tmp_path, mo
             "answer": "Pythonはプログラミング言語です。",
             "created_at": memory._parse_created_at(path),
             "sources": [],
+            "filename": path.name,
         }
     ]
 
@@ -382,7 +397,13 @@ def test_load_conversation_question_containing_answer_heading_is_restored_correc
     conversations = memory.load_conversation("thread-a")
 
     assert conversations == [
-        {"question": question, "answer": answer, "created_at": memory._parse_created_at(path), "sources": []}
+        {
+            "question": question,
+            "answer": answer,
+            "created_at": memory._parse_created_at(path),
+            "sources": [],
+            "filename": path.name,
+        }
     ]
 
 
@@ -396,7 +417,13 @@ def test_load_conversation_answer_containing_question_heading_is_restored_correc
     conversations = memory.load_conversation("thread-a")
 
     assert conversations == [
-        {"question": question, "answer": answer, "created_at": memory._parse_created_at(path), "sources": []}
+        {
+            "question": question,
+            "answer": answer,
+            "created_at": memory._parse_created_at(path),
+            "sources": [],
+            "filename": path.name,
+        }
     ]
 
 
@@ -411,7 +438,13 @@ def test_load_conversation_both_question_and_answer_contain_heading_like_strings
     conversations = memory.load_conversation("thread-a")
 
     assert conversations == [
-        {"question": question, "answer": answer, "created_at": memory._parse_created_at(path), "sources": []}
+        {
+            "question": question,
+            "answer": answer,
+            "created_at": memory._parse_created_at(path),
+            "sources": [],
+            "filename": path.name,
+        }
     ]
 
 
@@ -436,7 +469,13 @@ def test_extract_qa_legacy_format_without_length_metadata_falls_back_to_regex(tm
     conversations = memory.load_conversation("thread-a")
 
     assert conversations == [
-        {"question": "旧形式の質問", "answer": "旧形式の回答", "created_at": datetime(2024, 1, 1, 9, 0), "sources": []}
+        {
+            "question": "旧形式の質問",
+            "answer": "旧形式の回答",
+            "created_at": datetime(2024, 1, 1, 9, 0),
+            "sources": [],
+            "filename": "20240101_090000_aaa111_q.md",
+        }
     ]
 
 
@@ -474,6 +513,7 @@ def test_extract_qa_falls_back_to_regex_when_length_metadata_is_inconsistent(tmp
             "answer": "回答本文",
             "created_at": memory._parse_created_at(saved_path),
             "sources": [],
+            "filename": saved_path.name,
         }
     ]
 
@@ -918,7 +958,13 @@ class TestLoadConversationThreadIdValidation:
         conversations = memory.load_conversation(thread_id)
 
         assert conversations == [
-            {"question": "質問", "answer": "回答", "created_at": datetime(2024, 1, 1, 9, 0), "sources": []}
+            {
+                "question": "質問",
+                "answer": "回答",
+                "created_at": datetime(2024, 1, 1, 9, 0),
+                "sources": [],
+                "filename": "20240101_090000_aaa111_q.md",
+            }
         ]
 
     def test_accepts_hyphen_and_underscore_thread_id(self, tmp_path, monkeypatch):
@@ -928,7 +974,13 @@ class TestLoadConversationThreadIdValidation:
         conversations = memory.load_conversation("my-thread_01")
 
         assert conversations == [
-            {"question": "質問", "answer": "回答", "created_at": datetime(2024, 1, 1, 9, 0), "sources": []}
+            {
+                "question": "質問",
+                "answer": "回答",
+                "created_at": datetime(2024, 1, 1, 9, 0),
+                "sources": [],
+                "filename": "20240101_090000_aaa111_q.md",
+            }
         ]
 
     def test_rejects_path_traversal_thread_id(self, tmp_path, monkeypatch):
@@ -1156,8 +1208,20 @@ class TestLoadConversationWithCorruptedFile:
         conversations = memory.load_conversation("thread-a")
 
         assert conversations == [
-            {"question": "1番目", "answer": "回答1", "created_at": datetime(2024, 1, 1, 9, 0), "sources": []},
-            {"question": "3番目", "answer": "回答3", "created_at": datetime(2024, 1, 1, 10, 0), "sources": []},
+            {
+                "question": "1番目",
+                "answer": "回答1",
+                "created_at": datetime(2024, 1, 1, 9, 0),
+                "sources": [],
+                "filename": "20240101_090000_aaa111_first.md",
+            },
+            {
+                "question": "3番目",
+                "answer": "回答3",
+                "created_at": datetime(2024, 1, 1, 10, 0),
+                "sources": [],
+                "filename": "20240101_100000_ccc333_third.md",
+            },
         ]
 
     def test_logs_warning_but_does_not_raise(self, tmp_path, monkeypatch, caplog):
@@ -1225,7 +1289,13 @@ class TestSaveConversationAtomicWrite:
         conversations = memory.load_conversation("thread-a")
 
         assert conversations == [
-            {"question": "質問A", "answer": "回答A", "created_at": memory._parse_created_at(saved_path), "sources": []}
+            {
+                "question": "質問A",
+                "answer": "回答A",
+                "created_at": memory._parse_created_at(saved_path),
+                "sources": [],
+                "filename": saved_path.name,
+            }
         ]
 
 
@@ -1284,3 +1354,89 @@ class TestDeleteThread:
 
         assert memory.delete_thread("thread-a") is False
         assert (tmp_path / "thread-a").exists()
+
+
+class TestDeleteConversation:
+    def test_deletes_single_conversation_file_and_returns_true(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(memory, "CONVERSATIONS_DIR", tmp_path)
+        path = memory.save_conversation("Q", "A", thread_id="thread-a")
+
+        result = memory.delete_conversation("thread-a", path.name)
+
+        assert result is True
+        assert not path.exists()
+
+    def test_does_not_affect_other_conversations_in_same_thread(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(memory, "CONVERSATIONS_DIR", tmp_path)
+        path1 = memory.save_conversation("Q1", "A1", thread_id="thread-a")
+        path2 = memory.save_conversation("Q2", "A2", thread_id="thread-a")
+
+        result = memory.delete_conversation("thread-a", path1.name)
+
+        assert result is True
+        assert not path1.exists()
+        assert path2.exists()
+        assert memory.conversation_count("thread-a") == 1
+
+    def test_does_not_affect_thread_title_file(self, tmp_path, monkeypatch):
+        """境界値: 拡張子が.md以外のスレッドタイトルファイル（title.txt）は誤って削除されない。"""
+        monkeypatch.setattr(memory, "CONVERSATIONS_DIR", tmp_path)
+        path = memory.save_conversation("Q", "A", thread_id="thread-a")
+        memory.save_thread_title("thread-a", "タイトル")
+
+        memory.delete_conversation("thread-a", path.name)
+
+        assert memory.load_thread_title("thread-a") == "タイトル"
+
+    def test_returns_false_when_file_does_not_exist(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(memory, "CONVERSATIONS_DIR", tmp_path)
+        memory.save_conversation("Q", "A", thread_id="thread-a")
+
+        assert memory.delete_conversation("thread-a", "no-such-file.md") is False
+
+    def test_returns_false_when_thread_does_not_exist(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(memory, "CONVERSATIONS_DIR", tmp_path)
+
+        assert memory.delete_conversation("no-such-thread", "20240101_090000_aaa111_q.md") is False
+
+    def test_returns_false_for_non_md_filename(self, tmp_path, monkeypatch):
+        """境界値: title.txt等、.md以外の拡張子は削除対象として受け付けずFalseを返す。"""
+        monkeypatch.setattr(memory, "CONVERSATIONS_DIR", tmp_path)
+        memory.save_conversation("Q", "A", thread_id="thread-a")
+        memory.save_thread_title("thread-a", "タイトル")
+
+        assert memory.delete_conversation("thread-a", memory.THREAD_TITLE_FILENAME) is False
+        assert memory.load_thread_title("thread-a") == "タイトル"
+
+    @pytest.mark.parametrize(
+        "filename",
+        [
+            "../escape.md",
+            "sub/escape.md",
+            "sub\\escape.md",
+            ".",
+            "..",
+        ],
+    )
+    def test_rejects_path_traversal_filename(self, tmp_path, monkeypatch, filename):
+        monkeypatch.setattr(memory, "CONVERSATIONS_DIR", tmp_path)
+        memory.save_conversation("Q", "A", thread_id="thread-a")
+
+        assert memory.delete_conversation("thread-a", filename) is False
+
+    def test_rejects_invalid_thread_id(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(memory, "CONVERSATIONS_DIR", tmp_path)
+
+        with pytest.raises(ValueError):
+            memory.delete_conversation("../../etc/passwd", "20240101_090000_aaa111_q.md")
+
+    def test_reflected_in_load_conversation_after_deletion(self, tmp_path, monkeypatch):
+        """正常系: 削除後にload_conversation()を呼ぶと、残りのターンのみが返る。"""
+        monkeypatch.setattr(memory, "CONVERSATIONS_DIR", tmp_path)
+        path1 = memory.save_conversation("Q1", "A1", thread_id="thread-a")
+        memory.save_conversation("Q2", "A2", thread_id="thread-a")
+
+        memory.delete_conversation("thread-a", path1.name)
+
+        conversations = memory.load_conversation("thread-a")
+        assert [c["question"] for c in conversations] == ["Q2"]

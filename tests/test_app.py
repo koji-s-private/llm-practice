@@ -19,7 +19,7 @@ app.py が直接 import している以下のシンボルを monkeypatch で軽�
   テストごとに切り替える）
 - `memory.new_thread_id` / `memory.conversation_count` / `memory.save_conversation` /
   `memory.list_threads` / `memory.load_conversation` / `memory.load_thread_title` /
-  `memory.save_thread_title` / `memory.delete_thread`
+  `memory.save_thread_title` / `memory.delete_thread` / `memory.delete_conversation`
   （`memory.save_conversation` は実際の実装と同様、保存先ファイルパス(Path)を返す）
 
 app.py はモジュールトップレベルで `from ingest import ... sync_data_dir` のように
@@ -40,6 +40,7 @@ app.py はモジュールトップレベルで `from ingest import ... sync_data
 """
 
 import ast
+import itertools
 import os
 from pathlib import Path
 
@@ -167,10 +168,19 @@ def _ok_sync(verbose=False, on_progress=None):
     return {"added": [], "updated": [], "removed": [], "failed": []}
 
 
-# save_conversation() の戻り値（保存先パス）のデフォルトフェイク値。
-# 実際の値そのものはほとんどのテストで意味を持たないため、add_single_conversation_file
-# 呼び出し先まで見ないテストでは固定値のままでよい。
-_FAKE_SAVED_CONVERSATION_PATH = Path("/tmp/data/conversations/thread-test/fake.md")
+def _fake_save_conversation_factory():
+    """save_conversation()の軽量フェイクを作る。
+
+    質問・回答削除ボタンのwidget keyに保存先ファイル名を使うため、固定値を1つ返すと
+    複数ターンの会話で同じキーが重複してしまう。save_conversation()が実際に
+    ターンごと一意なファイル名を生成する仕様に合わせ、呼び出しごとに連番を振る。
+    """
+    counter = itertools.count(1)
+
+    def _fake_save_conversation(question, answer, thread_id, is_fallback=False, sources=None):
+        return Path(f"/tmp/data/conversations/{thread_id}/fake-{next(counter)}.md")
+
+    return _fake_save_conversation
 
 
 @pytest.fixture(autouse=True)
@@ -186,12 +196,13 @@ def _patch_light_dependencies(monkeypatch):
     monkeypatch.setattr(rag_chain, "build_agent", lambda thread_id=None, chat_model=None: _FakeAgent())
     monkeypatch.setattr(memory, "new_thread_id", lambda: "thread-test")
     monkeypatch.setattr(memory, "conversation_count", lambda thread_id: 0)
-    monkeypatch.setattr(memory, "save_conversation", lambda *a, **k: _FAKE_SAVED_CONVERSATION_PATH)
+    monkeypatch.setattr(memory, "save_conversation", _fake_save_conversation_factory())
     monkeypatch.setattr(memory, "list_threads", lambda: [])
     monkeypatch.setattr(memory, "load_conversation", lambda thread_id: [])
     monkeypatch.setattr(memory, "load_thread_title", lambda thread_id: None)
     monkeypatch.setattr(memory, "save_thread_title", lambda thread_id, title: None)
     monkeypatch.setattr(memory, "delete_thread", lambda thread_id: True)
+    monkeypatch.setattr(memory, "delete_conversation", lambda thread_id, filename: True)
     monkeypatch.setattr(feedback, "record_feedback", lambda *a, **k: None)
 
 
@@ -5309,14 +5320,14 @@ def test_regenerate_click_clears_previous_feedback_recorded_state(monkeypatch):
         HumanMessage(content="質問です"),
         AIMessage(content="元の回答"),
     ]
-    at.session_state["feedback_thread-test_1_recorded"] = feedback.RATING_UP
+    at.session_state["feedback_recorded_thread-test_idx_1"] = feedback.RATING_UP
     at = at.run()
 
     regenerate_button = next(b for b in at.button if b.key == "regenerate_thread-test_1")
     at = regenerate_button.click().run()
 
     assert at.exception == []
-    assert "feedback_thread-test_1_recorded" not in at.session_state
+    assert "feedback_recorded_thread-test_idx_1" not in at.session_state
 
 
 def test_regenerate_button_shown_immediately_after_answer_generated(monkeypatch):
@@ -5431,6 +5442,174 @@ def test_regenerate_failure_shows_error_and_calls_rerun_once(monkeypatch):
     messages = at.session_state["messages"]
     assert len(messages) == 2
     assert messages[1].content == "元の回答"
+
+
+# --- 18. 質問・回答1往復の個別削除（🗑️ この質問と回答を削除ボタン） ---
+
+
+def test_delete_turn_button_shown_for_each_ai_message_with_log_filename():
+    """正常系: log_filenameを持つAI回答には、複数ターンあってもそれぞれに削除ボタンが表示される。"""
+    at = _run_app()
+    at.session_state["messages"] = [
+        HumanMessage(content="質問1"),
+        AIMessage(content="回答1", additional_kwargs={"log_filename": "20240101_090000_aaa111_q1.md"}),
+        HumanMessage(content="質問2"),
+        AIMessage(content="回答2", additional_kwargs={"log_filename": "20240101_100000_bbb222_q2.md"}),
+    ]
+    at = at.run()
+
+    assert at.exception == []
+    delete_keys = sorted(b.key for b in at.button if b.key and b.key.startswith("delete_turn_button_"))
+    assert delete_keys == [
+        "delete_turn_button_20240101_090000_aaa111_q1.md",
+        "delete_turn_button_20240101_100000_bbb222_q2.md",
+    ]
+
+
+def test_delete_turn_button_not_shown_when_log_filename_missing():
+    """境界値: 記憶設定OFF等でlog_filenameが記録されていないターンには削除ボタンを表示しない。"""
+    at = _run_app()
+    at.session_state["messages"] = [
+        HumanMessage(content="質問です"),
+        AIMessage(content="回答です"),
+    ]
+    at = at.run()
+
+    assert at.exception == []
+    delete_keys = [b.key for b in at.button if b.key and b.key.startswith("delete_turn_button_")]
+    assert delete_keys == []
+
+
+def test_confirm_delete_turn_calls_delete_conversation_removes_turn_and_resyncs(monkeypatch):
+    """正常系: 確認プロンプトで「削除する」を押すと memory.delete_conversation() が呼ばれ、
+    該当ターン（質問・回答）だけがmessagesから取り除かれ、再同期も行われる。"""
+    delete_calls = []
+    monkeypatch.setattr(
+        memory, "delete_conversation", lambda thread_id, filename: delete_calls.append((thread_id, filename)) or True
+    )
+    sync_calls = {"n": 0}
+
+    def counting_sync(verbose=False, on_progress=None):
+        sync_calls["n"] += 1
+        return {"added": [], "updated": [], "removed": [], "failed": []}
+
+    monkeypatch.setattr(ingest, "sync_data_dir", counting_sync)
+
+    at = _run_app()
+    assert sync_calls["n"] == 1  # 起動時の1回
+    at.session_state["messages"] = [
+        HumanMessage(content="質問です"),
+        AIMessage(content="回答です", additional_kwargs={"log_filename": "20240101_090000_aaa111_q.md"}),
+    ]
+    at = at.run()
+
+    delete_button = next(b for b in at.button if b.key == "delete_turn_button_20240101_090000_aaa111_q.md")
+    at = delete_button.click().run()
+
+    confirm_button = next(b for b in at.button if b.key == "confirm_delete_turn_20240101_090000_aaa111_q.md")
+    at = confirm_button.click().run()
+
+    assert at.exception == []
+    assert delete_calls == [("thread-test", "20240101_090000_aaa111_q.md")]
+    assert at.session_state["messages"] == []
+    assert sync_calls["n"] == 2  # 削除確定後に再同期が呼ばれる
+    assert "pending_delete_turn_20240101_090000_aaa111_q.md" not in at.session_state
+
+
+def test_confirm_delete_turn_shows_error_when_delete_conversation_fails(monkeypatch):
+    """異常系: memory.delete_conversation() がFalseを返した場合（対象ファイルが既に無い等）、
+    messagesは変更せずst.errorでユーザーに失敗を通知する。"""
+    monkeypatch.setattr(memory, "delete_conversation", lambda thread_id, filename: False)
+    sync_calls = {"n": 0}
+
+    def counting_sync(verbose=False, on_progress=None):
+        sync_calls["n"] += 1
+        return {"added": [], "updated": [], "removed": [], "failed": []}
+
+    monkeypatch.setattr(ingest, "sync_data_dir", counting_sync)
+
+    at = _run_app()
+    at.session_state["messages"] = [
+        HumanMessage(content="質問です"),
+        AIMessage(content="回答です", additional_kwargs={"log_filename": "20240101_090000_aaa111_q.md"}),
+    ]
+    at = at.run()
+
+    delete_button = next(b for b in at.button if b.key == "delete_turn_button_20240101_090000_aaa111_q.md")
+    at = delete_button.click().run()
+    confirm_button = next(b for b in at.button if b.key == "confirm_delete_turn_20240101_090000_aaa111_q.md")
+    at = confirm_button.click().run()
+
+    assert at.exception == []
+    assert sync_calls["n"] == 1  # 削除失敗時は再同期しない
+    assert len(at.session_state["messages"]) == 2
+    assert at.error[0].value.startswith("削除に失敗しました")
+
+
+def test_cancel_delete_turn_does_not_call_delete_conversation(monkeypatch):
+    """正常系: 確認プロンプトで「キャンセル」を押すと削除は実行されず、
+    確認プロンプト自体も消える。"""
+    delete_calls = []
+    monkeypatch.setattr(
+        memory, "delete_conversation", lambda thread_id, filename: delete_calls.append((thread_id, filename)) or True
+    )
+
+    at = _run_app()
+    at.session_state["messages"] = [
+        HumanMessage(content="質問です"),
+        AIMessage(content="回答です", additional_kwargs={"log_filename": "20240101_090000_aaa111_q.md"}),
+    ]
+    at = at.run()
+
+    delete_button = next(b for b in at.button if b.key == "delete_turn_button_20240101_090000_aaa111_q.md")
+    at = delete_button.click().run()
+    cancel_button = next(b for b in at.button if b.key == "cancel_delete_turn_20240101_090000_aaa111_q.md")
+    at = cancel_button.click().run()
+
+    assert at.exception == []
+    assert delete_calls == []
+    assert len(at.session_state["messages"]) == 2
+    assert "pending_delete_turn_20240101_090000_aaa111_q.md" not in at.session_state
+
+
+def test_delete_turn_button_shown_immediately_after_answer_generated(monkeypatch):
+    """正常系: 質問直後にストリーミング表示された最新回答にも、次のrerunを待たず
+    その場で保存先ファイル名に紐づく削除ボタンが表示される。"""
+    fake_agent = _FakeAgent(answer="回答です")
+    monkeypatch.setattr(rag_chain, "build_agent", lambda thread_id=None, chat_model=None: fake_agent)
+    saved_path = Path("/tmp/data/conversations/thread-test/new-turn.md")
+    monkeypatch.setattr(memory, "save_conversation", lambda *a, **k: saved_path)
+
+    at = _run_app()
+    at = at.chat_input[0].set_value("質問です").run()
+
+    assert at.exception == []
+    delete_keys = [b.key for b in at.button if b.key and b.key.startswith("delete_turn_button_")]
+    assert delete_keys == ["delete_turn_button_new-turn.md"]
+
+
+def test_deleting_earlier_turn_removes_only_that_pair_and_keeps_others(monkeypatch):
+    """境界値: 先頭側のターンを削除しても、その質問・回答ペアだけが取り除かれ、
+    後続の他ターンはインデックスがずれても正しく残る（log_filenameベースの特定の確認）。"""
+    monkeypatch.setattr(memory, "delete_conversation", lambda thread_id, filename: True)
+
+    at = _run_app()
+    at.session_state["messages"] = [
+        HumanMessage(content="質問1"),
+        AIMessage(content="回答1", additional_kwargs={"log_filename": "aaa.md"}),
+        HumanMessage(content="質問2"),
+        AIMessage(content="回答2", additional_kwargs={"log_filename": "bbb.md"}),
+    ]
+    at = at.run()
+
+    delete_button = next(b for b in at.button if b.key == "delete_turn_button_aaa.md")
+    at = delete_button.click().run()
+    confirm_button = next(b for b in at.button if b.key == "confirm_delete_turn_aaa.md")
+    at = confirm_button.click().run()
+
+    assert at.exception == []
+    messages = at.session_state["messages"]
+    assert [m.content for m in messages] == ["質問2", "回答2"]
 
 
 # --- 12. モデル切替UI（_render_model_switcher、Issue #236） ---

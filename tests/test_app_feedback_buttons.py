@@ -6,11 +6,12 @@
 軽量フェイクへの差し替え方針・理由は `tests/test_app.py` のdocstring参照。
 """
 
+import itertools
 from datetime import datetime
 from pathlib import Path
 
 import pytest
-from langchain_core.messages import AIMessageChunk
+from langchain_core.messages import AIMessage, AIMessageChunk, HumanMessage
 from streamlit.testing.v1 import AppTest
 
 import feedback
@@ -20,7 +21,17 @@ import rag_chain
 
 APP_PATH = str(Path(__file__).resolve().parent.parent / "app.py")
 
-_FAKE_SAVED_CONVERSATION_PATH = Path("/tmp/data/conversations/thread-test/fake.md")
+
+def _fake_save_conversation_factory():
+    """save_conversation()の軽量フェイクを作る。複数ターンで同じファイル名を返すと、
+    質問・回答削除ボタンのwidget keyが重複してしまうため呼び出しごとに連番を振る。
+    """
+    counter = itertools.count(1)
+
+    def _fake_save_conversation(question, answer, thread_id, is_fallback=False, sources=None):
+        return Path(f"/tmp/data/conversations/{thread_id}/fake-{next(counter)}.md")
+
+    return _fake_save_conversation
 
 
 class _FakeAgent:
@@ -42,11 +53,12 @@ def _patch_light_dependencies(monkeypatch):
     monkeypatch.setattr(rag_chain, "build_agent", lambda thread_id=None, chat_model=None: _FakeAgent())
     monkeypatch.setattr(memory, "new_thread_id", lambda: "thread-test")
     monkeypatch.setattr(memory, "conversation_count", lambda thread_id: 0)
-    monkeypatch.setattr(memory, "save_conversation", lambda *a, **k: _FAKE_SAVED_CONVERSATION_PATH)
+    monkeypatch.setattr(memory, "save_conversation", _fake_save_conversation_factory())
     monkeypatch.setattr(memory, "list_threads", lambda: [])
     monkeypatch.setattr(memory, "load_conversation", lambda thread_id: [])
     monkeypatch.setattr(memory, "load_thread_title", lambda thread_id: None)
     monkeypatch.setattr(memory, "save_thread_title", lambda thread_id, title: None)
+    monkeypatch.setattr(memory, "delete_conversation", lambda thread_id, filename: True)
 
 
 def _run_app() -> AppTest:
@@ -203,3 +215,38 @@ def test_feedback_buttons_survive_duplicate_second_precision_timestamps(monkeypa
     assert len(down_buttons) == 2
     assert len({b.key for b in up_buttons}) == 2
     assert len({b.key for b in down_buttons}) == 2
+
+
+def test_deleting_earlier_turn_preserves_feedback_recorded_state_for_remaining_turn(monkeypatch):
+    """回帰防止: 先頭側のターンを削除した後も、残ったターンの記録済みフィードバック状態は
+    log_filenameで維持され、messages内indexのずれによってボタンが再表示され
+    record_feedbackが重複して呼ばれることはない。"""
+    calls = []
+    monkeypatch.setattr(feedback, "record_feedback", lambda *a, **k: calls.append(a))
+    monkeypatch.setattr(memory, "delete_conversation", lambda thread_id, filename: True)
+
+    at = _run_app()
+    at.session_state["messages"] = [
+        HumanMessage(content="質問1"),
+        AIMessage(content="回答1", additional_kwargs={"log_filename": "aaa.md"}),
+        HumanMessage(content="質問2"),
+        AIMessage(content="回答2", additional_kwargs={"log_filename": "bbb.md"}),
+    ]
+    at = at.run()
+
+    second_up_button = _feedback_buttons(at, "up")[1]
+    at = second_up_button.click().run()
+    assert calls == [("質問2", "回答2", feedback.RATING_UP, "thread-test")]
+
+    delete_button = next(b for b in at.button if b.key == "delete_turn_button_aaa.md")
+    at = delete_button.click().run()
+    confirm_button = next(b for b in at.button if b.key == "confirm_delete_turn_aaa.md")
+    at = confirm_button.click().run()
+
+    assert at.exception == []
+    assert [m.content for m in at.session_state["messages"]] == ["質問2", "回答2"]
+    assert _feedback_buttons(at, "up") == []
+    assert _feedback_buttons(at, "down") == []
+    assert any("フィードバックを記録しました" in c.value for c in at.caption)
+    # indexのずれで再度ボタンが出て重複記録される回帰が無いことの確認。
+    assert calls == [("質問2", "回答2", feedback.RATING_UP, "thread-test")]
