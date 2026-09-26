@@ -296,8 +296,9 @@ def load_conversation(thread_id: str) -> list[dict]:
     """指定スレッドの会話ログを時系列順（古い→新しい）に読み込んで返す。
 
     過去スレッドを再開する際、チャット画面に会話履歴を再現するために使う。
-    各要素は {"question": str, "answer": str, "created_at": datetime, "sources": list[Document]} の形式。
-    sourcesは旧形式ファイル・未保存の場合は空リストになる。
+    各要素は {"question": str, "answer": str, "created_at": datetime, "sources": list[Document],
+    "filename": str} の形式。sourcesは旧形式ファイル・未保存の場合は空リストになる。
+    filenameはdelete_conversation()に渡すことで、この1往復だけを個別に削除できる。
     """
     thread_dir = CONVERSATIONS_DIR / _validate_thread_id(thread_id)
     if not thread_dir.exists():
@@ -315,6 +316,7 @@ def load_conversation(thread_id: str) -> list[dict]:
                 "answer": answer,
                 "created_at": _parse_created_at(f),
                 "sources": _extract_sources(content),
+                "filename": f.name,
             }
         )
     return conversations
@@ -362,6 +364,24 @@ def delete_thread(thread_id: str) -> bool:
     if not thread_dir.is_dir():
         return False
     shutil.rmtree(thread_dir)
+    return True
+
+
+def delete_conversation(thread_id: str, filename: str) -> bool:
+    """スレッド内の会話ログ1件（1往復分の.mdファイル）だけを削除する。
+
+    filenameはディレクトリ区切りを含まない、save_conversation()が生成した
+    ファイル名のみを受け付ける（パストラバーサル対策。title.txt等の他ファイルの
+    誤削除を防ぐため拡張子も.mdに限定する）。削除後、ベクトルDBへの反映は
+    呼び出し側が ingest.sync_data_dir() を呼ぶことで行う（delete_thread()と同様）。
+    対象ファイルが存在しない場合はFalseを返す。
+    """
+    if not filename.endswith(".md") or "/" in filename or "\\" in filename or filename in (".", ".."):
+        return False
+    path = CONVERSATIONS_DIR / _validate_thread_id(thread_id) / filename
+    if not path.is_file():
+        return False
+    path.unlink()
     return True
 
 
